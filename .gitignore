@@ -1,0 +1,5 @@
+# exe
+gitinette
+# IDE
+*.un~
+.idea
