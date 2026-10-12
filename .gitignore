@@ -1,0 +1,7 @@
+# exe
+gitinette
+fish
+aquarium
+# IDE
+*.un~
+.idea
