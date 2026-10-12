@@ -1,9 +1,9 @@
 package session
 
 import (
-	protocol "tree_nity/communication/protocol/message"
-	session "tree_nity/server/session/consumer"
-	utils "tree_nity/server/utils/prefix_tree"
+	"tree_nity/src/communication/protocol/message"
+	"tree_nity/src/server/session/consumer"
+	"tree_nity/src/server/utils/prefix_tree"
 )
 
 type Topic struct {
