@@ -1,31 +1,20 @@
 # Git Workflow
 
-This domain is the single source of truth for Tree_nity's Git workflow. The
-mandatory rules come from `en.git_guidelines.pdf`; repository conventions add
-specific naming and review practices without weakening those rules.
+Rules for branches, commits, history, merges, and review.
 
-## Rule levels
+## Keywords
 
-- **Guideline requirement** means the Git guidelines require it.
-- **Repository convention** means Tree_nity has adopted it consistently where
-  the guidelines leave a choice.
-- **Recommendation** is practical guidance and is not presented as mandatory.
+- **MUST** and **MUST NOT** mark a requirement.
+- **SHOULD** and **SHOULD NOT** mark a recommendation; a deviation MUST be
+  justified.
 
 ## Documents
 
-- [Branches](branches.md) — branch scope, stability, and naming.
-- [Commits](commits.md) — Conventional Commits, accuracy, and granularity.
-- [History](history.md) — cleanup, rebasing, and mandatory merge strategies.
-- [Review](review.md) — the contributor and reviewer validation procedure.
+Each document lists its requirements, then its recommendations, then its
+reference sections and procedures.
 
-## Core workflow
-
-Significant work is developed on a focused branch, recorded as coherent
-Conventional Commits, kept current with `main` by rebase or fast-forward, and
-integrated into `main` with a non-fast-forward merge commit. Squash integration
-is prohibited because meaningful intermediate commits are part of the project
-history.
-
-The `gitinette` tool can identify some mechanical violations, but it does not
-replace review of the diff, subject compliance, build results, tests, or the
-merge strategy. See the [review procedure](review.md#gitinette).
+- [Branches](branches.md) — creating and naming branches.
+- [Commits](commits.md) — commit scope and message format.
+- [History](history.md) — updating and cleaning up a branch.
+- [Merges](merges.md) — integrating a branch into `main`.
+- [Review](review.md) — reviewing a change before merging.

@@ -1,71 +1,54 @@
 # Commits
 
-## Guideline requirements
+Rules for commit scope and message format.
 
-- Use Conventional Commits.
-- Make each commit one coherent logical change.
-- Make the message accurately describe the resulting diff.
-- Preserve intermediate commits when they communicate meaningful development
-  history.
+## Requirements
+
+### MUST
+
+- A commit MUST contain one logical change and no unrelated modification.
+- A commit message MUST follow the [message format](#format).
+- A commit message MUST describe its diff accurately.
+- A meaningful intermediate commit MUST be preserved.
+
+## Recommendations
+
+### SHOULD
+
+- A temporary correction SHOULD be recorded as a
+  [fixup commit](history.md#cleaning-up-commits).
 
 ## Format
 
 ```text
-<type>(<optional-scope>)<optional-!>: <description>
+<type>[(<scope>)][!]: <description>
 ```
+
+- `<type>` identifies the kind of change among the [types](#types).
+- `<scope>` names the affected area.
+- `!` marks a breaking change.
+- `<description>` states the result in the imperative mood, in lowercase,
+  without a final period.
 
 Examples:
 
 ```text
-feat(producer): implement broker connection
-fix(protocol): reject invalid message length
-test(prefix-tree): cover empty prefixes
-docs(git): document review procedure
-build: correct server package path
+feat(auth): add password reset
+fix(parser): reject empty input
+docs: describe the release process
+feat(api)!: remove the legacy endpoint
 ```
-
-The description should state the result, not an editing activity. Avoid vague
-messages such as `update`, `changes`, `work`, or `fix`.
 
 ## Types
 
-Use the narrowest accurate type. The repository's `gitinette` validator
-recognizes:
-
-- `feat` — new behavior;
-- `fix` — a defect correction;
-- `refactor` — internal restructuring with no intended behavior change;
-- `test` — test additions or changes;
-- `docs` — documentation-only changes;
-- `style` — formatting or style with no behavior change;
-- `perf` — a performance improvement;
-- `build` — build system or dependency changes;
-- `ci` — continuous-integration configuration;
-- `chore` — maintenance not covered above;
-- `revert` — reversal of an earlier commit.
-
-The optional scope names the affected area, for example `producer`, `consumer`,
-`protocol`, `prefix-tree`, `build`, or `git`.
-
-## Granularity and coherence
-
-Use one commit for one reason to change the repository. A commit is too broad
-when it mixes unrelated behavior, cleanup, and documentation. It is too narrow
-when it records an arbitrary editing step with no useful purpose in review or
-history.
-
-Line count does not determine granularity. Do not squash a meaningful sequence
-merely to reduce the number of commits. Temporary corrections can instead use
-fixup commits and local cleanup as described in [Git history](history.md).
-
-## Breaking changes
-
-Mark an intentionally incompatible interface or behavior change with `!`:
-
-```text
-feat(protocol)!: change message header format
-```
-
-or with a `BREAKING CHANGE:` footer that explains the migration. A commit
-marker does not replace the requirement to make such a change explicit during
-implementation and review.
+- `feat` adds a behavior.
+- `fix` corrects a defect.
+- `refactor` restructures code without changing behavior.
+- `perf` improves performance.
+- `test` adds or changes tests.
+- `docs` changes documentation only.
+- `style` changes formatting only.
+- `build` changes the build system or dependencies.
+- `ci` changes the continuous-integration configuration.
+- `chore` covers maintenance that no other type describes.
+- `revert` reverts an earlier commit.

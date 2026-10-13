@@ -43,7 +43,7 @@ A step ends with a reference line when a document details it.
    read the affected packages, their dependencies, their tests, and their
    current implementation.
 
-   Reference: [review range](documentation/git/review.md#1-establish-the-review-range).
+   Reference: [review range](documentation/git/review.md#establishing-the-review-range).
 
 3. **Plan** — define the smallest coherent change that fulfills the task,
    listing:
@@ -124,7 +124,7 @@ These rules apply at all times, inside or outside the contribution pipeline.
       `git checkout -- <path>`, `git clean`, `git push --force`, or `rm -rf`;
     - adding, removing, or upgrading an external dependency.
 
-  Reference: [integrating branches](documentation/git/history.md#integrating-branches).
+  Reference: [merge rules](documentation/git/merges.md).
 
 - **Existing work** — never modify, stage, or revert changes you did not make;
   report conflicts with them to the user instead.

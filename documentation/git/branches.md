@@ -1,49 +1,43 @@
 # Branches
 
-## Guideline requirements
+Rules for creating and naming branches.
 
-- Use a dedicated branch for every feature, bug fix, refactor, or other
-  significant change.
-- Give the branch a name that describes the nature of its work.
-- Keep unrelated changes on separate branches.
-- Keep `main` stable and suitable as the integration branch.
+## Requirements
 
-## Repository naming convention
+### MUST
 
-Tree_nity branches use:
+- A feature, fix, or significant change MUST be developed on its own branch.
+- A branch MUST contain a single objective.
+- A branch name MUST follow the [naming format](#naming-format).
+- A change committed directly on `main` MUST be a small non-breaking fix, such
+  as a typo, documentation, or trivial correction, that does not alter feature
+  logic.
+
+## Naming format
 
 ```text
-<type>/<component>/<change>
+<type>/<name>
 ```
 
-Use lowercase words and hyphens. The type should normally match an applicable
-[commit type](commits.md#types); the component identifies the affected area;
-and the final segment describes the objective.
+- `<type>` matches the [commit type](commits.md#types) of the main change:
+  `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `style`, `build`, `ci`,
+  `chore`, or `revert`.
+- `<name>` describes the objective in lowercase words separated by hyphens.
 
 Examples:
 
 ```text
-feat/producer/connection
-fix/broker/message-persistence
-refactor/protocol/parser
-docs/testing/unit-tests
-chore/build/makefile
+feat/user-login
+fix/session-timeout
+docs/git-workflow
 ```
 
-The local `gitinette` script accepts the less specific `<type>/<name>` shape,
-so a passing tool result does not by itself establish compliance with this
-repository convention.
+## Creating a branch
 
-## Scope and stability
+Create the branch from the latest `main`:
 
-A branch represents one reviewable objective and may contain several logical
-commits. Split independently reviewable work instead of using a broad shared
-branch such as `feat/producer` for unrelated producer changes.
-
-Avoid direct work on `main`, including for small changes, unless the repository
-maintainers explicitly choose otherwise. This is a repository recommendation;
-the guideline requirement is that significant work use a branch and that
-`main` remain stable.
-
-See [Git history](history.md#integrating-branches) for the required directions
-and merge modes when updating or integrating a branch.
+```bash
+git switch main
+git pull --ff-only
+git switch -c <type>/<name>
+```
