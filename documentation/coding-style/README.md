@@ -1,18 +1,22 @@
 # Coding Style
 
-This domain defines the coding conventions for Tree_nity. It is intended for
-both contributors and agents.
+Rules for writing code, independent of the language.
 
-## Rule sources
+## Keywords
 
-- The project subject determines the required language and behavior.
-- [Go conventions](go.md) are repository conventions based on standard Go
-  practice and the existing codebase; they are not presented as extra subject
-  requirements.
-- [Naming conventions](naming.md) define the shared vocabulary for Go code and
-  files.
+- **MUST** and **MUST NOT** mark a requirement.
+- **SHOULD** and **SHOULD NOT** mark a recommendation; a deviation MUST be
+  justified.
 
-Prefer standard Go idioms over project-specific rules. Existing package
-boundaries and package names must be preserved during an unrelated change even
-when a different structure might also be reasonable. Architecture changes
-require their own explicit objective and review.
+## Documents
+
+Each document lists its requirements, then its recommendations, then its
+reference sections and procedures.
+
+- [Comments](comments.md) — explaining code.
+- [Naming](naming.md) — choosing names.
+- [Errors](errors.md) — handling errors.
+- [Concurrency](concurrency.md) — sharing state between concurrent tasks.
+- [Dependencies and interfaces](dependencies.md) — adding dependencies and
+  changing interfaces.
+- [Go](go/README.md) — Go-specific rules.
