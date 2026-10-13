@@ -15,10 +15,12 @@ Rules for writing unit tests.
 ### MUST NOT
 
 - A test MUST NOT use sleeps to synchronize.
-- Generated test data MUST NOT be committed.
+- Temporary data generated during a test run MUST NOT be committed.
 
 ## Recommendations
 
 ### SHOULD
 
 - A test SHOULD live next to the code it tests.
+- A generated fixture SHOULD be committed only when needed to reproduce a
+  regression or define expected behavior, with its provenance documented.

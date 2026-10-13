@@ -8,8 +8,8 @@ Rules for adding dependencies and changing interfaces.
 
 - A new dependency MUST solve a need that the standard library and the existing
   dependencies do not cover.
-- An externally visible behavior change MUST be documented and covered by
-  tests.
+- An externally visible behavior change MUST be documented. Test coverage is
+  defined by the [unit-test rules](../testing/unit-tests.md).
 
 ### MUST NOT
 

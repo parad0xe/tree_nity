@@ -2,12 +2,6 @@
 
 Rules for writing code, independent of the language.
 
-## Keywords
-
-- **MUST** and **MUST NOT** mark a requirement.
-- **SHOULD** and **SHOULD NOT** mark a recommendation; a deviation MUST be
-  justified.
-
 ## Documents
 
 Each document lists its requirements, then its recommendations, then its

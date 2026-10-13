@@ -6,8 +6,8 @@ Rules for running tests and interpreting their results.
 
 ### MUST
 
-- A concurrency change MUST pass the race-detection
-  [command](../project/README.md#commands).
+- A concurrency change MUST pass the checks required by its language-specific
+  rules and [project profile](../project/README.md).
 
 ### MUST NOT
 

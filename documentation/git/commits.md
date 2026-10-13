@@ -7,16 +7,10 @@ Rules for commit scope and message format.
 ### MUST
 
 - A commit MUST contain one logical change and no unrelated modification.
-- A commit message MUST follow the [message format](#format).
+- A commit message MUST follow the [message format](#format), with exceptions
+  for [merge messages](merges.md#commit-message) and
+  [fixup messages](history.md#fixup-messages).
 - A commit message MUST describe its diff accurately.
-- A meaningful intermediate commit MUST be preserved.
-
-## Recommendations
-
-### SHOULD
-
-- A temporary correction SHOULD be recorded as a
-  [fixup commit](history.md#cleaning-up-commits).
 
 ## Format
 

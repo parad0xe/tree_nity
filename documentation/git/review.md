@@ -31,9 +31,9 @@ Inspect the branch and its commits:
 
 ```bash
 git status --short --branch
-git log --oneline --decorate main..HEAD
-git diff --check main...HEAD
-git diff main...HEAD
+git log --oneline --decorate <integration-branch>..HEAD
+git diff --check <integration-branch>...HEAD
+git diff <integration-branch>...HEAD
 ```
 
 Inspect uncommitted changes:

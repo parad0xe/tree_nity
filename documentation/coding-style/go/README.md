@@ -10,5 +10,6 @@ reference sections and procedures.
 - [Formatting](formatting.md) — formatting code and grouping imports.
 - [Comments](comments.md) — documenting exported identifiers.
 - [Naming](naming.md) — naming identifiers, packages, and files.
+- [Interfaces](interfaces.md) — placing interfaces near their consumers.
 - [Errors](errors.md) — wrapping errors.
-- [Concurrency](concurrency.md) — closing channels.
+- [Concurrency](concurrency.md) — channel ownership and cancellation.

@@ -1,13 +1,27 @@
 # Agent Contribution Workflow
 
 Rules and workflow for agents contributing to this repository. Project-specific
-settings live in the [project profile](documentation/project/README.md).
+guidelines live in the [project profile](documentation/project/README.md).
 
 ## Keywords
 
 - **MUST** and **MUST NOT** mark a requirement.
 - **SHOULD** and **SHOULD NOT** mark a recommendation; a deviation MUST be
   justified.
+
+## Rule precedence
+
+Apply rules in this order, from highest to lowest priority:
+
+1. [Sources of truth](documentation/project/README.md#sources-of-truth).
+2. [Project rules](documentation/project/README.md#project-rules).
+3. Applicable language-specific rules in the
+   [coding-style](documentation/coding-style/README.md) and
+   [testing](documentation/testing/README.md) modules.
+4. General rules in the [Git workflow](documentation/git/README.md),
+   coding-style, and testing modules.
+
+Lower-priority rules complement higher-priority rules where those are silent.
 
 ## Requirements
 
@@ -16,10 +30,7 @@ settings live in the [project profile](documentation/project/README.md).
 - An agent MUST follow the [workflow](#workflow) for every change.
 - An agent MUST stop at each gate and wait for the user's explicit answer
   before editing any file or continuing.
-- An agent MUST apply the
-  [sources of truth](documentation/project/README.md#sources-of-truth) first,
-  then the [modules](documentation/project/README.md#modules) where those
-  sources are silent.
+- An agent MUST apply the [rule precedence](#rule-precedence).
 - An agent MUST ask the user when a source is unavailable, ambiguous, or in
   conflict with another source, the code, or the request.
 - An agent MUST return to the plan gate when the scope must change.
@@ -72,8 +83,8 @@ settings live in the [project profile](documentation/project/README.md).
    [coding style](documentation/coding-style/README.md) and the
    [unit-test conventions](documentation/testing/unit-tests.md).
 6. **Gate:** present a summary of the change and a recommended selection among
-   formatting, build, and tests, then wait for the user to select the steps to
-   run.
+   formatting, build, and tests, identifying the checks required by the project
+   and modules, then wait for the user to select the steps to run.
 
 ### Validate (selected steps only)
 
@@ -81,6 +92,8 @@ settings live in the [project profile](documentation/project/README.md).
    [commands](documentation/project/README.md#commands).
 8. Run the build [command](documentation/project/README.md#commands).
 9. Run the test [commands](documentation/project/README.md#commands).
+
+A validation command MUST exit with code 0 to count as passed.
 
 ### Close
 

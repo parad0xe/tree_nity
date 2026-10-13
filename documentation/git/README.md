@@ -2,11 +2,9 @@
 
 Rules for branches, commits, history, merges, and review.
 
-## Keywords
-
-- **MUST** and **MUST NOT** mark a requirement.
-- **SHOULD** and **SHOULD NOT** mark a recommendation; a deviation MUST be
-  justified.
+In these documents, `<integration-branch>` and `<remote>` are the integration
+branch and Git remote defined in the
+[project profile](../project/README.md#settings).
 
 ## Documents
 
@@ -16,5 +14,5 @@ reference sections and procedures.
 - [Branches](branches.md) — creating and naming branches.
 - [Commits](commits.md) — commit scope and message format.
 - [History](history.md) — updating and cleaning up a branch.
-- [Merges](merges.md) — integrating a branch into `main`.
+- [Merges](merges.md) — integrating a branch into the integration branch.
 - [Review](review.md) — reviewing a change before merging.

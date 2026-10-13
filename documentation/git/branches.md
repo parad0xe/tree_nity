@@ -9,9 +9,9 @@ Rules for creating and naming branches.
 - A feature, fix, or significant change MUST be developed on its own branch.
 - A branch MUST contain a single objective.
 - A branch name MUST follow the [naming format](#naming-format).
-- A change committed directly on `main` MUST be a small non-breaking fix, such
-  as a typo, documentation, or trivial correction, that does not alter feature
-  logic.
+- A change committed directly on the integration branch MUST be a small
+  non-breaking fix, such as a typo, documentation, or trivial correction, that
+  does not alter feature logic.
 
 ## Naming format
 
@@ -34,10 +34,10 @@ docs/git-workflow
 
 ## Creating a branch
 
-Create the branch from the latest `main`:
+Create the branch from the latest integration branch:
 
 ```bash
-git switch main
-git pull --ff-only
+git switch <integration-branch>
+git pull --ff-only <remote> <integration-branch>
 git switch -c <type>/<name>
 ```
