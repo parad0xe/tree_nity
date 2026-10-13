@@ -1,31 +1,19 @@
-# Testing and Validation
+# Testing
 
-This domain is the entry point for Tree_nity's executable validation
-procedures. Each procedure has one authoritative document:
+Rules for writing and running tests, independent of the language.
 
-- [Formatting and static analysis](formatting.md) — format changed Go files and
-  run repository-wide formatting and vet checks.
-- [Test execution](test-execution.md) — select and run the appropriate Go and
-  subject tests, then interpret and report the results.
-- [Unit tests](unit-tests.md) — structure unit tests and cover the subject's
-  prefix-matching requirements.
+## Keywords
 
-The project subject requires Go's native testing framework and comprehensive
-unit testing of prefix matching. The documents above separate how validation
-is executed from how test cases are designed.
+- **MUST** and **MUST NOT** mark a requirement.
+- **SHOULD** and **SHOULD NOT** mark a recommendation; a deviation MUST be
+  justified.
 
-## Current Makefile behavior
+## Documents
 
-The Makefile must be treated as executable truth, not inferred from target
-names:
+Each document lists its requirements, then its recommendations, then its
+reference sections and procedures.
 
-- `test` delegates directly to `go test ./...`.
-- `all` depends on `server` and `client`.
-- `server` runs `go build -o src/server ./server`.
-- `client` runs `go build -o src/client ./client`.
-
-The current packages are under `src/server` and `src/client`, while those build
-commands address `./server` and `./client`. Consequently, the default build
-currently fails before proving that either executable can be built. Do not
-silently replace the required Makefile result with a different command; an
-additional diagnostic command may be reported separately.
+- [Unit tests](unit-tests.md) — writing unit tests.
+- [Test execution](test-execution.md) — running tests and interpreting their
+  results.
+- [Go](go/README.md) — Go-specific rules.
