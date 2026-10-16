@@ -1,14 +1,53 @@
 package protocol
 
-import "errors"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+)
 
-type Payload interface {
-	parse() error
-}
+type Payload interface{}
 
 type payloadJSON interface {
 	validate() error
 	toPayload() (Payload, error)
+}
+
+func newPayloadJSON(opcode op, raw json.RawMessage) (payloadJSON, error) {
+	var tmpPayload payloadJSON
+
+	switch opcode {
+	case list_topic:
+		tmpPayload = &listTopicPayloadJSON{}
+	case create_topic:
+		tmpPayload = &createTopicPayloadJSON{}
+	case consumer_info:
+		tmpPayload = &consumerInfoPayloadJSON{}
+	case topic_subsription:
+		tmpPayload = &topicSubscriptionPayloadJSON{}
+	case aknowledgement:
+		tmpPayload = &acknowledgementPayloadJSON{}
+	case check_topic:
+		tmpPayload = &checkTopicPayloadJSON{}
+	case produce_message:
+		tmpPayload = &produceMessagePayloadJSON{}
+	case consumer_disconnect:
+		tmpPayload = &consumerDisconnectPayloadJSON{}
+	case consumer_heartbeat:
+		tmpPayload = &consumerHeartbeatPayloadJSON{}
+	default:
+		return nil, fmt.Errorf("unknown opcode: %d", opcode)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(tmpPayload); err != nil {
+		return nil, err
+	}
+
+	return tmpPayload, nil
 }
 
 type ListTopicPayload struct{}
@@ -25,10 +64,6 @@ func (p listTopicPayloadJSON) toPayload() (Payload, error) {
 	return &ListTopicPayload{}, nil
 }
 
-func (p *ListTopicPayload) parse() error {
-	return nil
-}
-
 type CreateTopicPayload struct{}
 type createTopicPayloadJSON struct{}
 
@@ -41,10 +76,6 @@ func (p createTopicPayloadJSON) toPayload() (Payload, error) {
 		return nil, err
 	}
 	return &CreateTopicPayload{}, nil
-}
-
-func (p *CreateTopicPayload) parse() error {
-	return nil
 }
 
 type ConsumerInfoPayload struct{}
@@ -61,10 +92,6 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	return &ConsumerInfoPayload{}, nil
 }
 
-func (p *ConsumerInfoPayload) parse() error {
-	return nil
-}
-
 type TopicSubscriptionPayload struct{}
 type topicSubscriptionPayloadJSON struct{}
 
@@ -77,10 +104,6 @@ func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
 		return nil, err
 	}
 	return &TopicSubscriptionPayload{}, nil
-}
-
-func (p *TopicSubscriptionPayload) parse() error {
-	return nil
 }
 
 type AcknowledgementPayload struct{}
@@ -97,10 +120,6 @@ func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
 	return &AcknowledgementPayload{}, nil
 }
 
-func (p *AcknowledgementPayload) parse() error {
-	return nil
-}
-
 type CheckTopicPayload struct{}
 type checkTopicPayloadJSON struct{}
 
@@ -113,10 +132,6 @@ func (p checkTopicPayloadJSON) toPayload() (Payload, error) {
 		return nil, err
 	}
 	return &CheckTopicPayload{}, nil
-}
-
-func (p *CheckTopicPayload) parse() error {
-	return nil
 }
 
 type ProduceMessagePayload struct {
@@ -155,10 +170,6 @@ func (p produceMessagePayloadJSON) toPayload() (Payload, error) {
 	}, nil
 }
 
-func (p *ProduceMessagePayload) parse() error {
-	return p.message.validate()
-}
-
 type ConsumerDisconnectPayload struct{}
 type consumerDisconnectPayloadJSON struct{}
 
@@ -173,10 +184,6 @@ func (p consumerDisconnectPayloadJSON) toPayload() (Payload, error) {
 	return &ConsumerDisconnectPayload{}, nil
 }
 
-func (p *ConsumerDisconnectPayload) parse() error {
-	return nil
-}
-
 type ConsumerHeartbeatPayload struct{}
 type consumerHeartbeatPayloadJSON struct{}
 
@@ -189,8 +196,4 @@ func (p consumerHeartbeatPayloadJSON) toPayload() (Payload, error) {
 		return nil, err
 	}
 	return &ConsumerHeartbeatPayload{}, nil
-}
-
-func (p *ConsumerHeartbeatPayload) parse() error {
-	return nil
 }

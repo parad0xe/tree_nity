@@ -23,6 +23,9 @@ func (m messageJSON) validate() error {
 	if m.Value == nil {
 		return errors.New("missing message value")
 	}
+	if len(*m.Key)+len(*m.Value) > MessageSize {
+		return fmt.Errorf("message exceeds %d bytes", MessageSize)
+	}
 	return nil
 }
 
@@ -35,11 +38,4 @@ func (m messageJSON) toMessage() (Message, error) {
 		key:   *m.Key,
 		value: *m.Value,
 	}, nil
-}
-
-func (m Message) validate() error {
-	if len(m.key)+len(m.value) > MessageSize {
-		return fmt.Errorf("message exceeds %d bytes", MessageSize)
-	}
-	return nil
 }
