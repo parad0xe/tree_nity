@@ -1,6 +1,7 @@
 package mqueue
 
 /*
+#include <limits.h>
 #include <stdlib.h>
 #include <mqueue.h>
 
@@ -12,6 +13,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -45,10 +47,39 @@ type queue struct {
 	mqd  C.mqd_t
 }
 
+// nameMax is the maximum length, in bytes, of a queue name after its leading "/".
+const nameMax = C.NAME_MAX
+
+// validateName returns an error wrapping ErrInvalidName unless name is a "/"
+// followed by 1 to nameMax bytes that contain no other "/".
+func validateName(name string) error {
+	if !strings.HasPrefix(name, "/") {
+		return fmt.Errorf(`%w %q: must start with "/"`, ErrInvalidName, name)
+	}
+
+	if strings.Count(name, "/") > 1 {
+		return fmt.Errorf(`%w %q: must not contain "/" after the first character`, ErrInvalidName, name)
+	}
+
+	if len(name) < 2 {
+		return fmt.Errorf(`%w %q: must have a character after "/"`, ErrInvalidName, name)
+	}
+
+	if len(name) > nameMax+1 {
+		return fmt.Errorf(`%w %q: must not exceed %d bytes after "/"`, ErrInvalidName, name, nameMax)
+	}
+
+	return nil
+}
+
 // open opens the queue name with the given mode and options. maxMsg and
 // msgSize set the capacity of a queue created with Create and are ignored
 // otherwise.
 func open(name string, mode mode, opts option, maxMsg int64, msgSize int64) (*queue, error) {
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 

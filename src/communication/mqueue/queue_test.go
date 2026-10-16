@@ -3,6 +3,7 @@ package mqueue
 import (
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -80,8 +81,57 @@ func TestOpenRejectsZeroCapacity(t *testing.T) {
 
 func TestOpenRejectsInvalidName(t *testing.T) {
 	name := "invalid"
-	if err := openQueue(t, name, Read, createExclusive, maxMsg); !errors.Is(err, syscall.EINVAL) {
-		t.Errorf("Open(%q) error = %v, want %v", name, err, syscall.EINVAL)
+	if err := openQueue(t, name, Read, createExclusive, maxMsg); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("Open(%q) error = %v, want %v", name, err, ErrInvalidName)
+	}
+}
+
+func TestValidateNameAcceptsShortName(t *testing.T) {
+	name := "/a"
+	if err := validateName(name); err != nil {
+		t.Errorf("validateName(%q) error = %v, want nil", name, err)
+	}
+}
+
+func TestValidateNameAcceptsMaximumLength(t *testing.T) {
+	name := "/" + strings.Repeat("a", nameMax)
+	if err := validateName(name); err != nil {
+		t.Errorf("validateName(%q) error = %v, want nil", name, err)
+	}
+}
+
+func TestValidateNameRejectsEmptyName(t *testing.T) {
+	name := ""
+	if err := validateName(name); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("validateName(%q) error = %v, want %v", name, err, ErrInvalidName)
+	}
+}
+
+func TestValidateNameRejectsMissingLeadingSlash(t *testing.T) {
+	name := "name"
+	if err := validateName(name); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("validateName(%q) error = %v, want %v", name, err, ErrInvalidName)
+	}
+}
+
+func TestValidateNameRejectsSlashOnly(t *testing.T) {
+	name := "/"
+	if err := validateName(name); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("validateName(%q) error = %v, want %v", name, err, ErrInvalidName)
+	}
+}
+
+func TestValidateNameRejectsInnerSlash(t *testing.T) {
+	name := "/a/b"
+	if err := validateName(name); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("validateName(%q) error = %v, want %v", name, err, ErrInvalidName)
+	}
+}
+
+func TestValidateNameRejectsTooLongName(t *testing.T) {
+	name := "/" + strings.Repeat("a", nameMax+1)
+	if err := validateName(name); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("validateName(%q) error = %v, want %v", name, err, ErrInvalidName)
 	}
 }
 
