@@ -43,8 +43,9 @@ const (
 
 // queue is an open descriptor on a named POSIX message queue.
 type queue struct {
-	name string
-	mqd  C.mqd_t
+	name    string
+	mqd     C.mqd_t
+	msgSize int
 }
 
 // nameMax is the maximum length, in bytes, of a queue name after its leading "/".
@@ -89,10 +90,53 @@ func open(name string, mode mode, opts option, maxMsg int64, msgSize int64) (*qu
 		return nil, fmt.Errorf("open queue %q: %w", name, err)
 	}
 
-	return &queue{
+	q := &queue{
 		name: name,
 		mqd:  mqd,
-	}, nil
+	}
+
+	retrievedAttr := C.struct_mq_attr{}
+	if retcode, err := C.mq_getattr(mqd, &retrievedAttr); retcode == -1 {
+		return nil, errors.Join(fmt.Errorf("open queue %q: %w", name, err), q.close())
+	}
+
+	q.msgSize = int(retrievedAttr.mq_msgsize)
+
+	return q, nil
+}
+
+// recv blocks until a message is available and returns its content.
+func (q *queue) recv() ([]byte, error) {
+	buffer := make([]byte, q.msgSize)
+
+	cbuffer := unsafe.Pointer(&buffer[0])
+	size, err := C.mq_receive(q.mqd, (*C.char)(cbuffer), C.size_t(len(buffer)), nil)
+	if size == -1 {
+		return nil, fmt.Errorf("receive from queue %q: %w", q.name, err)
+	}
+
+	return buffer[:size], nil
+}
+
+// send blocks while the queue is full, then sends message. The returned error
+// matches ErrEmptyMessage when message is empty, and ErrMessageTooLarge when it
+// exceeds the message size of the queue.
+func (q *queue) send(message []byte) error {
+	if len(message) == 0 {
+		return fmt.Errorf("send to queue %q: %w", q.name, ErrEmptyMessage)
+	}
+
+	if len(message) > q.msgSize {
+		return fmt.Errorf("send to queue %q: %w: %d bytes, maximum %d", q.name, ErrMessageTooLarge, len(message), q.msgSize)
+	}
+
+	cbuffer := unsafe.Pointer(&message[0])
+	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(message)), 0)
+	if retcode == -1 {
+		return fmt.Errorf("send to queue %q: %w", q.name, err)
+	}
+
+	return nil
 }
 
 // close releases the descriptor. The queue stays available to other
