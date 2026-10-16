@@ -15,40 +15,40 @@ import (
 	"unsafe"
 )
 
-// Mode is the access mode of an opened queue.
-type Mode int
+// mode is the access mode of an opened queue.
+type mode int
 
 const (
 	// Read opens the queue to receive messages.
-	Read Mode = C.O_RDONLY
+	Read mode = C.O_RDONLY
 	// Write opens the queue to send messages.
-	Write Mode = C.O_WRONLY
+	Write mode = C.O_WRONLY
 )
 
-// Option changes how Open behaves. Options can be combined with |.
-type Option int
+// option changes how open behaves. Options can be combined with |.
+type option int
 
 const (
 	// Create creates the queue when it does not exist.
-	Create Option = C.O_CREAT
-	// Exclusive makes Open fail with os.ErrExist when Create finds an
+	Create option = C.O_CREAT
+	// Exclusive makes open fail with os.ErrExist when Create finds an
 	// existing queue.
-	Exclusive Option = C.O_EXCL
+	Exclusive option = C.O_EXCL
 	// NonBlock makes operations fail with syscall.EAGAIN instead of waiting
 	// on a full or empty queue.
-	NonBlock Option = C.O_NONBLOCK
+	NonBlock option = C.O_NONBLOCK
 )
 
-// Queue is an open descriptor on a named POSIX message queue.
-type Queue struct {
+// queue is an open descriptor on a named POSIX message queue.
+type queue struct {
 	name string
 	mqd  C.mqd_t
 }
 
-// Open opens the queue name with the given mode and options. maxMsg and
+// open opens the queue name with the given mode and options. maxMsg and
 // msgSize set the capacity of a queue created with Create and are ignored
 // otherwise.
-func Open(name string, mode Mode, opts Option, maxMsg int64, msgSize int64) (*Queue, error) {
+func open(name string, mode mode, opts option, maxMsg int64, msgSize int64) (*queue, error) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 
@@ -58,15 +58,15 @@ func Open(name string, mode Mode, opts Option, maxMsg int64, msgSize int64) (*Qu
 		return nil, fmt.Errorf("open queue %q: %w", name, err)
 	}
 
-	return &Queue{
+	return &queue{
 		name: name,
 		mqd:  mqd,
 	}, nil
 }
 
-// Close releases the descriptor. The queue stays available to other
+// close releases the descriptor. The queue stays available to other
 // processes until it is unlinked.
-func (q *Queue) Close() error {
+func (q *queue) close() error {
 	if retcode, err := C.mq_close(q.mqd); retcode == -1 {
 		return fmt.Errorf("close queue %q: %w", q.name, err)
 	}
@@ -74,9 +74,9 @@ func (q *Queue) Close() error {
 	return nil
 }
 
-// Unlink removes the queue name from the system. Open descriptors remain
+// unlink removes the queue name from the system. open descriptors remain
 // usable until they are closed.
-func (q *Queue) Unlink() error {
+func (q *queue) unlink() error {
 	cname := C.CString(q.name)
 	defer C.free(unsafe.Pointer(cname))
 
@@ -87,8 +87,8 @@ func (q *Queue) Unlink() error {
 	return nil
 }
 
-// Drop closes the descriptor and removes the queue. It attempts both
+// drop closes the descriptor and removes the queue. It attempts both
 // operations even when the first one fails.
-func (q *Queue) Drop() error {
-	return errors.Join(q.Close(), q.Unlink())
+func (q *queue) drop() error {
+	return errors.Join(q.close(), q.unlink())
 }
