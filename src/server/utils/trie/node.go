@@ -2,6 +2,7 @@ package trie
 
 import (
 	"errors"
+	"slices"
 )
 
 type Node[T comparable] struct {
@@ -26,10 +27,8 @@ func (n *Node[T]) EnsureChild(key byte) *Node[T] {
 }
 
 func (n *Node[T]) AddValue(value T) error {
-	for _, v := range n.values {
-		if v == value {
-			return errors.New("value already exists")
-		}
+	if slices.Contains(n.values, value) {
+		return errors.New("value already exists")
 	}
 	n.values = append(n.values, value)
 	return nil
@@ -43,6 +42,10 @@ func (n *Node[T]) RemoveValue(value T) bool {
 		}
 	}
 	return false
+}
+
+func (n *Node[T]) Values() []T {
+	return slices.Clone(n.values)
 }
 
 func (n *Node[T]) MapSubtree(visit func(T)) {

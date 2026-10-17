@@ -182,6 +182,115 @@ func TestNodeRemoveValuePointerIdentity(t *testing.T) {
 	}
 }
 
+// TestNodeValues checks empty, minimal, ordered, and large sequences of values.
+func TestNodeValues(t *testing.T) {
+	large := make([]int, 1024)
+	for i := range large {
+		large[i] = i
+	}
+	tests := []struct {
+		name   string
+		values []int
+	}{
+		{name: "empty"},
+		{name: "zero value", values: []int{0}},
+		{name: "insertion order", values: []int{3, 1, 2}},
+		{name: "large", values: large},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := NewNode[int]()
+			for _, value := range tt.values {
+				if err := node.AddValue(value); err != nil {
+					t.Errorf("AddValue(%d) during setup for Values(values=%v) error = %v, want nil", value, tt.values, err)
+					return
+				}
+			}
+			if got := node.Values(); !slices.Equal(got, tt.values) {
+				t.Errorf("Values(values=%v) = %v, want %v", tt.values, got, tt.values)
+			}
+		})
+	}
+}
+
+// TestNodeValuesCopyIsolation checks that the node and returned slice change independently.
+func TestNodeValuesCopyIsolation(t *testing.T) {
+	tests := []struct {
+		name       string
+		modifyCopy bool
+	}{
+		{name: "modify returned slice", modifyCopy: true},
+		{name: "modify node"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			values := []int{3, 1, 2}
+			node := NewNode[int]()
+			for _, value := range values {
+				if err := node.AddValue(value); err != nil {
+					t.Errorf("AddValue(%d) during setup for Values(values=%v) error = %v, want nil", value, values, err)
+					return
+				}
+			}
+			copied := node.Values()
+			if !slices.Equal(copied, values) {
+				t.Errorf("Values(values=%v) = %v, want %v", values, copied, values)
+				return
+			}
+
+			if tt.modifyCopy {
+				copied[0] = 99
+				if got := node.Values(); !slices.Equal(got, values) {
+					t.Errorf("Values(values=%v) after setting returned element 0 to 99 = %v, want %v", values, got, values)
+				}
+				return
+			}
+
+			if got := node.RemoveValue(3); !got {
+				t.Errorf("RemoveValue(3) with values %v = false, want true", values)
+				return
+			}
+			if err := node.AddValue(4); err != nil {
+				t.Errorf("AddValue(4) after RemoveValue(3) with initial values %v error = %v, want nil", values, err)
+				return
+			}
+			if !slices.Equal(copied, values) {
+				t.Errorf("Values(values=%v) snapshot after RemoveValue(3) and AddValue(4) = %v, want %v", values, copied, values)
+			}
+			if got := node.Values(); !slices.Equal(got, []int{1, 2, 4}) {
+				t.Errorf("Values() after RemoveValue(3) and AddValue(4) with initial values %v = %v, want [1 2 4]", values, got)
+			}
+		})
+	}
+}
+
+// TestNodeValuesPointerIdentity checks a shallow copy with independent slice elements.
+func TestNodeValuesPointerIdentity(t *testing.T) {
+	type value struct {
+		id int
+	}
+	first := &value{id: 1}
+	second := &value{id: 2}
+	values := []*value{first, nil, second}
+	node := NewNode[*value]()
+	for _, pointer := range values {
+		if err := node.AddValue(pointer); err != nil {
+			t.Errorf("AddValue(%p) during setup for Values(values=%v) error = %v, want nil", pointer, values, err)
+			return
+		}
+	}
+
+	copied := node.Values()
+	if !slices.Equal(copied, values) {
+		t.Errorf("Values(values=%v) = %v, want the same pointers %v", values, copied, values)
+		return
+	}
+	copied[0] = nil
+	if got := node.Values(); !slices.Equal(got, values) {
+		t.Errorf("Values(values=%v) after setting returned element 0 to nil = %v, want %v", values, got, values)
+	}
+}
+
 // TestNodeMapSubtree checks that equal values at different nodes are all visited.
 func TestNodeMapSubtree(t *testing.T) {
 	tests := []struct {
