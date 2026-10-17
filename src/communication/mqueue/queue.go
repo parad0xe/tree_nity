@@ -17,35 +17,12 @@ import (
 	"unsafe"
 )
 
-// mode is the access mode of an opened queue.
-type mode int
-
-const (
-	// Read opens the queue to receive messages.
-	Read mode = C.O_RDONLY
-	// Write opens the queue to send messages.
-	Write mode = C.O_WRONLY
-)
-
-// option changes how open behaves. Options can be combined with |.
-type option int
-
-const (
-	// Create creates the queue when it does not exist.
-	Create option = C.O_CREAT
-	// Exclusive makes open fail with os.ErrExist when Create finds an
-	// existing queue.
-	Exclusive option = C.O_EXCL
-	// NonBlock makes operations fail with syscall.EAGAIN instead of waiting
-	// on a full or empty queue.
-	NonBlock option = C.O_NONBLOCK
-)
-
 // queue is an open descriptor on a named POSIX message queue.
 type queue struct {
 	name    string
 	mqd     C.mqd_t
 	msgSize int
+	maxMsg  int
 }
 
 // nameMax is the maximum length, in bytes, of a queue name after its leading "/".
@@ -73,10 +50,8 @@ func validateName(name string) error {
 	return nil
 }
 
-// open opens the queue name with the given mode and options. maxMsg and
-// msgSize set the capacity of a queue created with Create and are ignored
-// otherwise.
-func open(name string, mode mode, opts option, maxMsg int64, msgSize int64) (*queue, error) {
+// open opens the queue name with the given flags and reads its attributes.
+func open(name string, flags int, attr *C.struct_mq_attr) (*queue, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -84,8 +59,7 @@ func open(name string, mode mode, opts option, maxMsg int64, msgSize int64) (*qu
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
 
-	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxMsg), mq_msgsize: C.long(msgSize)}
-	mqd, err := C.mq_open_wrapper(cname, C.int(mode)|C.int(opts), C.mode_t(0o600), &attr)
+	mqd, err := C.mq_open_wrapper(cname, C.int(flags), C.mode_t(0o600), attr)
 	if mqd == -1 {
 		return nil, fmt.Errorf("open queue %q: %w", name, err)
 	}
@@ -101,8 +75,20 @@ func open(name string, mode mode, opts option, maxMsg int64, msgSize int64) (*qu
 	}
 
 	q.msgSize = int(retrievedAttr.mq_msgsize)
+	q.maxMsg = int(retrievedAttr.mq_maxmsg)
 
 	return q, nil
+}
+
+// create creates the queue name and opens it to receive messages.
+func create(name string, messageSize int) (*queue, error) {
+	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxMsg), mq_msgsize: C.long(messageSize)}
+	return open(name, C.O_RDONLY|C.O_CREAT|C.O_EXCL, &attr)
+}
+
+// connect opens the existing queue name to send messages.
+func connect(name string) (*queue, error) {
+	return open(name, C.O_WRONLY, nil)
 }
 
 // recv blocks until a message is available and returns its content.

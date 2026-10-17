@@ -26,85 +26,95 @@ func release(t *testing.T, q *queue) {
 
 func createReader(t *testing.T, name string) *queue {
 	t.Helper()
-	q, err := open(name, Read, createExclusive, maxMsg, msgSize)
+	q, err := create(name, msgSize)
 	if err != nil {
-		t.Fatalf("Open(%q) error = %v, want nil", name, err)
+		t.Fatalf("Create(%q) error = %v, want nil", name, err)
 	}
 	t.Cleanup(func() { release(t, q) })
 	return q
 }
 
-func openQueue(t *testing.T, name string, mode mode, opts option, capacity int64) error {
+func createWriter(t *testing.T, name string) *queue {
 	t.Helper()
-	q, err := open(name, mode, opts, capacity, msgSize)
+	q, err := connect(name)
+	if err != nil {
+		t.Fatalf("Connect(%q) error = %v, want nil", name, err)
+	}
+	t.Cleanup(func() { release(t, q) })
+	return q
+}
+
+func tryCreateReader(t *testing.T, name string, messageSize int) error {
+	t.Helper()
+	q, err := create(name, messageSize)
 	if err == nil {
 		t.Cleanup(func() { release(t, q) })
 	}
 	return err
 }
 
-func createWriter(t *testing.T, name string) *queue {
+func tryCreateWriter(t *testing.T, name string) error {
 	t.Helper()
-	q, err := open(name, Write, noOptions, maxMsg, msgSize)
-	if err != nil {
-		t.Fatalf("Open(%q) error = %v, want nil", name, err)
+	q, err := connect(name)
+	if err == nil {
+		t.Cleanup(func() { release(t, q) })
 	}
-	t.Cleanup(func() { release(t, q) })
-	return q
+	return err
 }
 
-func TestOpenCreatesMissingQueue(t *testing.T) {
+func TestCreateCreatesMissingQueue(t *testing.T) {
 	name := queueName(t)
-	if err := openQueue(t, name, Read, createExclusive, maxMsg); err != nil {
-		t.Errorf("Open(%q) error = %v, want nil", name, err)
+	if err := tryCreateReader(t, name, msgSize); err != nil {
+		t.Errorf("Create(%q) error = %v, want nil", name, err)
 	}
 }
 
-func TestOpenOpensExistingQueue(t *testing.T) {
-	name := queueName(t)
-	createReader(t, name)
-	createWriter(t, name)
-}
-
-func TestOpenRejectsExistingQueueWhenExclusive(t *testing.T) {
+func TestCreateRejectsExistingQueue(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
-	if err := openQueue(t, name, Read, createExclusive, maxMsg); !errors.Is(err, os.ErrExist) {
-		t.Errorf("Open(%q) error = %v, want %v", name, err, os.ErrExist)
+	if err := tryCreateReader(t, name, msgSize); !errors.Is(err, os.ErrExist) {
+		t.Errorf("Create(%q) error = %v, want %v", name, err, os.ErrExist)
 	}
 }
 
-func TestOpenRejectsMissingQueueWithoutCreate(t *testing.T) {
+func TestCreateRejectsZeroMessageSize(t *testing.T) {
 	name := queueName(t)
-	if err := openQueue(t, name, Write, noOptions, maxMsg); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("Open(%q) error = %v, want %v", name, err, os.ErrNotExist)
+	if err := tryCreateReader(t, name, 0); !errors.Is(err, syscall.EINVAL) {
+		t.Errorf("Create(%q) error = %v, want %v", name, err, syscall.EINVAL)
 	}
 }
 
-func TestOpenRejectsZeroCapacity(t *testing.T) {
-	name := queueName(t)
-	if err := openQueue(t, name, Read, createExclusive, 0); !errors.Is(err, syscall.EINVAL) {
-		t.Errorf("Open(%q) error = %v, want %v", name, err, syscall.EINVAL)
-	}
-}
-
-func TestOpenRejectsInvalidName(t *testing.T) {
+func TestCreateRejectsInvalidName(t *testing.T) {
 	name := "invalid"
-	if err := openQueue(t, name, Read, createExclusive, maxMsg); !errors.Is(err, ErrInvalidName) {
-		t.Errorf("Open(%q) error = %v, want %v", name, err, ErrInvalidName)
+	if err := tryCreateReader(t, name, msgSize); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("Create(%q) error = %v, want %v", name, err, ErrInvalidName)
 	}
 }
 
-func TestOpenReadsActualMessageSize(t *testing.T) {
+func TestConnectOpensExistingQueue(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
-	q, err := open(name, Write, noOptions, 1, 1)
-	if err != nil {
-		t.Fatalf("Open(%q) error = %v, want nil", name, err)
+	if err := tryCreateWriter(t, name); err != nil {
+		t.Errorf("Connect(%q) error = %v, want nil", name, err)
 	}
-	t.Cleanup(func() { release(t, q) })
-	if q.msgSize != msgSize {
-		t.Errorf("Open(%q) msgSize = %d, want %d", name, q.msgSize, msgSize)
+}
+
+func TestConnectRejectsMissingQueue(t *testing.T) {
+	name := queueName(t)
+	if err := tryCreateWriter(t, name); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Connect(%q) error = %v, want %v", name, err, os.ErrNotExist)
+	}
+}
+
+func TestConnectReadsActualAttributes(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	if writer.msgSize != msgSize {
+		t.Errorf("Connect(%q) msgSize = %d, want %d", name, writer.msgSize, msgSize)
+	}
+	if writer.maxMsg != maxMsg {
+		t.Errorf("Connect(%q) maxMsg = %d, want %d", name, writer.maxMsg, maxMsg)
 	}
 }
 
@@ -173,8 +183,8 @@ func TestUnlinkRemovesQueue(t *testing.T) {
 	if err := q.unlink(); err != nil {
 		t.Fatalf("Unlink() error = %v, want nil", err)
 	}
-	if err := openQueue(t, name, Write, noOptions, maxMsg); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("Open(%q) after Unlink() error = %v, want %v", name, err, os.ErrNotExist)
+	if err := tryCreateWriter(t, name); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Connect(%q) after Unlink() error = %v, want %v", name, err, os.ErrNotExist)
 	}
 }
 
@@ -194,8 +204,8 @@ func TestDropRemovesQueue(t *testing.T) {
 	if err := q.drop(); err != nil {
 		t.Fatalf("Drop() error = %v, want nil", err)
 	}
-	if err := openQueue(t, name, Write, noOptions, maxMsg); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("Open(%q) after Drop() error = %v, want %v", name, err, os.ErrNotExist)
+	if err := tryCreateWriter(t, name); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Connect(%q) after Drop() error = %v, want %v", name, err, os.ErrNotExist)
 	}
 }
 
@@ -277,6 +287,23 @@ func TestSendRejectsTooLargeMessage(t *testing.T) {
 	message := bytes.Repeat([]byte("a"), msgSize+1)
 	if err := writer.send(message); !errors.Is(err, ErrMessageTooLarge) {
 		t.Errorf("Send(%d bytes) error = %v, want %v", len(message), err, ErrMessageTooLarge)
+	}
+}
+
+func TestSendRejectsReaderQueue(t *testing.T) {
+	reader := createReader(t, queueName(t))
+	message := []byte("message")
+	if err := reader.send(message); !errors.Is(err, syscall.EBADF) {
+		t.Errorf("Send(%q) on reader error = %v, want %v", message, err, syscall.EBADF)
+	}
+}
+
+func TestRecvRejectsWriterQueue(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	if _, err := writer.recv(); !errors.Is(err, syscall.EBADF) {
+		t.Errorf("Recv() on writer error = %v, want %v", err, syscall.EBADF)
 	}
 }
 
