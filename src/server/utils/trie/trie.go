@@ -23,8 +23,7 @@ func (t *Trie[T]) Insert(prefix string, value T) error {
 		return err
 	}
 
-	node.AddValue(value)
-	return nil
+	return node.AddValue(value)
 }
 
 func (t *Trie[T]) Remove(prefix string, value T) error {
