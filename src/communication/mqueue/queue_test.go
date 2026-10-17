@@ -26,7 +26,7 @@ func release(t *testing.T, q *queue) {
 
 func createReader(t *testing.T, name string) *queue {
 	t.Helper()
-	q, err := create(name, msgSize)
+	q, err := create(name, frameSize)
 	if err != nil {
 		t.Fatalf("Create(%q) error = %v, want nil", name, err)
 	}
@@ -44,9 +44,9 @@ func createWriter(t *testing.T, name string) *queue {
 	return q
 }
 
-func tryCreateReader(t *testing.T, name string, messageSize int) error {
+func tryCreateReader(t *testing.T, name string, size int) error {
 	t.Helper()
-	q, err := create(name, messageSize)
+	q, err := create(name, size)
 	if err == nil {
 		t.Cleanup(func() { release(t, q) })
 	}
@@ -64,7 +64,7 @@ func tryCreateWriter(t *testing.T, name string) error {
 
 func TestCreateCreatesMissingQueue(t *testing.T) {
 	name := queueName(t)
-	if err := tryCreateReader(t, name, msgSize); err != nil {
+	if err := tryCreateReader(t, name, frameSize); err != nil {
 		t.Errorf("Create(%q) error = %v, want nil", name, err)
 	}
 }
@@ -72,12 +72,12 @@ func TestCreateCreatesMissingQueue(t *testing.T) {
 func TestCreateRejectsExistingQueue(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
-	if err := tryCreateReader(t, name, msgSize); !errors.Is(err, os.ErrExist) {
+	if err := tryCreateReader(t, name, frameSize); !errors.Is(err, os.ErrExist) {
 		t.Errorf("Create(%q) error = %v, want %v", name, err, os.ErrExist)
 	}
 }
 
-func TestCreateRejectsZeroMessageSize(t *testing.T) {
+func TestCreateRejectsZeroFrameSize(t *testing.T) {
 	name := queueName(t)
 	if err := tryCreateReader(t, name, 0); !errors.Is(err, syscall.EINVAL) {
 		t.Errorf("Create(%q) error = %v, want %v", name, err, syscall.EINVAL)
@@ -86,7 +86,7 @@ func TestCreateRejectsZeroMessageSize(t *testing.T) {
 
 func TestCreateRejectsInvalidName(t *testing.T) {
 	name := "invalid"
-	if err := tryCreateReader(t, name, msgSize); !errors.Is(err, ErrInvalidName) {
+	if err := tryCreateReader(t, name, frameSize); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("Create(%q) error = %v, want %v", name, err, ErrInvalidName)
 	}
 }
@@ -110,11 +110,11 @@ func TestConnectReadsActualAttributes(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
 	writer := createWriter(t, name)
-	if writer.msgSize != msgSize {
-		t.Errorf("Connect(%q) msgSize = %d, want %d", name, writer.msgSize, msgSize)
+	if writer.frameSize != frameSize {
+		t.Errorf("Connect(%q) frameSize = %d, want %d", name, writer.frameSize, frameSize)
 	}
-	if writer.maxMsg != maxMsg {
-		t.Errorf("Connect(%q) maxMsg = %d, want %d", name, writer.maxMsg, maxMsg)
+	if writer.maxFrame != maxFrame {
+		t.Errorf("Connect(%q) maxFrame = %d, want %d", name, writer.maxFrame, maxFrame)
 	}
 }
 
@@ -209,37 +209,37 @@ func TestDropRemovesQueue(t *testing.T) {
 	}
 }
 
-func TestRecvReturnsSentMessage(t *testing.T) {
+func TestRecvReturnsSentFrame(t *testing.T) {
 	name := queueName(t)
 	reader := createReader(t, name)
 	writer := createWriter(t, name)
-	message := []byte("key\x00value")
-	if err := writer.send(message); err != nil {
-		t.Fatalf("Send(%q) error = %v, want nil", message, err)
+	frame := []byte("key\x00value")
+	if err := writer.send(frame); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 	}
 	got, err := reader.recv()
 	if err != nil {
 		t.Fatalf("Recv() error = %v, want nil", err)
 	}
-	if !bytes.Equal(got, message) {
-		t.Errorf("Recv() = %q, want %q", got, message)
+	if !bytes.Equal(got, frame) {
+		t.Errorf("Recv() = %q, want %q", got, frame)
 	}
 }
 
-func TestRecvReturnsMaximumSizeMessage(t *testing.T) {
+func TestRecvReturnsMaximumSizeFrame(t *testing.T) {
 	name := queueName(t)
 	reader := createReader(t, name)
 	writer := createWriter(t, name)
-	message := bytes.Repeat([]byte("a"), msgSize)
-	if err := writer.send(message); err != nil {
-		t.Fatalf("Send(%d bytes) error = %v, want nil", len(message), err)
+	frame := bytes.Repeat([]byte("a"), frameSize)
+	if err := writer.send(frame); err != nil {
+		t.Fatalf("Send(%d bytes) error = %v, want nil", len(frame), err)
 	}
 	got, err := reader.recv()
 	if err != nil {
 		t.Fatalf("Recv() error = %v, want nil", err)
 	}
-	if !bytes.Equal(got, message) {
-		t.Errorf("Recv() = %d bytes, want the %d bytes sent", len(got), len(message))
+	if !bytes.Equal(got, frame) {
+		t.Errorf("Recv() = %d bytes, want the %d bytes sent", len(got), len(frame))
 	}
 }
 
@@ -270,31 +270,31 @@ func TestRecvPreservesSendOrder(t *testing.T) {
 	}
 }
 
-func TestSendRejectsEmptyMessage(t *testing.T) {
+func TestSendRejectsEmptyFrame(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
 	writer := createWriter(t, name)
-	message := []byte{}
-	if err := writer.send(message); !errors.Is(err, ErrEmptyMessage) {
-		t.Errorf("Send(%q) error = %v, want %v", message, err, ErrEmptyMessage)
+	frame := []byte{}
+	if err := writer.send(frame); !errors.Is(err, ErrEmptyFrame) {
+		t.Errorf("Send(%q) error = %v, want %v", frame, err, ErrEmptyFrame)
 	}
 }
 
-func TestSendRejectsTooLargeMessage(t *testing.T) {
+func TestSendRejectsTooLargeFrame(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
 	writer := createWriter(t, name)
-	message := bytes.Repeat([]byte("a"), msgSize+1)
-	if err := writer.send(message); !errors.Is(err, ErrMessageTooLarge) {
-		t.Errorf("Send(%d bytes) error = %v, want %v", len(message), err, ErrMessageTooLarge)
+	frame := bytes.Repeat([]byte("a"), frameSize+1)
+	if err := writer.send(frame); !errors.Is(err, ErrFrameTooLarge) {
+		t.Errorf("Send(%d bytes) error = %v, want %v", len(frame), err, ErrFrameTooLarge)
 	}
 }
 
 func TestSendRejectsReaderQueue(t *testing.T) {
 	reader := createReader(t, queueName(t))
-	message := []byte("message")
-	if err := reader.send(message); !errors.Is(err, syscall.EBADF) {
-		t.Errorf("Send(%q) on reader error = %v, want %v", message, err, syscall.EBADF)
+	frame := []byte("frame")
+	if err := reader.send(frame); !errors.Is(err, syscall.EBADF) {
+		t.Errorf("Send(%q) on reader error = %v, want %v", frame, err, syscall.EBADF)
 	}
 }
 

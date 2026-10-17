@@ -1,6 +1,6 @@
 package mqueue
 
 const (
-	maxMsg  = 10
-	msgSize = 4096
+	maxFrame  = 10
+	frameSize = 4096
 )

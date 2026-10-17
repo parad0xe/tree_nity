@@ -19,10 +19,10 @@ import (
 
 // queue is an open descriptor on a named POSIX message queue.
 type queue struct {
-	name    string
-	mqd     C.mqd_t
-	msgSize int
-	maxMsg  int
+	name      string
+	mqd       C.mqd_t
+	frameSize int
+	maxFrame  int
 }
 
 // nameMax is the maximum length, in bytes, of a queue name after its leading "/".
@@ -74,26 +74,26 @@ func open(name string, flags int, attr *C.struct_mq_attr) (*queue, error) {
 		return nil, errors.Join(fmt.Errorf("open queue %q: %w", name, err), q.close())
 	}
 
-	q.msgSize = int(retrievedAttr.mq_msgsize)
-	q.maxMsg = int(retrievedAttr.mq_maxmsg)
+	q.frameSize = int(retrievedAttr.mq_msgsize)
+	q.maxFrame = int(retrievedAttr.mq_maxmsg)
 
 	return q, nil
 }
 
-// create creates the queue name and opens it to receive messages.
-func create(name string, messageSize int) (*queue, error) {
-	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxMsg), mq_msgsize: C.long(messageSize)}
+// create creates the queue name and opens it to receive frames.
+func create(name string, size int) (*queue, error) {
+	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxFrame), mq_msgsize: C.long(size)}
 	return open(name, C.O_RDONLY|C.O_CREAT|C.O_EXCL, &attr)
 }
 
-// connect opens the existing queue name to send messages.
+// connect opens the existing queue name to send frames.
 func connect(name string) (*queue, error) {
 	return open(name, C.O_WRONLY, nil)
 }
 
-// recv blocks until a message is available and returns its content.
+// recv blocks until a frame is available and returns its content.
 func (q *queue) recv() ([]byte, error) {
-	buffer := make([]byte, q.msgSize)
+	buffer := make([]byte, q.frameSize)
 
 	cbuffer := unsafe.Pointer(&buffer[0])
 	size, err := C.mq_receive(q.mqd, (*C.char)(cbuffer), C.size_t(len(buffer)), nil)
@@ -104,20 +104,20 @@ func (q *queue) recv() ([]byte, error) {
 	return buffer[:size], nil
 }
 
-// send blocks while the queue is full, then sends message. The returned error
-// matches ErrEmptyMessage when message is empty, and ErrMessageTooLarge when it
-// exceeds the message size of the queue.
-func (q *queue) send(message []byte) error {
-	if len(message) == 0 {
-		return fmt.Errorf("send to queue %q: %w", q.name, ErrEmptyMessage)
+// send blocks while the queue is full, then sends frame. The returned error
+// matches ErrEmptyFrame when frame is empty, and ErrFrameTooLarge when it
+// exceeds the frame size of the queue.
+func (q *queue) send(frame []byte) error {
+	if len(frame) == 0 {
+		return fmt.Errorf("send to queue %q: %w", q.name, ErrEmptyFrame)
 	}
 
-	if len(message) > q.msgSize {
-		return fmt.Errorf("send to queue %q: %w: %d bytes, maximum %d", q.name, ErrMessageTooLarge, len(message), q.msgSize)
+	if len(frame) > q.frameSize {
+		return fmt.Errorf("send to queue %q: %w: %d bytes, maximum %d", q.name, ErrFrameTooLarge, len(frame), q.frameSize)
 	}
 
-	cbuffer := unsafe.Pointer(&message[0])
-	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(message)), 0)
+	cbuffer := unsafe.Pointer(&frame[0])
+	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), 0)
 	if retcode == -1 {
 		return fmt.Errorf("send to queue %q: %w", q.name, err)
 	}
