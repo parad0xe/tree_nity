@@ -15,8 +15,8 @@ file to reuse the documentation in another project.
 
 ## Sources of truth
 
-- The project subject: `en.subject.treenity.pdf`.
-- The Git workflow guidelines: `en.git_guidelines.pdf`.
+- The project subject: `subject.pdf`.
+- The Git workflow guidelines: `git_guidelines.pdf`.
 
 ## Commands
 
