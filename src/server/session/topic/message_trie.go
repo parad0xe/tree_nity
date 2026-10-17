@@ -8,12 +8,12 @@ import (
 )
 
 type MessageOffsetTrie struct {
-	tree *trie.Trie[int32]
+	trie *trie.Trie[int32]
 }
 
 func NewMessageOffsetTrie() *MessageOffsetTrie {
 	return &MessageOffsetTrie{
-		tree: trie.NewTrie[int32](),
+		trie: trie.NewTrie[int32](),
 	}
 }
 
@@ -22,7 +22,7 @@ func (t *MessageOffsetTrie) Insert(key string, offset int32) error {
 		return err
 	}
 
-	return t.tree.Insert(key, offset)
+	return t.trie.Insert(key, offset)
 }
 
 func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error) {
@@ -30,7 +30,7 @@ func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error)
 		return nil, err
 	}
 
-	node, err := t.tree.MapPath(prefix, nil, nil)
+	node, err := t.trie.MapPath(prefix, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error)
 }
 
 func (t *MessageOffsetTrie) validate() error {
-	if t == nil || t.tree == nil {
+	if t == nil || t.trie == nil {
 		return errors.New("message offset trie is not initialized")
 	}
 	return nil

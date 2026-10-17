@@ -9,27 +9,27 @@ import (
 
 func newTestTrie(t *testing.T, entries map[string][]int) *Trie[int] {
 	t.Helper()
-	tree := NewTrie[int]()
+	trie := NewTrie[int]()
 	for prefix, values := range entries {
 		for _, value := range values {
-			if err := tree.Insert(prefix, value); err != nil {
+			if err := trie.Insert(prefix, value); err != nil {
 				t.Errorf("Insert(%q, %d) during setup error = %v, want nil", prefix, value, err)
 				return nil
 			}
 		}
 	}
-	return tree
+	return trie
 }
 
 // TestNewTrie checks that construction creates an empty root.
 func TestNewTrie(t *testing.T) {
-	tree := NewTrie[int]()
-	if tree == nil || tree.root == nil {
-		t.Errorf("NewTrie[int]() = %#v, want a trie with an initialized root", tree)
+	trie := NewTrie[int]()
+	if trie == nil || trie.root == nil {
+		t.Errorf("NewTrie[int]() = %#v, want a trie with an initialized root", trie)
 		return
 	}
-	if !tree.root.IsEmpty() {
-		t.Errorf("NewTrie[int]().root.IsEmpty() = false, want true (values=%v, children=%v)", tree.root.values, tree.root.children)
+	if !trie.root.IsEmpty() {
+		t.Errorf("NewTrie[int]().root.IsEmpty() = false, want true (values=%v, children=%v)", trie.root.values, trie.root.children)
 	}
 }
 
@@ -37,10 +37,10 @@ func TestNewTrie(t *testing.T) {
 func TestTrieUninitialized(t *testing.T) {
 	tests := []struct {
 		name string
-		tree *Trie[int]
+		trie *Trie[int]
 	}{
 		{name: "nil receiver"},
-		{name: "zero value", tree: &Trie[int]{}},
+		{name: "zero value", trie: &Trie[int]{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,16 +51,16 @@ func TestTrieUninitialized(t *testing.T) {
 				run   func() (*Node[int], error)
 			}{
 				{name: "Insert", input: `"a", 1`, run: func() (*Node[int], error) {
-					return nil, tt.tree.Insert("a", 1)
+					return nil, tt.trie.Insert("a", 1)
 				}},
 				{name: "Remove", input: `"a", 1`, run: func() (*Node[int], error) {
-					return nil, tt.tree.Remove("a", 1)
+					return nil, tt.trie.Remove("a", 1)
 				}},
 				{name: "Find", input: `"a"`, run: func() (*Node[int], error) {
-					return tt.tree.Find("a")
+					return tt.trie.Find("a")
 				}},
 				{name: "MapPath", input: `"a", visit, missing`, run: func() (*Node[int], error) {
-					return tt.tree.MapPath("a", func(*Node[int]) {
+					return tt.trie.MapPath("a", func(*Node[int]) {
 						callbackCalled = true
 					}, func(*Node[int], byte) *Node[int] {
 						callbackCalled = true
@@ -68,7 +68,7 @@ func TestTrieUninitialized(t *testing.T) {
 					})
 				}},
 				{name: "MapSubtree", input: `"a", visit`, run: func() (*Node[int], error) {
-					return nil, tt.tree.MapSubtree("a", func(int) {
+					return nil, tt.trie.MapSubtree("a", func(int) {
 						callbackCalled = true
 					})
 				}},
@@ -112,9 +112,9 @@ func TestTrieInsertFind(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := NewTrie[int]()
+			trie := NewTrie[int]()
 			for i, value := range tt.values {
-				err := tree.Insert(tt.prefix, value)
+				err := trie.Insert(tt.prefix, value)
 				if tt.wantErrAt[i] {
 					if err == nil || err.Error() != "value already exists" {
 						t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want %q", tt.prefix, value, i, tt.values, err, "value already exists")
@@ -123,7 +123,7 @@ func TestTrieInsertFind(t *testing.T) {
 					t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want nil", tt.prefix, value, i, tt.values, err)
 				}
 			}
-			node, err := tree.Find(tt.prefix)
+			node, err := trie.Find(tt.prefix)
 			if err != nil || node == nil {
 				t.Errorf("Find(%q) after Insert values %v = %p, error = %v, want a node and nil error", tt.prefix, tt.values, node, err)
 				return
@@ -131,8 +131,8 @@ func TestTrieInsertFind(t *testing.T) {
 			if !slices.Equal(node.values, tt.want) {
 				t.Errorf("Find(%q) after Insert values %v returned values %v, want %v", tt.prefix, tt.values, node.values, tt.want)
 			}
-			if tt.prefix == "" && node != tree.root {
-				t.Errorf("Find(%q) = %p, want root %p", tt.prefix, node, tree.root)
+			if tt.prefix == "" && node != trie.root {
+				t.Errorf("Find(%q) = %p, want root %p", tt.prefix, node, trie.root)
 			}
 		})
 	}
@@ -149,21 +149,21 @@ func TestTrieInsertAfterRemove(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newTestTrie(t, map[string][]int{tt.prefix: {1}})
-			if tree == nil {
+			trie := newTestTrie(t, map[string][]int{tt.prefix: {1}})
+			if trie == nil {
 				return
 			}
-			if err := tree.Insert(tt.prefix, 1); err == nil || err.Error() != "value already exists" {
+			if err := trie.Insert(tt.prefix, 1); err == nil || err.Error() != "value already exists" {
 				t.Errorf("Insert(%q, 1) with an existing value error = %v, want %q", tt.prefix, err, "value already exists")
 			}
-			if err := tree.Remove(tt.prefix, 1); err != nil {
+			if err := trie.Remove(tt.prefix, 1); err != nil {
 				t.Errorf("Remove(%q, 1) after a rejected duplicate error = %v, want nil", tt.prefix, err)
 				return
 			}
-			if err := tree.Insert(tt.prefix, 1); err != nil {
+			if err := trie.Insert(tt.prefix, 1); err != nil {
 				t.Errorf("Insert(%q, 1) after Remove error = %v, want nil", tt.prefix, err)
 			}
-			node, err := tree.Find(tt.prefix)
+			node, err := trie.Find(tt.prefix)
 			if err != nil || node == nil {
 				t.Errorf("Find(%q) after reinsertion = %p, error = %v, want a node and nil error", tt.prefix, node, err)
 				return
@@ -194,11 +194,11 @@ func TestTrieFind(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newTestTrie(t, map[string][]int{"cart": {1}, "carpet": {2}})
-			if tree == nil {
+			trie := newTestTrie(t, map[string][]int{"cart": {1}, "carpet": {2}})
+			if trie == nil {
 				return
 			}
-			node, err := tree.Find(tt.prefix)
+			node, err := trie.Find(tt.prefix)
 			if tt.wantErr {
 				wantErr := fmt.Sprintf("prefix %q not found in trie", tt.prefix)
 				if err == nil || err.Error() != wantErr || node != nil {
@@ -283,12 +283,12 @@ func TestTrieRemove(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newTestTrie(t, tt.entries)
-			if tree == nil {
+			trie := newTestTrie(t, tt.entries)
+			if trie == nil {
 				return
 			}
-			root := tree.root
-			err := tree.Remove(tt.prefix, tt.value)
+			root := trie.root
+			err := trie.Remove(tt.prefix, tt.value)
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
 					t.Errorf("Remove(%q, %d) with entries %v error = %v, want %q", tt.prefix, tt.value, tt.entries, err, tt.wantErr)
@@ -296,15 +296,15 @@ func TestTrieRemove(t *testing.T) {
 			} else if err != nil {
 				t.Errorf("Remove(%q, %d) with entries %v error = %v, want nil", tt.prefix, tt.value, tt.entries, err)
 			}
-			if tree.root == nil || tree.root != root {
-				t.Errorf("Remove(%q, %d) root = %p, want original root %p", tt.prefix, tt.value, tree.root, root)
+			if trie.root == nil || trie.root != root {
+				t.Errorf("Remove(%q, %d) root = %p, want original root %p", tt.prefix, tt.value, trie.root, root)
 				return
 			}
 
 			var wantValues []int
 			for prefix, want := range tt.wantNodes {
 				wantValues = append(wantValues, want...)
-				node, err := tree.Find(prefix)
+				node, err := trie.Find(prefix)
 				if err != nil || node == nil {
 					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want a node and nil error", prefix, tt.prefix, tt.value, node, err)
 					continue
@@ -314,13 +314,13 @@ func TestTrieRemove(t *testing.T) {
 				}
 			}
 			for _, prefix := range tt.wantAbsent {
-				if node, err := tree.Find(prefix); err == nil || node != nil {
+				if node, err := trie.Find(prefix); err == nil || node != nil {
 					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want nil and an error", prefix, tt.prefix, tt.value, node, err)
 				}
 			}
 
 			var gotValues []int
-			if err := tree.MapSubtree("", func(value int) {
+			if err := trie.MapSubtree("", func(value int) {
 				gotValues = append(gotValues, value)
 			}); err != nil {
 				t.Errorf("MapSubtree(%q) after Remove(%q, %d) error = %v, want nil", "", tt.prefix, tt.value, err)
@@ -340,11 +340,11 @@ func TestTrieRemove(t *testing.T) {
 
 // TestTrieMapPath checks ordered visits and missing paths without a creation callback.
 func TestTrieMapPath(t *testing.T) {
-	tree := newTestTrie(t, map[string][]int{"ab": {1}})
-	if tree == nil {
+	trie := newTestTrie(t, map[string][]int{"ab": {1}})
+	if trie == nil {
 		return
 	}
-	a := tree.root.children['a']
+	a := trie.root.children['a']
 	b := a.children['b']
 	tests := []struct {
 		name    string
@@ -352,16 +352,16 @@ func TestTrieMapPath(t *testing.T) {
 		want    *Node[int]
 		visited []*Node[int]
 	}{
-		{name: "root", want: tree.root, visited: []*Node[int]{tree.root}},
-		{name: "internal node", prefix: "a", want: a, visited: []*Node[int]{tree.root, a}},
-		{name: "leaf", prefix: "ab", want: b, visited: []*Node[int]{tree.root, a, b}},
-		{name: "missing suffix", prefix: "ac", visited: []*Node[int]{tree.root, a}},
-		{name: "missing first byte", prefix: "x", visited: []*Node[int]{tree.root}},
+		{name: "root", want: trie.root, visited: []*Node[int]{trie.root}},
+		{name: "internal node", prefix: "a", want: a, visited: []*Node[int]{trie.root, a}},
+		{name: "leaf", prefix: "ab", want: b, visited: []*Node[int]{trie.root, a, b}},
+		{name: "missing suffix", prefix: "ac", visited: []*Node[int]{trie.root, a}},
+		{name: "missing first byte", prefix: "x", visited: []*Node[int]{trie.root}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var visited []*Node[int]
-			got, err := tree.MapPath(tt.prefix, func(node *Node[int]) {
+			got, err := trie.MapPath(tt.prefix, func(node *Node[int]) {
 				visited = append(visited, node)
 			}, nil)
 			if err != nil || got != tt.want {
@@ -370,8 +370,8 @@ func TestTrieMapPath(t *testing.T) {
 			if !slices.Equal(visited, tt.visited) {
 				t.Errorf("MapPath(%q, visit, nil) visited %v, want %v", tt.prefix, visited, tt.visited)
 			}
-			if len(tree.root.children) != 1 || len(a.children) != 1 {
-				t.Errorf("MapPath(%q, visit, nil) child counts at root and a = %d and %d, want 1 and 1", tt.prefix, len(tree.root.children), len(a.children))
+			if len(trie.root.children) != 1 || len(a.children) != 1 {
+				t.Errorf("MapPath(%q, visit, nil) child counts at root and a = %d and %d, want 1 and 1", tt.prefix, len(trie.root.children), len(a.children))
 			}
 		})
 	}
@@ -394,13 +394,13 @@ func TestTrieMapPathCreatesMissing(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newTestTrie(t, map[string][]int{tt.existing: {7}})
-			if tree == nil {
+			trie := newTestTrie(t, map[string][]int{tt.existing: {7}})
+			if trie == nil {
 				return
 			}
 			var visited []*Node[int]
 			var missing []byte
-			got, err := tree.MapPath(tt.prefix, func(node *Node[int]) {
+			got, err := trie.MapPath(tt.prefix, func(node *Node[int]) {
 				visited = append(visited, node)
 			}, func(parent *Node[int], key byte) *Node[int] {
 				if len(visited) == 0 || parent != visited[len(visited)-1] {
@@ -418,8 +418,8 @@ func TestTrieMapPathCreatesMissing(t *testing.T) {
 			if len(visited) != len(tt.prefix)+1 {
 				t.Errorf("MapPath(%q) visit count = %d, want %d", tt.prefix, len(visited), len(tt.prefix)+1)
 			} else {
-				if visited[0] != tree.root || visited[len(visited)-1] != got {
-					t.Errorf("MapPath(%q) visited endpoints %p and %p, want root %p and result %p", tt.prefix, visited[0], visited[len(visited)-1], tree.root, got)
+				if visited[0] != trie.root || visited[len(visited)-1] != got {
+					t.Errorf("MapPath(%q) visited endpoints %p and %p, want root %p and result %p", tt.prefix, visited[0], visited[len(visited)-1], trie.root, got)
 				}
 				for i := 0; i < len(tt.prefix); i++ {
 					if visited[i].children[tt.prefix[i]] != visited[i+1] {
@@ -427,7 +427,7 @@ func TestTrieMapPathCreatesMissing(t *testing.T) {
 					}
 				}
 			}
-			if node, err := tree.Find(tt.prefix); err != nil || node != got {
+			if node, err := trie.Find(tt.prefix); err != nil || node != got {
 				t.Errorf("Find(%q) after MapPath = %p, error = %v, want %p and nil error", tt.prefix, node, err, got)
 			}
 		})
@@ -446,18 +446,18 @@ func TestTrieMapPathDeclinedMissing(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newTestTrie(t, map[string][]int{tt.existing: {7}})
-			if tree == nil {
+			trie := newTestTrie(t, map[string][]int{tt.existing: {7}})
+			if trie == nil {
 				return
 			}
-			parent, err := tree.Find(tt.existing)
+			parent, err := trie.Find(tt.existing)
 			if err != nil || parent == nil {
 				t.Errorf("Find(%q) during setup = %p, error = %v, want a node and nil error", tt.existing, parent, err)
 				return
 			}
 			missingCalls := 0
 			var visited []*Node[int]
-			got, err := tree.MapPath(tt.prefix, func(node *Node[int]) {
+			got, err := trie.MapPath(tt.prefix, func(node *Node[int]) {
 				visited = append(visited, node)
 			}, func(node *Node[int], key byte) *Node[int] {
 				missingCalls++
@@ -500,12 +500,12 @@ func TestTrieMapSubtree(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := newTestTrie(t, tt.entries)
-			if tree == nil {
+			trie := newTestTrie(t, tt.entries)
+			if trie == nil {
 				return
 			}
 			var got []int
-			err := tree.MapSubtree(tt.prefix, func(value int) {
+			err := trie.MapSubtree(tt.prefix, func(value int) {
 				got = append(got, value)
 			})
 			if (err != nil) != tt.wantErr {
@@ -531,18 +531,18 @@ func TestTrieManyEntries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := NewTrie[int]()
+			trie := NewTrie[int]()
 			want := make([]int, tt.count)
 			for i := 0; i < tt.count; i++ {
 				prefix := fmt.Sprintf("key/%04d", i)
-				if err := tree.Insert(prefix, i); err != nil {
+				if err := trie.Insert(prefix, i); err != nil {
 					t.Errorf("Insert(%q, %d) with %d entries error = %v, want nil", prefix, i, tt.count, err)
 					return
 				}
 				want[i] = i
 			}
 			var got []int
-			if err := tree.MapSubtree("", func(value int) {
+			if err := trie.MapSubtree("", func(value int) {
 				got = append(got, value)
 			}); err != nil {
 				t.Errorf("MapSubtree(%q) with %d entries error = %v, want nil", "", tt.count, err)
@@ -553,7 +553,7 @@ func TestTrieManyEntries(t *testing.T) {
 			}
 			for i := 0; i < tt.count; i++ {
 				prefix := fmt.Sprintf("key/%04d", i)
-				node, err := tree.Find(prefix)
+				node, err := trie.Find(prefix)
 				if err != nil || node == nil {
 					t.Errorf("Find(%q) with %d entries = %p, error = %v, want a node and nil error", prefix, tt.count, node, err)
 					return
@@ -561,16 +561,16 @@ func TestTrieManyEntries(t *testing.T) {
 				if !slices.Equal(node.values, []int{i}) {
 					t.Errorf("Find(%q) with %d entries values = %v, want [%d]", prefix, tt.count, node.values, i)
 				}
-				if err := tree.Remove(prefix, i); err != nil {
+				if err := trie.Remove(prefix, i); err != nil {
 					t.Errorf("Remove(%q, %d) with %d entries error = %v, want nil", prefix, i, tt.count, err)
 					return
 				}
-				if node, err := tree.Find(prefix); err == nil || node != nil {
+				if node, err := trie.Find(prefix); err == nil || node != nil {
 					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want nil and an error", prefix, prefix, i, node, err)
 				}
 			}
-			if tree.root == nil || !tree.root.IsEmpty() {
-				t.Errorf("Remove all %d entries left root %#v, want an initialized empty root", tt.count, tree.root)
+			if trie.root == nil || !trie.root.IsEmpty() {
+				t.Errorf("Remove all %d entries left root %#v, want an initialized empty root", tt.count, trie.root)
 			}
 		})
 	}
