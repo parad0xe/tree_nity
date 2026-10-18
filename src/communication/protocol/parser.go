@@ -7,6 +7,9 @@ import (
 	"io"
 )
 
+// NewDataFromFrame decodes and validates a single JSON frame.
+// Unknown fields, missing required fields, and trailing JSON values are rejected.
+// Metadata is selected by emitter, and payload is selected by opcode.
 func NewDataFromFrame(frame []byte) (Data, error) {
 	var tmpData dataJSON
 

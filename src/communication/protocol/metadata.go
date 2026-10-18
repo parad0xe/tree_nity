@@ -7,6 +7,7 @@ import (
 	"fmt"
 )
 
+// Metadata holds frame metadata decoded according to its emitter.
 type Metadata interface {
 }
 
@@ -37,13 +38,16 @@ func newMetadataJSON(emitter emitter, raw json.RawMessage) (metadataJSON, error)
 	return tmpMetadata, nil
 }
 
+// ClientMetadata identifies a client and its IPC endpoint.
 type ClientMetadata struct {
 	clientId  string
 	clientIPC string
 }
 
 type clientMetadataJSON struct {
-	ClientID  *string `json:"clientId"`
+	// ClientID is required, although an empty string is accepted.
+	ClientID *string `json:"clientId"`
+	// ClientIPC is required, although an empty string is accepted.
 	ClientIPC *string `json:"clientIPC"`
 }
 
@@ -68,9 +72,11 @@ func (m clientMetadataJSON) toMetadata() (Metadata, error) {
 	}, nil
 }
 
+// ServerMetadata represents server frames that carry no metadata fields.
 type ServerMetadata struct {
 }
 
+// ServerMetadataJSON is the empty JSON representation of server metadata.
 type ServerMetadataJSON struct{}
 
 func (s ServerMetadataJSON) validate() error {

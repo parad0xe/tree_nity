@@ -7,6 +7,7 @@ import (
 	"fmt"
 )
 
+// Payload holds operation-specific data decoded from a frame.
 type Payload interface{}
 
 type payloadJSON interface {
@@ -50,6 +51,7 @@ func newPayloadJSON(opcode op, raw json.RawMessage) (payloadJSON, error) {
 	return tmpPayload, nil
 }
 
+// ListTopicPayload represents a list topic operation with no payload fields.
 type ListTopicPayload struct{}
 type listTopicPayloadJSON struct{}
 
@@ -64,6 +66,7 @@ func (p listTopicPayloadJSON) toPayload() (Payload, error) {
 	return &ListTopicPayload{}, nil
 }
 
+// CreateTopicPayload represents a topic creation operation with no payload fields.
 type CreateTopicPayload struct{}
 type createTopicPayloadJSON struct{}
 
@@ -78,6 +81,7 @@ func (p createTopicPayloadJSON) toPayload() (Payload, error) {
 	return &CreateTopicPayload{}, nil
 }
 
+// ConsumerInfoPayload represents a consumer information operation with no payload fields.
 type ConsumerInfoPayload struct{}
 type consumerInfoPayloadJSON struct{}
 
@@ -92,6 +96,7 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	return &ConsumerInfoPayload{}, nil
 }
 
+// TopicSubscriptionPayload represents a subscription operation with no payload fields.
 type TopicSubscriptionPayload struct{}
 type topicSubscriptionPayloadJSON struct{}
 
@@ -106,6 +111,7 @@ func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
 	return &TopicSubscriptionPayload{}, nil
 }
 
+// AcknowledgementPayload represents an acknowledgement with no payload fields.
 type AcknowledgementPayload struct{}
 type acknowledgementPayloadJSON struct{}
 
@@ -120,6 +126,7 @@ func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
 	return &AcknowledgementPayload{}, nil
 }
 
+// CheckTopicPayload represents a topic check operation with no payload fields.
 type CheckTopicPayload struct{}
 type checkTopicPayloadJSON struct{}
 
@@ -134,13 +141,16 @@ func (p checkTopicPayloadJSON) toPayload() (Payload, error) {
 	return &CheckTopicPayload{}, nil
 }
 
+// ProduceMessagePayload carries a message and its raw flag.
 type ProduceMessagePayload struct {
 	raw     bool
 	message Message
 }
 
 type produceMessagePayloadJSON struct {
-	Raw     *bool        `json:"raw"`
+	// Raw must be present even when its value is false.
+	Raw *bool `json:"raw"`
+	// Message must be present and pass key, value, and size validation.
 	Message *messageJSON `json:"message"`
 }
 
@@ -170,6 +180,7 @@ func (p produceMessagePayloadJSON) toPayload() (Payload, error) {
 	}, nil
 }
 
+// ConsumerDisconnectPayload represents a disconnection with no payload fields.
 type ConsumerDisconnectPayload struct{}
 type consumerDisconnectPayloadJSON struct{}
 
@@ -184,6 +195,7 @@ func (p consumerDisconnectPayloadJSON) toPayload() (Payload, error) {
 	return &ConsumerDisconnectPayload{}, nil
 }
 
+// ConsumerHeartbeatPayload represents a heartbeat with no payload fields.
 type ConsumerHeartbeatPayload struct{}
 type consumerHeartbeatPayloadJSON struct{}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 )
 
+// Message holds a message key, value, and queue offset.
 type Message struct {
 	offset int32
 	key    string
@@ -12,7 +13,9 @@ type Message struct {
 }
 
 type messageJSON struct {
-	Key   *string `json:"key"`
+	// Key is required and shares the MessageSize byte limit with Value.
+	Key *string `json:"key"`
+	// Value is required, but an empty string is accepted.
 	Value *string `json:"value"`
 }
 
