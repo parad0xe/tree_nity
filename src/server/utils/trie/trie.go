@@ -5,16 +5,21 @@ import (
 	"fmt"
 )
 
+// Trie indexes comparable values by byte prefixes.
+// Values must be unique within each prefix.
+// Use NewTrie to initialize a trie before calling its methods.
 type Trie[T comparable] struct {
 	root *Node[T]
 }
 
+// NewTrie returns an initialized trie with no values.
 func NewTrie[T comparable]() *Trie[T] {
 	return &Trie[T]{
 		root: NewNode[T](),
 	}
 }
 
+// Insert associates value with prefix, rejecting duplicates at that prefix.
 func (t *Trie[T]) Insert(prefix string, value T) error {
 	node, err := t.MapPath(prefix, nil, func(parent *Node[T], key byte) *Node[T] {
 		return parent.EnsureChild(key)
@@ -26,6 +31,7 @@ func (t *Trie[T]) Insert(prefix string, value T) error {
 	return node.AddValue(value)
 }
 
+// Remove deletes value at prefix and prunes branches left without values or children.
 func (t *Trie[T]) Remove(prefix string, value T) error {
 	parents := make([]*Node[T], 0, len(prefix)+1)
 
@@ -54,6 +60,7 @@ func (t *Trie[T]) Remove(prefix string, value T) error {
 	return nil
 }
 
+// Find returns the node at prefix or an error if the path does not exist.
 func (t *Trie[T]) Find(prefix string) (*Node[T], error) {
 	node, err := t.MapPath(prefix, nil, nil)
 	if err != nil {
@@ -65,6 +72,9 @@ func (t *Trie[T]) Find(prefix string) (*Node[T], error) {
 	return node, nil
 }
 
+// MapPath visits the root and each node along prefix when visit is non-nil.
+// For an absent child, missing supplies a node given its parent and key byte.
+// If missing is nil or returns nil, traversal stops with a nil node and no error.
 func (t *Trie[T]) MapPath(prefix string, visit func(*Node[T]), missing func(*Node[T], byte) *Node[T]) (*Node[T], error) {
 	if err := t.validate(); err != nil {
 		return nil, err
@@ -95,6 +105,7 @@ func (t *Trie[T]) MapPath(prefix string, visit func(*Node[T]), missing func(*Nod
 	return currentNode, nil
 }
 
+// MapSubtree visits values stored at prefix and all its descendants in no fixed order.
 func (t *Trie[T]) MapSubtree(prefix string, visit func(T)) error {
 	node, err := t.Find(prefix)
 	if err != nil {

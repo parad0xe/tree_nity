@@ -7,16 +7,19 @@ import (
 	"tree_nity/src/server/utils/trie"
 )
 
+// ConsumerTrie indexes consumer subscriptions by byte prefix.
 type ConsumerTrie struct {
 	trie *trie.Trie[*consumer.Consumer]
 }
 
+// NewConsumerTrie returns an empty, initialized subscription index.
 func NewConsumerTrie() *ConsumerTrie {
 	return &ConsumerTrie{
 		trie: trie.NewTrie[*consumer.Consumer](),
 	}
 }
 
+// Subscribe associates consumer with prefix, rejecting nil consumers and duplicates.
 func (t *ConsumerTrie) Subscribe(prefix string, consumer *consumer.Consumer) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -28,6 +31,7 @@ func (t *ConsumerTrie) Subscribe(prefix string, consumer *consumer.Consumer) err
 	return t.trie.Insert(prefix, consumer)
 }
 
+// Unsubscribe removes consumer's subscription at prefix, returning an error if absent.
 func (t *ConsumerTrie) Unsubscribe(prefix string, consumer *consumer.Consumer) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -39,6 +43,7 @@ func (t *ConsumerTrie) Unsubscribe(prefix string, consumer *consumer.Consumer) e
 	return t.trie.Remove(prefix, consumer)
 }
 
+// Search returns each consumer subscribed to a prefix of key at most once.
 func (t *ConsumerTrie) Search(key string) ([]*consumer.Consumer, error) {
 	if err := t.validate(); err != nil {
 		return nil, err

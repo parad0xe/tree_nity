@@ -7,16 +7,19 @@ import (
 	"tree_nity/src/server/utils/trie"
 )
 
+// MessageOffsetTrie indexes message offsets by key for prefix searches.
 type MessageOffsetTrie struct {
 	trie *trie.Trie[int32]
 }
 
+// NewMessageOffsetTrie returns an initialized, empty message offset index.
 func NewMessageOffsetTrie() *MessageOffsetTrie {
 	return &MessageOffsetTrie{
 		trie: trie.NewTrie[int32](),
 	}
 }
 
+// Insert associates offset with key, rejecting duplicates for the same key.
 func (t *MessageOffsetTrie) Insert(key string, offset int32) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -25,6 +28,7 @@ func (t *MessageOffsetTrie) Insert(key string, offset int32) error {
 	return t.trie.Insert(key, offset)
 }
 
+// Search returns sorted offsets >= offset for keys starting with prefix.
 func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error) {
 	if err := t.validate(); err != nil {
 		return nil, err
