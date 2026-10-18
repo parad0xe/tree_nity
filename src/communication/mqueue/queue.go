@@ -13,7 +13,10 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -99,6 +102,27 @@ func (q *queue) recv() ([]byte, error) {
 	size, err := C.mq_receive(q.mqd, (*C.char)(cbuffer), C.size_t(len(buffer)), nil)
 	if size == -1 {
 		return nil, fmt.Errorf("receive from queue %q: %w", q.name, err)
+	}
+
+	return buffer[:size], nil
+}
+
+// timedRecv waits until deadline for a frame and returns its content. A past
+// deadline only returns a frame already waiting.
+func (q *queue) timedRecv(deadline time.Time) ([]byte, error) {
+	buffer := make([]byte, q.frameSize)
+
+	var ts C.struct_timespec
+	ts.tv_sec = C.time_t(deadline.Unix())
+	ts.tv_nsec = C.long(deadline.Nanosecond())
+
+	cbuffer := unsafe.Pointer(&buffer[0])
+	size, err := C.mq_timedreceive(q.mqd, (*C.char)(cbuffer), C.size_t(len(buffer)), nil, &ts)
+	if size == -1 {
+		if errors.Is(err, syscall.ETIMEDOUT) {
+			return nil, fmt.Errorf("timed receive from queue %q: %w", q.name, os.ErrDeadlineExceeded)
+		}
+		return nil, fmt.Errorf("timed receive from queue %q: %w", q.name, err)
 	}
 
 	return buffer[:size], nil

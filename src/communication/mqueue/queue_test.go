@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func queueName(t *testing.T) string {
@@ -280,6 +281,47 @@ func TestRecvReturnsHighPriorityFirst(t *testing.T) {
 	}
 	if !bytes.Equal(got, urgent) {
 		t.Errorf("Recv() = %q, want %q", got, urgent)
+	}
+}
+
+func TestTimedRecvReturnsWaitingFrame(t *testing.T) {
+	name := queueName(t)
+	reader := createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte("frame")
+	if err := writer.send(frame, priorityNormal); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
+	}
+	got, err := reader.timedRecv(time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatalf("TimedRecv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("TimedRecv() = %q, want %q", got, frame)
+	}
+}
+
+func TestTimedRecvExpiresOnEmptyQueue(t *testing.T) {
+	reader := createReader(t, queueName(t))
+	if _, err := reader.timedRecv(time.Now().Add(10 * time.Millisecond)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("TimedRecv() error = %v, want %v", err, os.ErrDeadlineExceeded)
+	}
+}
+
+func TestTimedRecvPastDeadlineReturnsWaitingFrame(t *testing.T) {
+	name := queueName(t)
+	reader := createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte("frame")
+	if err := writer.send(frame, priorityNormal); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
+	}
+	got, err := reader.timedRecv(time.Now().Add(-time.Second))
+	if err != nil {
+		t.Fatalf("TimedRecv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("TimedRecv() = %q, want %q", got, frame)
 	}
 }
 
