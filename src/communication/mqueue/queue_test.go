@@ -26,7 +26,7 @@ func release(t *testing.T, q *queue) {
 
 func createReader(t *testing.T, name string) *queue {
 	t.Helper()
-	q, err := create(name, frameSize)
+	q, err := create(name)
 	if err != nil {
 		t.Fatalf("Create(%q) error = %v, want nil", name, err)
 	}
@@ -44,9 +44,9 @@ func createWriter(t *testing.T, name string) *queue {
 	return q
 }
 
-func tryCreateReader(t *testing.T, name string, size int) error {
+func tryCreateReader(t *testing.T, name string) error {
 	t.Helper()
-	q, err := create(name, size)
+	q, err := create(name)
 	if err == nil {
 		t.Cleanup(func() { release(t, q) })
 	}
@@ -64,7 +64,7 @@ func tryCreateWriter(t *testing.T, name string) error {
 
 func TestCreateCreatesMissingQueue(t *testing.T) {
 	name := queueName(t)
-	if err := tryCreateReader(t, name, frameSize); err != nil {
+	if err := tryCreateReader(t, name); err != nil {
 		t.Errorf("Create(%q) error = %v, want nil", name, err)
 	}
 }
@@ -72,21 +72,14 @@ func TestCreateCreatesMissingQueue(t *testing.T) {
 func TestCreateRejectsExistingQueue(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
-	if err := tryCreateReader(t, name, frameSize); !errors.Is(err, os.ErrExist) {
+	if err := tryCreateReader(t, name); !errors.Is(err, os.ErrExist) {
 		t.Errorf("Create(%q) error = %v, want %v", name, err, os.ErrExist)
-	}
-}
-
-func TestCreateRejectsZeroFrameSize(t *testing.T) {
-	name := queueName(t)
-	if err := tryCreateReader(t, name, 0); !errors.Is(err, syscall.EINVAL) {
-		t.Errorf("Create(%q) error = %v, want %v", name, err, syscall.EINVAL)
 	}
 }
 
 func TestCreateRejectsInvalidName(t *testing.T) {
 	name := "invalid"
-	if err := tryCreateReader(t, name, frameSize); !errors.Is(err, ErrInvalidName) {
+	if err := tryCreateReader(t, name); !errors.Is(err, ErrInvalidName) {
 		t.Errorf("Create(%q) error = %v, want %v", name, err, ErrInvalidName)
 	}
 }

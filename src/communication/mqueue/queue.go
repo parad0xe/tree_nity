@@ -81,8 +81,8 @@ func open(name string, flags int, attr *C.struct_mq_attr) (*queue, error) {
 }
 
 // create creates the queue name and opens it to receive frames.
-func create(name string, size int) (*queue, error) {
-	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxFrame), mq_msgsize: C.long(size)}
+func create(name string) (*queue, error) {
+	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxFrame), mq_msgsize: C.long(frameSize)}
 	return open(name, C.O_RDONLY|C.O_CREAT|C.O_EXCL, &attr)
 }
 
