@@ -1,9 +1,5 @@
 package hashmap
 
-import (
-	"errors"
-)
-
 // Hashable constrains keys to comparable values that provide a hash.
 // A key's hash and equality behavior must remain stable while it is stored.
 type Hashable interface {
@@ -32,21 +28,22 @@ func NewHashMap[K Hashable, V any]() *HashMap[K, V] {
 }
 
 // Insert associates value with key, growing the table when needed.
-// It returns an error if key already exists or m is nil or uninitialized.
+// It returns ErrKeyExists if key already exists, or ErrUninitialized if m
+// is nil or uninitialized.
 func (m *HashMap[K, V]) Insert(key K, value V) error {
 	if err := m.validate(); err != nil {
 		return err
 	}
 
 	if !m.hasSpace() {
-		if err := m.resize(); err != nil {
+		if err := m.grow(); err != nil {
 			return err
 		}
 	}
 
 	index, exists := m.findSlot(key)
 	if exists {
-		return errors.New("key already exists in hashmap")
+		return ErrKeyExists
 	}
 
 	if m.entries[index].state == slotEmpty {
@@ -82,7 +79,10 @@ func (m *HashMap[K, V]) Get(key K) (V, bool) {
 }
 
 // Remove deletes key and its associated value.
-// It returns an error if key is absent or m is nil or uninitialized.
+// It returns ErrKeyNotFound if key is absent, or ErrUninitialized if m
+// is nil or uninitialized.
+// It may halve the table below 25% occupancy, keeping at least its initial capacity.
+// If rebuilding fails, the removal is rolled back and the error is returned.
 func (m *HashMap[K, V]) Remove(key K) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -90,11 +90,17 @@ func (m *HashMap[K, V]) Remove(key K) error {
 
 	index, exists := m.findSlot(key)
 	if !exists {
-		return errors.New("key not found in hashmap")
+		return ErrKeyNotFound
 	}
 
+	removedEntry := m.entries[index]
 	m.entries[index] = entry[K, V]{state: slotDeleted}
 	m.occupiedSlots--
+	if err := m.shrink(); err != nil {
+		m.entries[index] = removedEntry
+		m.occupiedSlots++
+		return err
+	}
 	return nil
 }
 
@@ -107,27 +113,44 @@ func (m *HashMap[K, V]) Len() uint64 {
 	return m.occupiedSlots
 }
 
-func (m *HashMap[K, V]) resize() error {
+func (m *HashMap[K, V]) grow() error {
 	if err := m.validate(); err != nil {
 		return err
 	}
 
-	oldEntries := m.entries
-	m.entries = make([]entry[K, V], len(oldEntries)*2)
+	return m.rehash(len(m.entries) * 2)
+}
 
-	for _, oldEntry := range oldEntries {
+func (m *HashMap[K, V]) shrink() error {
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	if len(m.entries) <= initialCapacity || m.occupiedSlots >= uint64(len(m.entries)/4) {
+		return nil
+	}
+	return m.rehash(len(m.entries) / 2)
+}
+
+func (m *HashMap[K, V]) rehash(capacity int) error {
+	tmpTable := HashMap[K, V]{
+		entries: make([]entry[K, V], capacity),
+	}
+
+	for _, oldEntry := range m.entries {
 		if oldEntry.state != slotOccupied {
 			continue
 		}
 
-		index, exists := m.findSlot(oldEntry.key)
+		index, exists := tmpTable.findSlot(oldEntry.key)
 		if exists {
-			return errors.New("duplicate key during resize")
+			return errDuplicateKeyDuringResize
 		}
 
-		m.entries[index] = oldEntry
+		tmpTable.entries[index] = oldEntry
 	}
 
+	m.entries = tmpTable.entries
 	m.nonEmptySlots = m.occupiedSlots
 	return nil
 }
@@ -180,7 +203,7 @@ func (m *HashMap[K, V]) hasSpace() bool {
 
 func (m *HashMap[K, V]) validate() error {
 	if m == nil || len(m.entries) == 0 {
-		return errors.New("hashmap is not initialized")
+		return ErrUninitialized
 	}
 	return nil
 }
