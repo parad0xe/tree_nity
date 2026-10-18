@@ -4,25 +4,35 @@ import (
 	"errors"
 )
 
+// Hashable constrains keys to comparable values that provide a hash.
+// A key's hash and equality behavior must remain stable while it is stored.
 type Hashable interface {
 	comparable
+	// Hash returns a deterministic hash; equal keys must have equal hashes.
 	Hash() uint64
 }
 
 const initialCapacity = 8
 
+// HashMap stores key-value pairs using open addressing to resolve collisions.
+// Initialize a HashMap with NewHashMap before inserting values.
+// A HashMap must not be copied after initialization. Concurrent access involving
+// writes requires external synchronization.
 type HashMap[K Hashable, V any] struct {
 	entries       []entry[K, V]
 	occupiedSlots uint64
 	nonEmptySlots uint64
 }
 
+// NewHashMap returns an empty HashMap ready for use.
 func NewHashMap[K Hashable, V any]() *HashMap[K, V] {
 	return &HashMap[K, V]{
 		entries: make([]entry[K, V], initialCapacity),
 	}
 }
 
+// Insert associates value with key, growing the table when needed.
+// It returns an error if key already exists or m is nil or uninitialized.
 func (m *HashMap[K, V]) Insert(key K, value V) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -53,6 +63,9 @@ func (m *HashMap[K, V]) Insert(key K, value V) error {
 	return nil
 }
 
+// Get returns the value associated with key and whether key is present.
+// If key is absent or m is nil or uninitialized, it returns the zero value
+// of V and false.
 func (m *HashMap[K, V]) Get(key K) (V, bool) {
 	var zero V
 
@@ -68,6 +81,8 @@ func (m *HashMap[K, V]) Get(key K) (V, bool) {
 	return m.entries[index].value, true
 }
 
+// Remove deletes key and its associated value.
+// It returns an error if key is absent or m is nil or uninitialized.
 func (m *HashMap[K, V]) Remove(key K) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -83,6 +98,8 @@ func (m *HashMap[K, V]) Remove(key K) error {
 	return nil
 }
 
+// Len returns the number of stored key-value pairs.
+// It returns zero if m is nil or uninitialized.
 func (m *HashMap[K, V]) Len() uint64 {
 	if err := m.validate(); err != nil {
 		return 0
