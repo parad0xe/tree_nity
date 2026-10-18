@@ -104,10 +104,10 @@ func (q *queue) recv() ([]byte, error) {
 	return buffer[:size], nil
 }
 
-// send blocks while the queue is full, then sends frame. The returned error
-// matches ErrEmptyFrame when frame is empty, and ErrFrameTooLarge when it
-// exceeds the frame size of the queue.
-func (q *queue) send(frame []byte) error {
+// send blocks while the queue is full, then sends frame with the given
+// priority. The returned error matches ErrEmptyFrame when frame is empty, and
+// ErrFrameTooLarge when it exceeds the frame size of the queue.
+func (q *queue) send(frame []byte, priority priority) error {
 	if len(frame) == 0 {
 		return fmt.Errorf("send to queue %q: %w", q.name, ErrEmptyFrame)
 	}
@@ -117,7 +117,7 @@ func (q *queue) send(frame []byte) error {
 	}
 
 	cbuffer := unsafe.Pointer(&frame[0])
-	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), 0)
+	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), C.uint(priority))
 	if retcode == -1 {
 		return fmt.Errorf("send to queue %q: %w", q.name, err)
 	}

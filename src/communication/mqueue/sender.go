@@ -18,9 +18,16 @@ func NewSender(name string) (*Sender, error) {
 	}, nil
 }
 
-// Send blocks while the queue is full, then sends frame.
+// Send blocks while the queue is full, then sends frame behind the frames
+// already waiting.
 func (s *Sender) Send(frame []byte) error {
-	return s.queue.send(frame)
+	return s.queue.send(frame, priorityNormal)
+}
+
+// SendUrgent blocks while the queue is full, then sends frame ahead of the
+// frames already waiting.
+func (s *Sender) SendUrgent(frame []byte) error {
+	return s.queue.send(frame, priorityHigh)
 }
 
 // Close closes the connection. The queue stays available to its owner.

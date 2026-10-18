@@ -207,7 +207,7 @@ func TestRecvReturnsSentFrame(t *testing.T) {
 	reader := createReader(t, name)
 	writer := createWriter(t, name)
 	frame := []byte("key\x00value")
-	if err := writer.send(frame); err != nil {
+	if err := writer.send(frame, priorityNormal); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 	}
 	got, err := reader.recv()
@@ -224,7 +224,7 @@ func TestRecvReturnsMaximumSizeFrame(t *testing.T) {
 	reader := createReader(t, name)
 	writer := createWriter(t, name)
 	frame := bytes.Repeat([]byte("a"), frameSize)
-	if err := writer.send(frame); err != nil {
+	if err := writer.send(frame, priorityNormal); err != nil {
 		t.Fatalf("Send(%d bytes) error = %v, want nil", len(frame), err)
 	}
 	got, err := reader.recv()
@@ -241,10 +241,10 @@ func TestRecvPreservesSendOrder(t *testing.T) {
 	reader := createReader(t, name)
 	writer := createWriter(t, name)
 	first, second := []byte("first"), []byte("second")
-	if err := writer.send(first); err != nil {
+	if err := writer.send(first, priorityNormal); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", first, err)
 	}
-	if err := writer.send(second); err != nil {
+	if err := writer.send(second, priorityNormal); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", second, err)
 	}
 	got, err := reader.recv()
@@ -263,12 +263,32 @@ func TestRecvPreservesSendOrder(t *testing.T) {
 	}
 }
 
+func TestRecvReturnsHighPriorityFirst(t *testing.T) {
+	name := queueName(t)
+	reader := createReader(t, name)
+	writer := createWriter(t, name)
+	normal, urgent := []byte("normal"), []byte("urgent")
+	if err := writer.send(normal, priorityNormal); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", normal, err)
+	}
+	if err := writer.send(urgent, priorityHigh); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", urgent, err)
+	}
+	got, err := reader.recv()
+	if err != nil {
+		t.Fatalf("Recv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, urgent) {
+		t.Errorf("Recv() = %q, want %q", got, urgent)
+	}
+}
+
 func TestSendRejectsEmptyFrame(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
 	writer := createWriter(t, name)
 	frame := []byte{}
-	if err := writer.send(frame); !errors.Is(err, ErrEmptyFrame) {
+	if err := writer.send(frame, priorityNormal); !errors.Is(err, ErrEmptyFrame) {
 		t.Errorf("Send(%q) error = %v, want %v", frame, err, ErrEmptyFrame)
 	}
 }
@@ -278,7 +298,7 @@ func TestSendRejectsTooLargeFrame(t *testing.T) {
 	createReader(t, name)
 	writer := createWriter(t, name)
 	frame := bytes.Repeat([]byte("a"), frameSize+1)
-	if err := writer.send(frame); !errors.Is(err, ErrFrameTooLarge) {
+	if err := writer.send(frame, priorityNormal); !errors.Is(err, ErrFrameTooLarge) {
 		t.Errorf("Send(%d bytes) error = %v, want %v", len(frame), err, ErrFrameTooLarge)
 	}
 }
@@ -286,7 +306,7 @@ func TestSendRejectsTooLargeFrame(t *testing.T) {
 func TestSendRejectsReaderQueue(t *testing.T) {
 	reader := createReader(t, queueName(t))
 	frame := []byte("frame")
-	if err := reader.send(frame); !errors.Is(err, syscall.EBADF) {
+	if err := reader.send(frame, priorityNormal); !errors.Is(err, syscall.EBADF) {
 		t.Errorf("Send(%q) on reader error = %v, want %v", frame, err, syscall.EBADF)
 	}
 }
