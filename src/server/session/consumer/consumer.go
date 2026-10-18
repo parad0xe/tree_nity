@@ -1,4 +1,4 @@
-package session
+package consumer
 
 type Consumer struct {
 	AcknowledgedChan chan struct{}
