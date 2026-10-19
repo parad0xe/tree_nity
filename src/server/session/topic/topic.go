@@ -1,7 +1,7 @@
 package topic
 
 import (
-	"tree_nity/src/communication/protocol"
+	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/server/session/consumer"
 )
 
