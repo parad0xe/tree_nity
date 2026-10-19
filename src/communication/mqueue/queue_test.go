@@ -27,7 +27,7 @@ func release(t *testing.T, q *queue) {
 
 func createReader(t *testing.T, name string) *queue {
 	t.Helper()
-	q, err := create(name)
+	q, err := createMqueue(name)
 	if err != nil {
 		t.Fatalf("Create(%q) error = %v, want nil", name, err)
 	}
@@ -37,7 +37,7 @@ func createReader(t *testing.T, name string) *queue {
 
 func createWriter(t *testing.T, name string) *queue {
 	t.Helper()
-	q, err := connect(name)
+	q, err := connectMqueue(name)
 	if err != nil {
 		t.Fatalf("Connect(%q) error = %v, want nil", name, err)
 	}
@@ -47,7 +47,7 @@ func createWriter(t *testing.T, name string) *queue {
 
 func tryCreateReader(t *testing.T, name string) error {
 	t.Helper()
-	q, err := create(name)
+	q, err := createMqueue(name)
 	if err == nil {
 		t.Cleanup(func() { release(t, q) })
 	}
@@ -56,7 +56,7 @@ func tryCreateReader(t *testing.T, name string) error {
 
 func tryCreateWriter(t *testing.T, name string) error {
 	t.Helper()
-	q, err := connect(name)
+	q, err := connectMqueue(name)
 	if err == nil {
 		t.Cleanup(func() { release(t, q) })
 	}

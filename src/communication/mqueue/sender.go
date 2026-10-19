@@ -8,7 +8,7 @@ type Sender struct {
 // NewSender opens the existing queue name to send frames. The returned error
 // matches os.ErrNotExist when the queue does not exist.
 func NewSender(name string) (*Sender, error) {
-	q, err := connect(name)
+	q, err := connectMqueue(name)
 	if err != nil {
 		return nil, err
 	}
@@ -24,9 +24,9 @@ func (s *Sender) Send(frame []byte) error {
 	return s.queue.send(frame, priorityNormal)
 }
 
-// SendUrgent blocks while the queue is full, then sends frame ahead of the
+// SendAhead blocks while the queue is full, then sends frame ahead of the
 // frames already waiting.
-func (s *Sender) SendUrgent(frame []byte) error {
+func (s *Sender) SendAhead(frame []byte) error {
 	return s.queue.send(frame, priorityHigh)
 }
 

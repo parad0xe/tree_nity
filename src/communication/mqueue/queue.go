@@ -53,8 +53,8 @@ func validateName(name string) error {
 	return nil
 }
 
-// open opens the queue name with the given flags and reads its attributes.
-func open(name string, flags int, attr *C.struct_mq_attr) (*queue, error) {
+// openMqueue opens the queue name with the given flags and reads its attributes.
+func openMqueue(name string, flags int, attr *C.struct_mq_attr) (*queue, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -83,15 +83,15 @@ func open(name string, flags int, attr *C.struct_mq_attr) (*queue, error) {
 	return q, nil
 }
 
-// create creates the queue name and opens it to receive frames.
-func create(name string) (*queue, error) {
+// createMqueue creates the queue name and opens it to receive frames.
+func createMqueue(name string) (*queue, error) {
 	attr := C.struct_mq_attr{mq_maxmsg: C.long(maxFrame), mq_msgsize: C.long(frameSize)}
-	return open(name, C.O_RDONLY|C.O_CREAT|C.O_EXCL, &attr)
+	return openMqueue(name, C.O_RDONLY|C.O_CREAT|C.O_EXCL, &attr)
 }
 
-// connect opens the existing queue name to send frames.
-func connect(name string) (*queue, error) {
-	return open(name, C.O_WRONLY, nil)
+// connectMqueue opens the existing queue name to send frames.
+func connectMqueue(name string) (*queue, error) {
+	return openMqueue(name, C.O_WRONLY, nil)
 }
 
 // recv blocks until a frame is available and returns its content.
@@ -131,7 +131,7 @@ func (q *queue) timedRecv(deadline time.Time) ([]byte, error) {
 // send blocks while the queue is full, then sends frame with the given
 // priority. The returned error matches ErrEmptyFrame when frame is empty, and
 // ErrFrameTooLarge when it exceeds the frame size of the queue.
-func (q *queue) send(frame []byte, priority priority) error {
+func (q *queue) send(frame []byte, framePriority priority) error {
 	if len(frame) == 0 {
 		return fmt.Errorf("send to queue %q: %w", q.name, ErrEmptyFrame)
 	}
@@ -141,7 +141,7 @@ func (q *queue) send(frame []byte, priority priority) error {
 	}
 
 	cbuffer := unsafe.Pointer(&frame[0])
-	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), C.uint(priority))
+	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), C.uint(framePriority))
 	if retcode == -1 {
 		return fmt.Errorf("send to queue %q: %w", q.name, err)
 	}

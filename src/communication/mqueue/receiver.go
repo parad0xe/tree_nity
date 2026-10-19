@@ -10,7 +10,7 @@ type Receiver struct {
 // NewReceiver creates the queue name and opens it to receive frames. The
 // returned error matches os.ErrExist when the queue already exists.
 func NewReceiver(name string) (*Receiver, error) {
-	q, err := create(name)
+	q, err := createMqueue(name)
 	if err != nil {
 		return nil, err
 	}

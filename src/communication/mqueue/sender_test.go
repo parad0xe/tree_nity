@@ -58,23 +58,23 @@ func TestSendReachesReceiver(t *testing.T) {
 	}
 }
 
-func TestSendUrgentOvertakesWaitingFrames(t *testing.T) {
+func TestSendAheadOvertakesWaitingFrames(t *testing.T) {
 	name := queueName(t)
 	receiver := newReceiver(t, name)
 	sender := newSender(t, name)
-	normal, urgent := []byte("normal"), []byte("urgent")
+	normal, ahead := []byte("normal"), []byte("ahead")
 	if err := sender.Send(normal); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", normal, err)
 	}
-	if err := sender.SendUrgent(urgent); err != nil {
-		t.Fatalf("SendUrgent(%q) error = %v, want nil", urgent, err)
+	if err := sender.SendAhead(ahead); err != nil {
+		t.Fatalf("SendAhead(%q) error = %v, want nil", ahead, err)
 	}
 	got, err := receiver.Recv()
 	if err != nil {
 		t.Fatalf("Recv() error = %v, want nil", err)
 	}
-	if !bytes.Equal(got, urgent) {
-		t.Errorf("Recv() = %q, want %q", got, urgent)
+	if !bytes.Equal(got, ahead) {
+		t.Errorf("Recv() = %q, want %q", got, ahead)
 	}
 }
 
