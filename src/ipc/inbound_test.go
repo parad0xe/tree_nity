@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	validFrame  = `{"opcode":0,"emitter":1,"metadata":{},"payload":{}}`
+	testFrame   = "frame"
 	testTimeout = 5 * time.Second
 )
 
@@ -28,6 +28,19 @@ func testContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+func ignoreFrame([]byte) (protocol.Data, error) {
+	return protocol.Data{}, nil
+}
+
+type frameRecorder struct {
+	frames []string
+}
+
+func (r *frameRecorder) decode(frame []byte) (protocol.Data, error) {
+	r.frames = append(r.frames, string(frame))
+	return protocol.Data{}, nil
 }
 
 func newTestInbound(t *testing.T, prefix string, decode DecodeFunc) *Inbound {
@@ -46,7 +59,7 @@ func newTestInbound(t *testing.T, prefix string, decode DecodeFunc) *Inbound {
 
 func tryNewInbound(t *testing.T, prefix string) error {
 	t.Helper()
-	in, err := NewInbound(prefix, protocol.NewDataFromFrame)
+	in, err := NewInbound(prefix, ignoreFrame)
 	if err == nil {
 		t.Cleanup(func() {
 			if err := in.Drop(); err != nil {
@@ -85,7 +98,7 @@ func tryConnect(t *testing.T, name string) error {
 }
 
 func TestNewInboundCreatesQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	if err := tryConnect(t, in.IPCPath()); err != nil {
 		t.Errorf("NewSender(%q) error = %v, want nil", in.IPCPath(), err)
 	}
@@ -93,7 +106,7 @@ func TestNewInboundCreatesQueue(t *testing.T) {
 
 func TestNewInboundNamesQueueAfterPID(t *testing.T) {
 	prefix := "/" + testPrefix(t) + "."
-	in := newTestInbound(t, prefix, protocol.NewDataFromFrame)
+	in := newTestInbound(t, prefix, ignoreFrame)
 	want := fmt.Sprintf("/%s.%d", testPrefix(t), os.Getpid())
 	if got := in.IPCPath(); got != want {
 		t.Errorf("NewInbound(%q) IPCPath() = %q, want %q", prefix, got, want)
@@ -102,28 +115,24 @@ func TestNewInboundNamesQueueAfterPID(t *testing.T) {
 
 func TestNewInboundRejectsExistingQueue(t *testing.T) {
 	prefix := testPrefix(t)
-	newTestInbound(t, prefix, protocol.NewDataFromFrame)
+	newTestInbound(t, prefix, ignoreFrame)
 	if err := tryNewInbound(t, prefix); !errors.Is(err, os.ErrExist) {
 		t.Errorf("NewInbound(%q) error = %v, want %v", prefix, err, os.ErrExist)
 	}
 }
 
-func TestRecvReturnsData(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
-	frame := []byte(validFrame)
+func TestRecvDecodesFrame(t *testing.T) {
+	rec := &frameRecorder{}
+	in := newTestInbound(t, testPrefix(t), rec.decode)
+	frame := []byte(testFrame)
 	if err := connect(t, in.IPCPath()).Send(frame); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 	}
-	want, err := protocol.NewDataFromFrame(frame)
-	if err != nil {
-		t.Fatalf("NewDataFromFrame(%q) error = %v, want nil", frame, err)
-	}
-	got, err := in.Recv(testContext(t))
-	if err != nil {
+	if _, err := in.Recv(testContext(t)); err != nil {
 		t.Fatalf("Recv() error = %v, want nil", err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Recv() = %+v, want %+v", got, want)
+	if want := []string{testFrame}; !slices.Equal(rec.frames, want) {
+		t.Errorf("decoded frames = %q, want %q", rec.frames, want)
 	}
 }
 
@@ -132,7 +141,7 @@ func TestRecvRejectsInvalidFrame(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), func([]byte) (protocol.Data, error) {
 		return protocol.Data{}, errDecode
 	})
-	frame := []byte(validFrame)
+	frame := []byte(testFrame)
 	if err := connect(t, in.IPCPath()).Send(frame); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 	}
@@ -146,7 +155,7 @@ func TestRecvRejectsInvalidFrame(t *testing.T) {
 }
 
 func TestRecvReturnsWhenCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
@@ -165,7 +174,7 @@ func TestRecvReturnsWhenCancelled(t *testing.T) {
 }
 
 func TestRecvReturnsAtDeadline(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -184,7 +193,7 @@ func TestRecvReturnsAtDeadline(t *testing.T) {
 }
 
 func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := in.Recv(ctx); !errors.Is(err, context.Canceled) {
@@ -193,23 +202,27 @@ func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 }
 
 func TestRecvSkipsStaleWakeFrame(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
+	rec := &frameRecorder{}
+	in := newTestInbound(t, testPrefix(t), rec.decode)
 	s := connect(t, in.IPCPath())
 	if err := s.SendAhead(wakeFrame); err != nil {
 		t.Fatalf("SendAhead(%q) error = %v, want nil", wakeFrame, err)
 	}
-	frame := []byte(validFrame)
+	frame := []byte(testFrame)
 	if err := s.Send(frame); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 	}
 	if _, err := in.Recv(testContext(t)); err != nil {
-		t.Errorf("Recv() after a stale wake frame error = %v, want nil", err)
+		t.Fatalf("Recv() after a stale wake frame error = %v, want nil", err)
+	}
+	if want := []string{testFrame}; !slices.Equal(rec.frames, want) {
+		t.Errorf("decoded frames = %q, want %q", rec.frames, want)
 	}
 }
 
 func TestDropRemovesQueue(t *testing.T) {
 	prefix := testPrefix(t)
-	in, err := NewInbound(prefix, protocol.NewDataFromFrame)
+	in, err := NewInbound(prefix, ignoreFrame)
 	if err != nil {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", prefix, err)
 	}
