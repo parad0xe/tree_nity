@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const testTimeout = 5 * time.Second
+
 func queueName(t *testing.T) string {
 	t.Helper()
 	return "/" + t.Name()
@@ -70,6 +72,21 @@ func fillQueue(t *testing.T, writer *queue) {
 		if err := writer.send(frame, priorityNormal); err != nil {
 			t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 		}
+	}
+}
+
+func callWithTimeout(t *testing.T, name string, call func() error) error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- call()
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(testTimeout):
+		t.Fatalf("%s did not return within %v", name, testTimeout)
+		return nil
 	}
 }
 
@@ -313,7 +330,11 @@ func TestTimedRecvReturnsWaitingFrame(t *testing.T) {
 
 func TestTimedRecvExpiresOnEmptyQueue(t *testing.T) {
 	reader := createReader(t, queueName(t))
-	if _, err := reader.timedRecv(time.Now().Add(10 * time.Millisecond)); !errors.Is(err, os.ErrDeadlineExceeded) {
+	err := callWithTimeout(t, "TimedRecv()", func() error {
+		_, err := reader.timedRecv(time.Now().Add(10 * time.Millisecond))
+		return err
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("TimedRecv() error = %v, want %v", err, os.ErrDeadlineExceeded)
 	}
 }
@@ -386,7 +407,10 @@ func TestTimedSendExpiresOnFullQueue(t *testing.T) {
 	writer := createWriter(t, name)
 	fillQueue(t, writer)
 	frame := []byte("frame")
-	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(10*time.Millisecond)); !errors.Is(err, os.ErrDeadlineExceeded) {
+	err := callWithTimeout(t, "TimedSend()", func() error {
+		return writer.timedSend(frame, priorityNormal, time.Now().Add(10*time.Millisecond))
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("TimedSend(%q) on a full queue error = %v, want %v", frame, err, os.ErrDeadlineExceeded)
 	}
 }
@@ -414,7 +438,10 @@ func TestTimedSendPastDeadlineExpiresOnFullQueue(t *testing.T) {
 	writer := createWriter(t, name)
 	fillQueue(t, writer)
 	frame := []byte("frame")
-	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(-time.Second)); !errors.Is(err, os.ErrDeadlineExceeded) {
+	err := callWithTimeout(t, "TimedSend()", func() error {
+		return writer.timedSend(frame, priorityNormal, time.Now().Add(-time.Second))
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("TimedSend(%q) on a full queue error = %v, want %v", frame, err, os.ErrDeadlineExceeded)
 	}
 }
