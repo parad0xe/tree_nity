@@ -167,6 +167,32 @@ func (q *queue) send(frame []byte, framePriority priority) error {
 	return nil
 }
 
+// timedSend waits until deadline for room in the queue, then sends frame with
+// the given priority. A past deadline only sends when the queue has room. The
+// zero time is not a valid deadline. The returned error matches
+// os.ErrDeadlineExceeded when the queue stays full until deadline,
+// ErrEmptyFrame when frame is empty, and ErrFrameTooLarge when it exceeds the
+// frame size of the queue.
+func (q *queue) timedSend(frame []byte, framePriority priority, deadline time.Time) error {
+	if err := q.checkFrame(frame); err != nil {
+		return fmt.Errorf("timed send to queue %q: %w", q.name, err)
+	}
+
+	ts := toTimespec(deadline)
+
+	cbuffer := unsafe.Pointer(&frame[0])
+	retcode, err := C.mq_timedsend(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), C.uint(framePriority), &ts)
+	if retcode == -1 {
+		if errors.Is(err, syscall.ETIMEDOUT) {
+			return fmt.Errorf("timed send to queue %q: %w", q.name, os.ErrDeadlineExceeded)
+		}
+
+		return fmt.Errorf("timed send to queue %q: %w", q.name, err)
+	}
+
+	return nil
+}
+
 // close releases the descriptor. The queue stays available to other
 // processes until it is unlinked.
 func (q *queue) close() error {

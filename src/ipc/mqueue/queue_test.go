@@ -63,6 +63,16 @@ func tryCreateWriter(t *testing.T, name string) error {
 	return err
 }
 
+func fillQueue(t *testing.T, writer *queue) {
+	t.Helper()
+	frame := []byte("frame")
+	for range writer.maxFrame {
+		if err := writer.send(frame, priorityNormal); err != nil {
+			t.Fatalf("Send(%q) error = %v, want nil", frame, err)
+		}
+	}
+}
+
 func TestCreateCreatesMissingQueue(t *testing.T) {
 	name := queueName(t)
 	if err := tryCreateReader(t, name); err != nil {
@@ -350,6 +360,92 @@ func TestSendRejectsReaderQueue(t *testing.T) {
 	frame := []byte("frame")
 	if err := reader.send(frame, priorityNormal); !errors.Is(err, syscall.EBADF) {
 		t.Errorf("Send(%q) on reader error = %v, want %v", frame, err, syscall.EBADF)
+	}
+}
+
+func TestTimedSendDeliversFrame(t *testing.T) {
+	name := queueName(t)
+	reader := createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte("frame")
+	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("TimedSend(%q) error = %v, want nil", frame, err)
+	}
+	got, err := reader.recv()
+	if err != nil {
+		t.Fatalf("Recv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("Recv() = %q, want %q", got, frame)
+	}
+}
+
+func TestTimedSendExpiresOnFullQueue(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	fillQueue(t, writer)
+	frame := []byte("frame")
+	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(10*time.Millisecond)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("TimedSend(%q) on a full queue error = %v, want %v", frame, err, os.ErrDeadlineExceeded)
+	}
+}
+
+func TestTimedSendPastDeadlineDeliversFrame(t *testing.T) {
+	name := queueName(t)
+	reader := createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte("frame")
+	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("TimedSend(%q) error = %v, want nil", frame, err)
+	}
+	got, err := reader.recv()
+	if err != nil {
+		t.Fatalf("Recv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("Recv() = %q, want %q", got, frame)
+	}
+}
+
+func TestTimedSendPastDeadlineExpiresOnFullQueue(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	fillQueue(t, writer)
+	frame := []byte("frame")
+	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(-time.Second)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("TimedSend(%q) on a full queue error = %v, want %v", frame, err, os.ErrDeadlineExceeded)
+	}
+}
+
+func TestTimedSendRejectsZeroDeadline(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte("frame")
+	if err := writer.timedSend(frame, priorityNormal, time.Time{}); !errors.Is(err, syscall.EINVAL) {
+		t.Errorf("TimedSend(%q) with the zero time error = %v, want %v", frame, err, syscall.EINVAL)
+	}
+}
+
+func TestTimedSendRejectsEmptyFrame(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte{}
+	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(time.Second)); !errors.Is(err, ErrEmptyFrame) {
+		t.Errorf("TimedSend(%q) error = %v, want %v", frame, err, ErrEmptyFrame)
+	}
+}
+
+func TestTimedSendRejectsTooLargeFrame(t *testing.T) {
+	name := queueName(t)
+	createReader(t, name)
+	writer := createWriter(t, name)
+	frame := bytes.Repeat([]byte("a"), frameSize+1)
+	if err := writer.timedSend(frame, priorityNormal, time.Now().Add(time.Second)); !errors.Is(err, ErrFrameTooLarge) {
+		t.Errorf("TimedSend(%d bytes) error = %v, want %v", len(frame), err, ErrFrameTooLarge)
 	}
 }
 
