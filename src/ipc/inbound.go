@@ -15,17 +15,21 @@ import (
 // protocol data, so it cannot be mistaken for a frame sent by a peer.
 var wakeFrame = []byte{0}
 
+// DecodeFunc turns a frame into protocol data.
+type DecodeFunc func([]byte) (protocol.Data, error)
+
 // Inbound owns the queue through which a process receives protocol data.
 type Inbound struct {
 	ipcPath  string
 	receiver *mqueue.Receiver
 	loopback *mqueue.Sender
+	decode   DecodeFunc
 }
 
 // NewInbound creates the queue /<prefix>.<pid> and opens it to receive
-// protocol data. The returned error matches os.ErrExist when the queue already
-// exists.
-func NewInbound(prefix string) (*Inbound, error) {
+// protocol data decoded with decode. The returned error matches os.ErrExist
+// when the queue already exists.
+func NewInbound(prefix string, decode DecodeFunc) (*Inbound, error) {
 	prefix = strings.TrimPrefix(prefix, "/")
 	prefix = strings.TrimSuffix(prefix, ".")
 
@@ -33,6 +37,7 @@ func NewInbound(prefix string) (*Inbound, error) {
 
 	in := &Inbound{
 		ipcPath: fmt.Sprintf("/%s.%d", prefix, pid),
+		decode:  decode,
 	}
 
 	receiver, err := mqueue.NewReceiver(in.ipcPath)
@@ -80,7 +85,7 @@ func (in *Inbound) Recv(ctx context.Context) (protocol.Data, error) {
 			continue
 		}
 
-		data, err := protocol.NewDataFromFrame(frame)
+		data, err := in.decode(frame)
 		if err != nil {
 			return protocol.Data{}, fmt.Errorf("receive from inbound %q: %w: %w", in.ipcPath, ErrInvalidFrame, err)
 		}

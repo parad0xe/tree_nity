@@ -65,7 +65,7 @@ func tryNewOutbound(t *testing.T, ipcPath string) error {
 }
 
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	if err := tryNewOutbound(t, in.IPCPath()); err != nil {
 		t.Errorf("NewOutbound(%q) error = %v, want nil", in.IPCPath(), err)
 	}
@@ -79,7 +79,7 @@ func TestNewOutboundRejectsMissingQueue(t *testing.T) {
 }
 
 func TestSendReachesInbound(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(validFrame)))
 	if err := out.Send(protocol.Data{}); err != nil {
 		t.Fatalf("Send() error = %v, want nil", err)
@@ -94,7 +94,7 @@ func TestSendReachesInbound(t *testing.T) {
 }
 
 func TestSendAheadOvertakesWaitingData(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	out := newTestOutbound(t, in.IPCPath(), sequenceEncoder([]byte(validFrame), []byte(otherValidFrame)))
 	if err := out.Send(protocol.Data{}); err != nil {
 		t.Fatalf("Send() error = %v, want nil", err)
@@ -112,7 +112,7 @@ func TestSendAheadOvertakesWaitingData(t *testing.T) {
 }
 
 func TestSendRejectsInvalidData(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	errEncode := errors.New("encode failure")
 	out := newTestOutbound(t, in.IPCPath(), func(protocol.Data) ([]byte, error) {
 		return nil, errEncode
@@ -127,7 +127,7 @@ func TestSendRejectsInvalidData(t *testing.T) {
 }
 
 func TestSendRejectsTooLargeFrame(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	frame := bytes.Repeat([]byte("a"), 1<<20)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder(frame))
 	if err := out.Send(protocol.Data{}); !errors.Is(err, mqueue.ErrFrameTooLarge) {
@@ -136,7 +136,7 @@ func TestSendRejectsTooLargeFrame(t *testing.T) {
 }
 
 func TestCloseKeepsQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	out, err := NewOutbound(in.IPCPath(), fixedEncoder([]byte(validFrame)))
 	if err != nil {
 		t.Fatalf("NewOutbound(%q) error = %v, want nil", in.IPCPath(), err)

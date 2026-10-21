@@ -30,9 +30,9 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func newTestInbound(t *testing.T, prefix string) *Inbound {
+func newTestInbound(t *testing.T, prefix string, decode DecodeFunc) *Inbound {
 	t.Helper()
-	in, err := NewInbound(prefix)
+	in, err := NewInbound(prefix, decode)
 	if err != nil {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", prefix, err)
 	}
@@ -46,7 +46,7 @@ func newTestInbound(t *testing.T, prefix string) *Inbound {
 
 func tryNewInbound(t *testing.T, prefix string) error {
 	t.Helper()
-	in, err := NewInbound(prefix)
+	in, err := NewInbound(prefix, protocol.NewDataFromFrame)
 	if err == nil {
 		t.Cleanup(func() {
 			if err := in.Drop(); err != nil {
@@ -85,7 +85,7 @@ func tryConnect(t *testing.T, name string) error {
 }
 
 func TestNewInboundCreatesQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	if err := tryConnect(t, in.IPCPath()); err != nil {
 		t.Errorf("NewSender(%q) error = %v, want nil", in.IPCPath(), err)
 	}
@@ -93,7 +93,7 @@ func TestNewInboundCreatesQueue(t *testing.T) {
 
 func TestNewInboundNamesQueueAfterPID(t *testing.T) {
 	prefix := "/" + testPrefix(t) + "."
-	in := newTestInbound(t, prefix)
+	in := newTestInbound(t, prefix, protocol.NewDataFromFrame)
 	want := fmt.Sprintf("/%s.%d", testPrefix(t), os.Getpid())
 	if got := in.IPCPath(); got != want {
 		t.Errorf("NewInbound(%q) IPCPath() = %q, want %q", prefix, got, want)
@@ -102,14 +102,14 @@ func TestNewInboundNamesQueueAfterPID(t *testing.T) {
 
 func TestNewInboundRejectsExistingQueue(t *testing.T) {
 	prefix := testPrefix(t)
-	newTestInbound(t, prefix)
+	newTestInbound(t, prefix, protocol.NewDataFromFrame)
 	if err := tryNewInbound(t, prefix); !errors.Is(err, os.ErrExist) {
 		t.Errorf("NewInbound(%q) error = %v, want %v", prefix, err, os.ErrExist)
 	}
 }
 
 func TestRecvReturnsData(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	frame := []byte(validFrame)
 	if err := connect(t, in.IPCPath()).Send(frame); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
@@ -128,8 +128,11 @@ func TestRecvReturnsData(t *testing.T) {
 }
 
 func TestRecvRejectsInvalidFrame(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
-	frame := []byte(`{}`)
+	errDecode := errors.New("decode failure")
+	in := newTestInbound(t, testPrefix(t), func([]byte) (protocol.Data, error) {
+		return protocol.Data{}, errDecode
+	})
+	frame := []byte(validFrame)
 	if err := connect(t, in.IPCPath()).Send(frame); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
 	}
@@ -137,13 +140,13 @@ func TestRecvRejectsInvalidFrame(t *testing.T) {
 	if !errors.Is(err, ErrInvalidFrame) {
 		t.Errorf("Recv() error = %v, want %v", err, ErrInvalidFrame)
 	}
-	if !errors.Is(err, protocol.ErrMissingOpcode) {
-		t.Errorf("Recv() error = %v, want %v", err, protocol.ErrMissingOpcode)
+	if !errors.Is(err, errDecode) {
+		t.Errorf("Recv() error = %v, want %v", err, errDecode)
 	}
 }
 
 func TestRecvReturnsWhenCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
@@ -162,7 +165,7 @@ func TestRecvReturnsWhenCancelled(t *testing.T) {
 }
 
 func TestRecvReturnsAtDeadline(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -181,7 +184,7 @@ func TestRecvReturnsAtDeadline(t *testing.T) {
 }
 
 func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := in.Recv(ctx); !errors.Is(err, context.Canceled) {
@@ -190,7 +193,7 @@ func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 }
 
 func TestRecvSkipsStaleWakeFrame(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t))
+	in := newTestInbound(t, testPrefix(t), protocol.NewDataFromFrame)
 	s := connect(t, in.IPCPath())
 	if err := s.SendAhead(wakeFrame); err != nil {
 		t.Fatalf("SendAhead(%q) error = %v, want nil", wakeFrame, err)
@@ -206,7 +209,7 @@ func TestRecvSkipsStaleWakeFrame(t *testing.T) {
 
 func TestDropRemovesQueue(t *testing.T) {
 	prefix := testPrefix(t)
-	in, err := NewInbound(prefix)
+	in, err := NewInbound(prefix, protocol.NewDataFromFrame)
 	if err != nil {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", prefix, err)
 	}
