@@ -113,6 +113,27 @@ func (m *HashMap[K, V]) Len() uint64 {
 	return m.occupiedSlots
 }
 
+// ToList returns a new slice containing a shallow copy of all stored values.
+// The order is unspecified, and equal values stored under different keys are retained.
+// It returns an empty slice and ErrUninitialized if m is nil or uninitialized.
+func (m *HashMap[K, V]) ToList() ([]V, error) {
+	if err := m.validate(); err != nil {
+		return []V{}, err
+	}
+
+	values := make([]V, m.occupiedSlots)
+
+	i := 0
+	for _, entry := range m.entries {
+		if entry.state == slotOccupied {
+			values[i] = entry.value
+			i++
+		}
+	}
+
+	return values, nil
+}
+
 func (m *HashMap[K, V]) grow() error {
 	if err := m.validate(); err != nil {
 		return err
