@@ -1,9 +1,6 @@
 package trie
 
-import (
-	"errors"
-	"slices"
-)
+import "slices"
 
 // Node stores unique comparable values and byte-keyed child nodes.
 type Node[T comparable] struct {
@@ -30,9 +27,10 @@ func (n *Node[T]) EnsureChild(key byte) *Node[T] {
 }
 
 // AddValue appends value, returning an error if the node already contains it.
+// Duplicate values return ErrValueExists.
 func (n *Node[T]) AddValue(value T) error {
 	if slices.Contains(n.values, value) {
-		return errors.New("value already exists")
+		return ErrValueExists
 	}
 	n.values = append(n.values, value)
 	return nil
