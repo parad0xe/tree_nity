@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -69,12 +70,13 @@ func TestNewPayloadJSON(t *testing.T) {
 // TestNewPayloadJSONRejectsInvalidInput checks unsupported opcodes and JSON shapes.
 func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
-		name   string
-		opcode op
-		input  string
+		name    string
+		opcode  op
+		input   string
+		wantErr error
 	}{
-		{name: "negative opcode", opcode: -1, input: `{}`},
-		{name: "unknown opcode", opcode: 9, input: `{}`},
+		{name: "negative opcode", opcode: -1, input: `{}`, wantErr: ErrUnknownOpcode},
+		{name: "unknown opcode", opcode: 9, input: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "empty input", opcode: listTopic},
 		{name: "whitespace", opcode: listTopic, input: " \n\t"},
 		{name: "malformed JSON", opcode: listTopic, input: `{`},
@@ -95,6 +97,9 @@ func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 			if err == nil || got != nil {
 				t.Errorf("newPayloadJSON(%d, %q) = %#v, error = %v, want nil and an error", tt.opcode, tt.input, got, err)
 			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("newPayloadJSON(%d, %q) error = %v, want %v", tt.opcode, tt.input, err, tt.wantErr)
+			}
 		})
 	}
 }
@@ -104,20 +109,20 @@ func TestProduceMessagePayloadJSONToPayload(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		wantErr string
+		wantErr error
 	}{
-		{name: "missing fields", input: `{}`, wantErr: "missing raw"},
-		{name: "missing raw", input: `{"message":{"key":"k","value":"v"}}`, wantErr: "missing raw"},
-		{name: "null raw", input: `{"raw":null,"message":{"key":"k","value":"v"}}`, wantErr: "missing raw"},
-		{name: "missing message", input: `{"raw":false}`, wantErr: "missing message"},
-		{name: "null message", input: `{"raw":true,"message":null}`, wantErr: "missing message"},
-		{name: "empty message", input: `{"raw":true,"message":{}}`, wantErr: "missing message key"},
-		{name: "missing message key", input: `{"raw":true,"message":{"value":"v"}}`, wantErr: "missing message key"},
-		{name: "missing message value", input: `{"raw":true,"message":{"key":"k"}}`, wantErr: "missing message value"},
+		{name: "missing fields", input: `{}`, wantErr: ErrMissingRaw},
+		{name: "missing raw", input: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
+		{name: "null raw", input: `{"raw":null,"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
+		{name: "missing message", input: `{"raw":false}`, wantErr: ErrMissingMessage},
+		{name: "null message", input: `{"raw":true,"message":null}`, wantErr: ErrMissingMessage},
+		{name: "empty message", input: `{"raw":true,"message":{}}`, wantErr: ErrMissingMessageKey},
+		{name: "missing message key", input: `{"raw":true,"message":{"value":"v"}}`, wantErr: ErrMissingMessageKey},
+		{name: "missing message value", input: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
 		{
 			name:    "oversized message",
 			input:   fmt.Sprintf(`{"raw":true,"message":{"key":"k","value":%q}}`, strings.Repeat("v", 1024)),
-			wantErr: "message exceeds 1024 bytes",
+			wantErr: ErrMessageTooLarge,
 		},
 	}
 
@@ -134,8 +139,8 @@ func TestProduceMessagePayloadJSONToPayload(t *testing.T) {
 			}
 
 			got, err := decoded.toPayload()
-			if err == nil || err.Error() != tt.wantErr || got != nil {
-				t.Errorf("toPayload(%s) = %#v, error = %v, want nil and %q", tt.input, got, err, tt.wantErr)
+			if !errors.Is(err, tt.wantErr) || got != nil {
+				t.Errorf("toPayload(%s) = %#v, error = %v, want nil and %v", tt.input, got, err, tt.wantErr)
 			}
 		})
 	}

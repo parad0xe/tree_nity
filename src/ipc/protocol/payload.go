@@ -3,7 +3,6 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
@@ -38,7 +37,7 @@ func newPayloadJSON(opcode op, raw json.RawMessage) (payloadJSON, error) {
 	case consumerHeartbeat:
 		tmpPayload = &consumerHeartbeatPayloadJSON{}
 	default:
-		return nil, fmt.Errorf("unknown opcode: %d", opcode)
+		return nil, fmt.Errorf("%w: %d", ErrUnknownOpcode, opcode)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -156,10 +155,10 @@ type produceMessagePayloadJSON struct {
 
 func (p produceMessagePayloadJSON) validate() error {
 	if p.Raw == nil {
-		return errors.New("missing raw")
+		return ErrMissingRaw
 	}
 	if p.Message == nil {
-		return errors.New("missing message")
+		return ErrMissingMessage
 	}
 	return nil
 }

@@ -3,13 +3,14 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
 // NewDataFromFrame decodes and validates a single JSON frame.
 // Unknown fields, missing required fields, and trailing JSON values are rejected.
 // Metadata is selected by emitter, and payload is selected by opcode.
+// Errors for missing fields, unknown opcodes or emitters, oversized messages,
+// and additional JSON values can be matched with errors.Is.
 func NewDataFromFrame(frame []byte) (Data, error) {
 	var tmpData dataJSON
 
@@ -21,7 +22,7 @@ func NewDataFromFrame(frame []byte) (Data, error) {
 	}
 	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
 		if err == nil {
-			return Data{}, fmt.Errorf("unexpected additional JSON value")
+			return Data{}, ErrAdditionalJSONValue
 		}
 		return Data{}, err
 	}

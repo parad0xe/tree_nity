@@ -3,7 +3,6 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
@@ -25,7 +24,7 @@ func newMetadataJSON(emitter emitter, raw json.RawMessage) (metadataJSON, error)
 	case server:
 		tmpMetadata = &ServerMetadataJSON{}
 	default:
-		return nil, fmt.Errorf("unknown emitter: %d", emitter)
+		return nil, fmt.Errorf("%w: %d", ErrUnknownEmitter, emitter)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -53,10 +52,10 @@ type clientMetadataJSON struct {
 
 func (m clientMetadataJSON) validate() error {
 	if m.ClientID == nil {
-		return errors.New("missing clientId")
+		return ErrMissingClientID
 	}
 	if m.ClientIPC == nil {
-		return errors.New("missing clientIPC")
+		return ErrMissingClientIPC
 	}
 	return nil
 }

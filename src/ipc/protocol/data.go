@@ -1,9 +1,6 @@
 package protocol
 
-import (
-	"encoding/json"
-	"fmt"
-)
+import "encoding/json"
 
 // Data holds a frame's opcode, emitter, decoded metadata, and payload.
 type Data struct {
@@ -26,16 +23,16 @@ type dataJSON struct {
 
 func (d dataJSON) validate() error {
 	if d.Opcode == nil {
-		return fmt.Errorf("missing opcode")
+		return ErrMissingOpcode
 	}
 	if d.Emitter == nil {
-		return fmt.Errorf("missing emitter")
+		return ErrMissingEmitter
 	}
 	if d.Metadata == nil {
-		return fmt.Errorf("missing metadata")
+		return ErrMissingMetadata
 	}
 	if d.Payload == nil {
-		return fmt.Errorf("missing payload")
+		return ErrMissingPayload
 	}
 	return nil
 }

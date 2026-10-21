@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -79,54 +80,56 @@ func TestNewDataFromFrame(t *testing.T) {
 func TestNewDataFromFrameRejectsInvalidInput(t *testing.T) {
 	validFrame := `{"opcode":0,"emitter":1,"metadata":{},"payload":{}}`
 	tests := []struct {
-		name  string
-		input string
+		name    string
+		input   string
+		wantErr error
 	}{
 		{name: "empty frame"},
 		{name: "whitespace", input: " \n\t"},
 		{name: "truncated JSON", input: `{"opcode":0`},
 		{name: "invalid JSON", input: `{"opcode":}`},
-		{name: "null frame", input: `null`},
+		{name: "null frame", input: `null`, wantErr: ErrMissingOpcode},
 		{name: "array frame", input: `[]`},
 		{name: "string frame", input: `"frame"`},
 		{name: "number frame", input: `1`},
 		{name: "boolean frame", input: `false`},
-		{name: "empty object", input: `{}`},
+		{name: "empty object", input: `{}`, wantErr: ErrMissingOpcode},
 		{name: "unknown frame field", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":{},"extra":true}`},
-		{name: "missing opcode", input: `{"emitter":1,"metadata":{},"payload":{}}`},
-		{name: "null opcode", input: `{"opcode":null,"emitter":1,"metadata":{},"payload":{}}`},
-		{name: "negative opcode", input: `{"opcode":-1,"emitter":1,"metadata":{},"payload":{}}`},
-		{name: "unknown opcode", input: `{"opcode":9,"emitter":1,"metadata":{},"payload":{}}`},
+		{name: "missing opcode", input: `{"emitter":1,"metadata":{},"payload":{}}`, wantErr: ErrMissingOpcode},
+		{name: "null opcode", input: `{"opcode":null,"emitter":1,"metadata":{},"payload":{}}`, wantErr: ErrMissingOpcode},
+		{name: "negative opcode", input: `{"opcode":-1,"emitter":1,"metadata":{},"payload":{}}`, wantErr: ErrUnknownOpcode},
+		{name: "unknown opcode", input: `{"opcode":9,"emitter":1,"metadata":{},"payload":{}}`, wantErr: ErrUnknownOpcode},
 		{name: "string opcode", input: `{"opcode":"0","emitter":1,"metadata":{},"payload":{}}`},
 		{name: "fractional opcode", input: `{"opcode":0.5,"emitter":1,"metadata":{},"payload":{}}`},
-		{name: "missing emitter", input: `{"opcode":0,"metadata":{},"payload":{}}`},
-		{name: "null emitter", input: `{"opcode":0,"emitter":null,"metadata":{},"payload":{}}`},
-		{name: "negative emitter", input: `{"opcode":0,"emitter":-1,"metadata":{},"payload":{}}`},
-		{name: "unknown emitter", input: `{"opcode":0,"emitter":2,"metadata":{},"payload":{}}`},
+		{name: "missing emitter", input: `{"opcode":0,"metadata":{},"payload":{}}`, wantErr: ErrMissingEmitter},
+		{name: "null emitter", input: `{"opcode":0,"emitter":null,"metadata":{},"payload":{}}`, wantErr: ErrMissingEmitter},
+		{name: "negative emitter", input: `{"opcode":0,"emitter":-1,"metadata":{},"payload":{}}`, wantErr: ErrUnknownEmitter},
+		{name: "unknown emitter", input: `{"opcode":0,"emitter":2,"metadata":{},"payload":{}}`, wantErr: ErrUnknownEmitter},
 		{name: "string emitter", input: `{"opcode":0,"emitter":"1","metadata":{},"payload":{}}`},
 		{name: "fractional emitter", input: `{"opcode":0,"emitter":1.5,"metadata":{},"payload":{}}`},
-		{name: "missing metadata", input: `{"opcode":0,"emitter":1,"payload":{}}`},
-		{name: "null metadata", input: `{"opcode":0,"emitter":1,"metadata":null,"payload":{}}`},
+		{name: "missing metadata", input: `{"opcode":0,"emitter":1,"payload":{}}`, wantErr: ErrMissingMetadata},
+		{name: "null metadata", input: `{"opcode":0,"emitter":1,"metadata":null,"payload":{}}`, wantErr: ErrMissingMetadata},
 		{name: "array metadata", input: `{"opcode":0,"emitter":1,"metadata":[],"payload":{}}`},
 		{name: "unknown metadata field", input: `{"opcode":0,"emitter":1,"metadata":{"extra":true},"payload":{}}`},
-		{name: "missing clientId", input: `{"opcode":0,"emitter":0,"metadata":{"clientIPC":"/client"},"payload":{}}`},
-		{name: "missing clientIPC", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client"},"payload":{}}`},
-		{name: "missing payload", input: `{"opcode":0,"emitter":1,"metadata":{}}`},
-		{name: "null payload", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":null}`},
+		{name: "missing clientId", input: `{"opcode":0,"emitter":0,"metadata":{"clientIPC":"/client"},"payload":{}}`, wantErr: ErrMissingClientID},
+		{name: "missing clientIPC", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client"},"payload":{}}`, wantErr: ErrMissingClientIPC},
+		{name: "missing payload", input: `{"opcode":0,"emitter":1,"metadata":{}}`, wantErr: ErrMissingPayload},
+		{name: "null payload", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":null}`, wantErr: ErrMissingPayload},
 		{name: "array payload", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":[]}`},
 		{name: "unknown payload field", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":{"extra":true}}`},
-		{name: "missing raw", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"message":{"key":"k","value":"v"}}}`},
-		{name: "missing message", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":false}}`},
-		{name: "missing message key", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"value":"v"}}}`},
-		{name: "missing message value", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"key":"k"}}}`},
+		{name: "missing raw", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"message":{"key":"k","value":"v"}}}`, wantErr: ErrMissingRaw},
+		{name: "missing message", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":false}}`, wantErr: ErrMissingMessage},
+		{name: "missing message key", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"value":"v"}}}`, wantErr: ErrMissingMessageKey},
+		{name: "missing message value", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"key":"k"}}}`, wantErr: ErrMissingMessageValue},
 		{name: "unknown message field", input: `{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"key":"k","value":"v","extra":true}}}`},
 		{
-			name:  "oversized message",
-			input: fmt.Sprintf(`{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"key":"k","value":%q}}}`, strings.Repeat("v", 1024)),
+			name:    "oversized message",
+			input:   fmt.Sprintf(`{"opcode":6,"emitter":1,"metadata":{},"payload":{"raw":true,"message":{"key":"k","value":%q}}}`, strings.Repeat("v", 1024)),
+			wantErr: ErrMessageTooLarge,
 		},
-		{name: "additional object", input: validFrame + `{}`},
-		{name: "additional null", input: validFrame + ` null`},
-		{name: "additional scalar", input: validFrame + ` true`},
+		{name: "additional object", input: validFrame + `{}`, wantErr: ErrAdditionalJSONValue},
+		{name: "additional null", input: validFrame + ` null`, wantErr: ErrAdditionalJSONValue},
+		{name: "additional scalar", input: validFrame + ` true`, wantErr: ErrAdditionalJSONValue},
 		{name: "truncated trailing JSON", input: validFrame + ` {`},
 		{name: "trailing garbage", input: validFrame + ` garbage`},
 	}
@@ -136,6 +139,9 @@ func TestNewDataFromFrameRejectsInvalidInput(t *testing.T) {
 			got, err := NewDataFromFrame([]byte(tt.input))
 			if err == nil {
 				t.Errorf("NewDataFromFrame(%q) error = nil, want an error", tt.input)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("NewDataFromFrame(%q) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
 			if !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("NewDataFromFrame(%q) = %#v, want %#v", tt.input, got, Data{})

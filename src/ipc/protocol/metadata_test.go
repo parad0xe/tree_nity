@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -72,9 +73,10 @@ func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 		name    string
 		emitter emitter
 		input   string
+		wantErr error
 	}{
-		{name: "negative emitter", emitter: -1, input: `{}`},
-		{name: "unknown emitter", emitter: 2, input: `{}`},
+		{name: "negative emitter", emitter: -1, input: `{}`, wantErr: ErrUnknownEmitter},
+		{name: "unknown emitter", emitter: 2, input: `{}`, wantErr: ErrUnknownEmitter},
 		{name: "empty input", emitter: client},
 		{name: "whitespace", emitter: server, input: " \n\t"},
 		{name: "malformed JSON", emitter: client, input: `{`},
@@ -96,6 +98,9 @@ func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 			if err == nil || got != nil {
 				t.Errorf("newMetadataJSON(%d, %q) = %#v, error = %v, want nil and an error", tt.emitter, tt.input, got, err)
 			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("newMetadataJSON(%d, %q) error = %v, want %v", tt.emitter, tt.input, err, tt.wantErr)
+			}
 		})
 	}
 }
@@ -105,13 +110,13 @@ func TestClientMetadataJSONToMetadata(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		wantErr string
+		wantErr error
 	}{
-		{name: "missing fields", input: `{}`, wantErr: "missing clientId"},
-		{name: "missing clientId", input: `{"clientIPC":"/client"}`, wantErr: "missing clientId"},
-		{name: "null clientId", input: `{"clientId":null,"clientIPC":"/client"}`, wantErr: "missing clientId"},
-		{name: "missing clientIPC", input: `{"clientId":"client"}`, wantErr: "missing clientIPC"},
-		{name: "null clientIPC", input: `{"clientId":"client","clientIPC":null}`, wantErr: "missing clientIPC"},
+		{name: "missing fields", input: `{}`, wantErr: ErrMissingClientID},
+		{name: "missing clientId", input: `{"clientIPC":"/client"}`, wantErr: ErrMissingClientID},
+		{name: "null clientId", input: `{"clientId":null,"clientIPC":"/client"}`, wantErr: ErrMissingClientID},
+		{name: "missing clientIPC", input: `{"clientId":"client"}`, wantErr: ErrMissingClientIPC},
+		{name: "null clientIPC", input: `{"clientId":"client","clientIPC":null}`, wantErr: ErrMissingClientIPC},
 	}
 
 	for _, tt := range tests {
@@ -123,8 +128,8 @@ func TestClientMetadataJSONToMetadata(t *testing.T) {
 			}
 
 			got, err := input.toMetadata()
-			if err == nil || err.Error() != tt.wantErr {
-				t.Errorf("toMetadata(%s) error = %v, want %q", tt.input, err, tt.wantErr)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("toMetadata(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
 			if !reflect.DeepEqual(got, ClientMetadata{}) {
 				t.Errorf("toMetadata(%s) = %#v, want %#v", tt.input, got, ClientMetadata{})
