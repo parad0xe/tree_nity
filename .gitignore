@@ -1,9 +1,9 @@
 # exe
-gitinette
-fish
-aquarium
-server
-client
+/gitinette
+/fish
+/aquarium
+/server
+/client
 
 # IDE
 *.un~
