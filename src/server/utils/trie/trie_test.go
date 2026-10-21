@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -77,8 +78,8 @@ func TestTrieUninitialized(t *testing.T) {
 				t.Run(operation.name, func(t *testing.T) {
 					callbackCalled = false
 					got, err := operation.run()
-					if err == nil || err.Error() != "trie is not initialized" {
-						t.Errorf("%s(%s) on %s error = %v, want %q", operation.name, operation.input, tt.name, err, "trie is not initialized")
+					if !errors.Is(err, ErrUninitialized) {
+						t.Errorf("%s(%s) on %s error = %v, want %v", operation.name, operation.input, tt.name, err, ErrUninitialized)
 					}
 					if got != nil {
 						t.Errorf("%s(%s) on %s returned node %p, want nil", operation.name, operation.input, tt.name, got)
@@ -116,8 +117,8 @@ func TestTrieInsertFind(t *testing.T) {
 			for i, value := range tt.values {
 				err := trie.Insert(tt.prefix, value)
 				if tt.wantErrAt[i] {
-					if err == nil || err.Error() != "value already exists" {
-						t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want %q", tt.prefix, value, i, tt.values, err, "value already exists")
+					if !errors.Is(err, ErrValueExists) {
+						t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want %v", tt.prefix, value, i, tt.values, err, ErrValueExists)
 					}
 				} else if err != nil {
 					t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want nil", tt.prefix, value, i, tt.values, err)
@@ -153,8 +154,8 @@ func TestTrieInsertAfterRemove(t *testing.T) {
 			if trie == nil {
 				return
 			}
-			if err := trie.Insert(tt.prefix, 1); err == nil || err.Error() != "value already exists" {
-				t.Errorf("Insert(%q, 1) with an existing value error = %v, want %q", tt.prefix, err, "value already exists")
+			if err := trie.Insert(tt.prefix, 1); !errors.Is(err, ErrValueExists) {
+				t.Errorf("Insert(%q, 1) with an existing value error = %v, want %v", tt.prefix, err, ErrValueExists)
 			}
 			if err := trie.Remove(tt.prefix, 1); err != nil {
 				t.Errorf("Remove(%q, 1) after a rejected duplicate error = %v, want nil", tt.prefix, err)
@@ -181,16 +182,16 @@ func TestTrieFind(t *testing.T) {
 		name    string
 		prefix  string
 		want    []int
-		wantErr bool
+		wantErr error
 	}{
 		{name: "root"},
 		{name: "stored prefix", prefix: "cart", want: []int{1}},
 		{name: "shared prefix", prefix: "car"},
 		{name: "internal prefix", prefix: "carp"},
-		{name: "missing branch", prefix: "cat", wantErr: true},
-		{name: "beyond stored prefix", prefix: "carton", wantErr: true},
-		{name: "missing first byte", prefix: "x", wantErr: true},
-		{name: "case sensitive", prefix: "Cart", wantErr: true},
+		{name: "missing branch", prefix: "cat", wantErr: ErrPrefixNotFound},
+		{name: "beyond stored prefix", prefix: "carton", wantErr: ErrPrefixNotFound},
+		{name: "missing first byte", prefix: "x", wantErr: ErrPrefixNotFound},
+		{name: "case sensitive", prefix: "Cart", wantErr: ErrPrefixNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,10 +200,9 @@ func TestTrieFind(t *testing.T) {
 				return
 			}
 			node, err := trie.Find(tt.prefix)
-			if tt.wantErr {
-				wantErr := fmt.Sprintf("prefix %q not found in trie", tt.prefix)
-				if err == nil || err.Error() != wantErr || node != nil {
-					t.Errorf("Find(%q) = %p, error = %v, want nil and %q", tt.prefix, node, err, wantErr)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) || node != nil {
+					t.Errorf("Find(%q) = %p, error = %v, want nil and %v", tt.prefix, node, err, tt.wantErr)
 				}
 				return
 			}
@@ -226,7 +226,7 @@ func TestTrieRemove(t *testing.T) {
 		value      int
 		wantNodes  map[string][]int
 		wantAbsent []string
-		wantErr    string
+		wantErr    error
 	}{
 		{
 			name: "last leaf", entries: map[string][]int{"abc": {1}}, prefix: "abc", value: 1,
@@ -262,19 +262,19 @@ func TestTrieRemove(t *testing.T) {
 		},
 		{
 			name: "missing prefix", entries: map[string][]int{"a": {1}}, prefix: "b", value: 1,
-			wantNodes: map[string][]int{"": {}, "a": {1}}, wantAbsent: []string{"b"}, wantErr: `prefix "b" not found in trie`,
+			wantNodes: map[string][]int{"": {}, "a": {1}}, wantAbsent: []string{"b"}, wantErr: ErrPrefixNotFound,
 		},
 		{
 			name: "missing value", entries: map[string][]int{"a": {1}}, prefix: "a", value: 2,
-			wantNodes: map[string][]int{"": {}, "a": {1}}, wantErr: "value not found in trie",
+			wantNodes: map[string][]int{"": {}, "a": {1}}, wantErr: ErrValueNotFound,
 		},
 		{
 			name: "empty internal prefix", entries: map[string][]int{"ab": {1}}, prefix: "a", value: 1,
-			wantNodes: map[string][]int{"": {}, "a": {}, "ab": {1}}, wantErr: "value not found in trie",
+			wantNodes: map[string][]int{"": {}, "a": {}, "ab": {1}}, wantErr: ErrValueNotFound,
 		},
 		{
 			name: "empty trie", value: 0,
-			wantNodes: map[string][]int{"": {}}, wantErr: "value not found in trie",
+			wantNodes: map[string][]int{"": {}}, wantErr: ErrValueNotFound,
 		},
 		{
 			name: "UTF-8 shared branch", entries: map[string][]int{"é/猫": {1}, "é/犬": {2}}, prefix: "é/猫", value: 1,
@@ -289,12 +289,8 @@ func TestTrieRemove(t *testing.T) {
 			}
 			root := trie.root
 			err := trie.Remove(tt.prefix, tt.value)
-			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Errorf("Remove(%q, %d) with entries %v error = %v, want %q", tt.prefix, tt.value, tt.entries, err, tt.wantErr)
-				}
-			} else if err != nil {
-				t.Errorf("Remove(%q, %d) with entries %v error = %v, want nil", tt.prefix, tt.value, tt.entries, err)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Remove(%q, %d) with entries %v error = %v, want %v", tt.prefix, tt.value, tt.entries, err, tt.wantErr)
 			}
 			if trie.root == nil || trie.root != root {
 				t.Errorf("Remove(%q, %d) root = %p, want original root %p", tt.prefix, tt.value, trie.root, root)
@@ -314,8 +310,8 @@ func TestTrieRemove(t *testing.T) {
 				}
 			}
 			for _, prefix := range tt.wantAbsent {
-				if node, err := trie.Find(prefix); err == nil || node != nil {
-					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want nil and an error", prefix, tt.prefix, tt.value, node, err)
+				if node, err := trie.Find(prefix); !errors.Is(err, ErrPrefixNotFound) || node != nil {
+					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want nil and %v", prefix, tt.prefix, tt.value, node, err, ErrPrefixNotFound)
 				}
 			}
 
@@ -487,7 +483,7 @@ func TestTrieMapSubtree(t *testing.T) {
 		entries map[string][]int
 		prefix  string
 		want    []int
-		wantErr bool
+		wantErr error
 	}{
 		{name: "empty trie"},
 		{name: "single value", entries: map[string][]int{"a": {0}}, prefix: "a", want: []int{0}},
@@ -496,7 +492,7 @@ func TestTrieMapSubtree(t *testing.T) {
 		{name: "leaf", entries: entries, prefix: "ab", want: []int{1, 2}},
 		{name: "sibling", entries: entries, prefix: "b", want: []int{4}},
 		{name: "internal node without values", entries: map[string][]int{"ab": {2}}, prefix: "a", want: []int{2}},
-		{name: "missing prefix", entries: entries, prefix: "z", wantErr: true},
+		{name: "missing prefix", entries: entries, prefix: "z", wantErr: ErrPrefixNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -508,8 +504,8 @@ func TestTrieMapSubtree(t *testing.T) {
 			err := trie.MapSubtree(tt.prefix, func(value int) {
 				got = append(got, value)
 			})
-			if (err != nil) != tt.wantErr {
-				t.Errorf("MapSubtree(%q) with entries %v error = %v, want error = %t", tt.prefix, tt.entries, err, tt.wantErr)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("MapSubtree(%q) with entries %v error = %v, want %v", tt.prefix, tt.entries, err, tt.wantErr)
 			}
 			slices.Sort(got)
 			if !slices.Equal(got, tt.want) {
@@ -565,8 +561,8 @@ func TestTrieManyEntries(t *testing.T) {
 					t.Errorf("Remove(%q, %d) with %d entries error = %v, want nil", prefix, i, tt.count, err)
 					return
 				}
-				if node, err := trie.Find(prefix); err == nil || node != nil {
-					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want nil and an error", prefix, prefix, i, node, err)
+				if node, err := trie.Find(prefix); !errors.Is(err, ErrPrefixNotFound) || node != nil {
+					t.Errorf("Find(%q) after Remove(%q, %d) = %p, error = %v, want nil and %v", prefix, prefix, i, node, err, ErrPrefixNotFound)
 				}
 			}
 			if trie.root == nil || !trie.root.IsEmpty() {

@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"errors"
 	"slices"
 	"testing"
 )
@@ -89,8 +90,8 @@ func TestNodeAddValue(t *testing.T) {
 				before := slices.Clone(node.values)
 				err := node.AddValue(value)
 				if tt.wantErrAt[i] {
-					if err == nil || err.Error() != "value already exists" {
-						t.Errorf("AddValue(%d) at index %d in %v error = %v, want %q", value, i, tt.values, err, "value already exists")
+					if !errors.Is(err, ErrValueExists) {
+						t.Errorf("AddValue(%d) at index %d in %v error = %v, want %v", value, i, tt.values, err, ErrValueExists)
 					}
 					if !slices.Equal(node.values, before) {
 						t.Errorf("AddValue(%d) at index %d in %v changed values to %v, want unchanged values %v", value, i, tt.values, node.values, before)
@@ -131,8 +132,8 @@ func TestNodeRemoveValue(t *testing.T) {
 			for i, value := range tt.values {
 				err := node.AddValue(value)
 				if tt.wantErrAt[i] {
-					if err == nil || err.Error() != "value already exists" {
-						t.Errorf("AddValue(%d) at setup index %d in %v error = %v, want %q", value, i, tt.values, err, "value already exists")
+					if !errors.Is(err, ErrValueExists) {
+						t.Errorf("AddValue(%d) at setup index %d in %v error = %v, want %v", value, i, tt.values, err, ErrValueExists)
 					}
 				} else if err != nil {
 					t.Errorf("AddValue(%d) at setup index %d in %v error = %v, want nil", value, i, tt.values, err)
@@ -164,8 +165,8 @@ func TestNodeRemoveValuePointerIdentity(t *testing.T) {
 			return
 		}
 	}
-	if err := node.AddValue(first); err == nil || err.Error() != "value already exists" {
-		t.Errorf("AddValue(%p) with values [%p %p] error = %v, want %q", first, first, second, err, "value already exists")
+	if err := node.AddValue(first); !errors.Is(err, ErrValueExists) {
+		t.Errorf("AddValue(%p) with values [%p %p] error = %v, want %v", first, first, second, err, ErrValueExists)
 	}
 
 	if got := node.RemoveValue(missing); got {
