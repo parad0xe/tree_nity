@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -13,13 +14,13 @@ func TestMessageJSONToMessage(t *testing.T) {
 		name    string
 		input   string
 		want    Message
-		wantErr string
+		wantErr error
 	}{
-		{name: "missing fields", input: `{}`, wantErr: "missing message key"},
-		{name: "missing key", input: `{"value":"v"}`, wantErr: "missing message key"},
-		{name: "null key", input: `{"key":null,"value":"v"}`, wantErr: "missing message key"},
-		{name: "missing value", input: `{"key":"k"}`, wantErr: "missing message value"},
-		{name: "null value", input: `{"key":"k","value":null}`, wantErr: "missing message value"},
+		{name: "missing fields", input: `{}`, wantErr: ErrMissingMessageKey},
+		{name: "missing key", input: `{"value":"v"}`, wantErr: ErrMissingMessageKey},
+		{name: "null key", input: `{"key":null,"value":"v"}`, wantErr: ErrMissingMessageKey},
+		{name: "missing value", input: `{"key":"k"}`, wantErr: ErrMissingMessageValue},
+		{name: "null value", input: `{"key":"k","value":null}`, wantErr: ErrMissingMessageValue},
 		{name: "empty strings", input: `{"key":"","value":""}`, want: Message{}},
 		{name: "minimal key", input: `{"key":"k","value":""}`, want: Message{key: "k"}},
 		{name: "minimal value", input: `{"key":"","value":"v"}`, want: Message{value: "v"}},
@@ -42,17 +43,17 @@ func TestMessageJSONToMessage(t *testing.T) {
 		{
 			name:    "oversized key",
 			input:   fmt.Sprintf(`{"key":%q,"value":""}`, strings.Repeat("k", 1025)),
-			wantErr: "message exceeds 1024 bytes",
+			wantErr: ErrMessageTooLarge,
 		},
 		{
 			name:    "oversized value",
 			input:   fmt.Sprintf(`{"key":"","value":%q}`, strings.Repeat("v", 1025)),
-			wantErr: "message exceeds 1024 bytes",
+			wantErr: ErrMessageTooLarge,
 		},
 		{
 			name:    "combined size exceeds limit",
 			input:   fmt.Sprintf(`{"key":%q,"value":%q}`, strings.Repeat("k", 512), strings.Repeat("v", 513)),
-			wantErr: "message exceeds 1024 bytes",
+			wantErr: ErrMessageTooLarge,
 		},
 		{
 			name:  "UTF-8 at byte limit",
@@ -62,7 +63,7 @@ func TestMessageJSONToMessage(t *testing.T) {
 		{
 			name:    "UTF-8 exceeds byte limit",
 			input:   fmt.Sprintf(`{"key":"k","value":%q}`, strings.Repeat("é", 512)),
-			wantErr: "message exceeds 1024 bytes",
+			wantErr: ErrMessageTooLarge,
 		},
 	}
 
@@ -75,12 +76,8 @@ func TestMessageJSONToMessage(t *testing.T) {
 			}
 
 			got, err := input.toMessage()
-			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Errorf("toMessage(%s) error = %v, want %q", tt.input, err, tt.wantErr)
-				}
-			} else if err != nil {
-				t.Errorf("toMessage(%s) error = %v, want nil", tt.input, err)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("toMessage(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
 			if got != tt.want {
 				t.Errorf("toMessage(%s) = %+v, want %+v", tt.input, got, tt.want)
