@@ -356,6 +356,19 @@ func TestTimedRecvPastDeadlineReturnsWaitingFrame(t *testing.T) {
 	}
 }
 
+func TestTimedRecvRejectsZeroDeadline(t *testing.T) {
+	name := queueName(t)
+	reader := createReader(t, name)
+	writer := createWriter(t, name)
+	frame := []byte("frame")
+	if err := writer.send(frame, priorityNormal); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
+	}
+	if _, err := reader.timedRecv(time.Time{}); !errors.Is(err, syscall.EINVAL) {
+		t.Errorf("TimedRecv() with the zero time error = %v, want %v", err, syscall.EINVAL)
+	}
+}
+
 func TestSendRejectsEmptyFrame(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
