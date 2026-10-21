@@ -26,8 +26,9 @@ func (r *Receiver) Recv() ([]byte, error) {
 }
 
 // TimedRecv waits until deadline for a frame and returns its content. A past
-// deadline only returns a frame already waiting. The returned error matches
-// os.ErrDeadlineExceeded when no frame arrives in time.
+// deadline only returns a frame already waiting. The zero time is not a valid
+// deadline. The returned error matches os.ErrDeadlineExceeded when no frame
+// arrives in time.
 func (r *Receiver) TimedRecv(deadline time.Time) ([]byte, error) {
 	return r.queue.timedRecv(deadline)
 }

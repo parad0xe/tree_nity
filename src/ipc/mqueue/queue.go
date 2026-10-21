@@ -118,7 +118,8 @@ func toTimespec(deadline time.Time) C.struct_timespec {
 }
 
 // timedRecv waits until deadline for a frame and returns its content. A past
-// deadline only returns a frame already waiting.
+// deadline only returns a frame already waiting. The zero time is not a valid
+// deadline.
 func (q *queue) timedRecv(deadline time.Time) ([]byte, error) {
 	buffer := make([]byte, q.frameSize)
 
