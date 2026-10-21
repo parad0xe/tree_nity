@@ -19,23 +19,23 @@ func newPayloadJSON(opcode op, raw json.RawMessage) (payloadJSON, error) {
 	var tmpPayload payloadJSON
 
 	switch opcode {
-	case list_topic:
+	case listTopic:
 		tmpPayload = &listTopicPayloadJSON{}
-	case create_topic:
+	case createTopic:
 		tmpPayload = &createTopicPayloadJSON{}
-	case consumer_info:
+	case consumerInfo:
 		tmpPayload = &consumerInfoPayloadJSON{}
-	case topic_subsription:
+	case topicSubscription:
 		tmpPayload = &topicSubscriptionPayloadJSON{}
-	case aknowledgement:
+	case acknowledgement:
 		tmpPayload = &acknowledgementPayloadJSON{}
-	case check_topic:
+	case checkTopic:
 		tmpPayload = &checkTopicPayloadJSON{}
-	case produce_message:
+	case produceMessage:
 		tmpPayload = &produceMessagePayloadJSON{}
-	case consumer_disconnect:
+	case consumerDisconnect:
 		tmpPayload = &consumerDisconnectPayloadJSON{}
-	case consumer_heartbeat:
+	case consumerHeartbeat:
 		tmpPayload = &consumerHeartbeatPayloadJSON{}
 	default:
 		return nil, fmt.Errorf("unknown opcode: %d", opcode)

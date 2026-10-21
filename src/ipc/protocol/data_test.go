@@ -70,12 +70,12 @@ func TestDataJSONToData(t *testing.T) {
 	}{
 		{
 			name:     "client message",
-			opcode:   produce_message,
+			opcode:   produceMessage,
 			emitter:  client,
 			metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`,
 			payload:  `{"raw":false,"message":{"key":"key","value":"value"}}`,
 			want: Data{
-				opcode:   produce_message,
+				opcode:   produceMessage,
 				emitter:  client,
 				metadata: ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
 				payload:  &ProduceMessagePayload{raw: false, message: Message{key: "key", value: "value"}},
@@ -83,12 +83,12 @@ func TestDataJSONToData(t *testing.T) {
 		},
 		{
 			name:     "server payload",
-			opcode:   list_topic,
+			opcode:   listTopic,
 			emitter:  server,
 			metadata: `{}`,
 			payload:  `{}`,
 			want: Data{
-				opcode:   list_topic,
+				opcode:   listTopic,
 				emitter:  server,
 				metadata: ServerMetadata{},
 				payload:  &ListTopicPayload{},
@@ -102,9 +102,9 @@ func TestDataJSONToData(t *testing.T) {
 		{name: "unknown opcode", opcode: 9, emitter: server, metadata: `{}`, payload: `{}`, wantErr: true},
 		{name: "invalid payload JSON", emitter: server, metadata: `{}`, payload: `{`, wantErr: true},
 		{name: "unknown payload field", emitter: server, metadata: `{}`, payload: `{"extra":true}`, wantErr: true},
-		{name: "missing raw", opcode: produce_message, emitter: server, metadata: `{}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: true},
-		{name: "missing message", opcode: produce_message, emitter: server, metadata: `{}`, payload: `{"raw":true}`, wantErr: true},
-		{name: "invalid message", opcode: produce_message, emitter: server, metadata: `{}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: true},
+		{name: "missing raw", opcode: produceMessage, emitter: server, metadata: `{}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: true},
+		{name: "missing message", opcode: produceMessage, emitter: server, metadata: `{}`, payload: `{"raw":true}`, wantErr: true},
+		{name: "invalid message", opcode: produceMessage, emitter: server, metadata: `{}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: true},
 	}
 
 	for _, tt := range tests {

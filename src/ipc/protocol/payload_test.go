@@ -16,26 +16,26 @@ func TestNewPayloadJSON(t *testing.T) {
 		input  string
 		want   Payload
 	}{
-		{name: "list topic", opcode: list_topic, input: `{}`, want: &ListTopicPayload{}},
-		{name: "create topic", opcode: create_topic, input: `{}`, want: &CreateTopicPayload{}},
-		{name: "consumer info", opcode: consumer_info, input: `{}`, want: &ConsumerInfoPayload{}},
-		{name: "topic subscription", opcode: topic_subsription, input: `{}`, want: &TopicSubscriptionPayload{}},
-		{name: "acknowledgement", opcode: aknowledgement, input: `{}`, want: &AcknowledgementPayload{}},
-		{name: "check topic", opcode: check_topic, input: `{}`, want: &CheckTopicPayload{}},
+		{name: "list topic", opcode: listTopic, input: `{}`, want: &ListTopicPayload{}},
+		{name: "create topic", opcode: createTopic, input: `{}`, want: &CreateTopicPayload{}},
+		{name: "consumer info", opcode: consumerInfo, input: `{}`, want: &ConsumerInfoPayload{}},
+		{name: "topic subscription", opcode: topicSubscription, input: `{}`, want: &TopicSubscriptionPayload{}},
+		{name: "acknowledgement", opcode: acknowledgement, input: `{}`, want: &AcknowledgementPayload{}},
+		{name: "check topic", opcode: checkTopic, input: `{}`, want: &CheckTopicPayload{}},
 		{
 			name:   "produce message",
-			opcode: produce_message,
+			opcode: produceMessage,
 			input:  `{"raw":true,"message":{"key":"key","value":"value"}}`,
 			want:   &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
 		},
 		{
 			name:   "produce non-raw message",
-			opcode: produce_message,
+			opcode: produceMessage,
 			input:  `{"raw":false,"message":{"key":"","value":""}}`,
 			want:   &ProduceMessagePayload{raw: false, message: Message{}},
 		},
-		{name: "consumer disconnect", opcode: consumer_disconnect, input: `{}`, want: &ConsumerDisconnectPayload{}},
-		{name: "consumer heartbeat", opcode: consumer_heartbeat, input: `{}`, want: &ConsumerHeartbeatPayload{}},
+		{name: "consumer disconnect", opcode: consumerDisconnect, input: `{}`, want: &ConsumerDisconnectPayload{}},
+		{name: "consumer heartbeat", opcode: consumerHeartbeat, input: `{}`, want: &ConsumerHeartbeatPayload{}},
 	}
 
 	for _, tt := range tests {
@@ -75,18 +75,18 @@ func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "negative opcode", opcode: -1, input: `{}`},
 		{name: "unknown opcode", opcode: 9, input: `{}`},
-		{name: "empty input", opcode: list_topic},
-		{name: "whitespace", opcode: list_topic, input: " \n\t"},
-		{name: "malformed JSON", opcode: list_topic, input: `{`},
-		{name: "array", opcode: list_topic, input: `[]`},
-		{name: "string", opcode: list_topic, input: `"payload"`},
-		{name: "number", opcode: list_topic, input: `1`},
-		{name: "boolean", opcode: list_topic, input: `false`},
-		{name: "raw has wrong type", opcode: produce_message, input: `{"raw":"true","message":{"key":"k","value":"v"}}`},
-		{name: "message has wrong type", opcode: produce_message, input: `{"raw":true,"message":[]}`},
-		{name: "key has wrong type", opcode: produce_message, input: `{"raw":true,"message":{"key":1,"value":"v"}}`},
-		{name: "value has wrong type", opcode: produce_message, input: `{"raw":true,"message":{"key":"k","value":false}}`},
-		{name: "unknown message field", opcode: produce_message, input: `{"raw":true,"message":{"key":"k","value":"v","offset":1}}`},
+		{name: "empty input", opcode: listTopic},
+		{name: "whitespace", opcode: listTopic, input: " \n\t"},
+		{name: "malformed JSON", opcode: listTopic, input: `{`},
+		{name: "array", opcode: listTopic, input: `[]`},
+		{name: "string", opcode: listTopic, input: `"payload"`},
+		{name: "number", opcode: listTopic, input: `1`},
+		{name: "boolean", opcode: listTopic, input: `false`},
+		{name: "raw has wrong type", opcode: produceMessage, input: `{"raw":"true","message":{"key":"k","value":"v"}}`},
+		{name: "message has wrong type", opcode: produceMessage, input: `{"raw":true,"message":[]}`},
+		{name: "key has wrong type", opcode: produceMessage, input: `{"raw":true,"message":{"key":1,"value":"v"}}`},
+		{name: "value has wrong type", opcode: produceMessage, input: `{"raw":true,"message":{"key":"k","value":false}}`},
+		{name: "unknown message field", opcode: produceMessage, input: `{"raw":true,"message":{"key":"k","value":"v","offset":1}}`},
 	}
 
 	for _, tt := range tests {
@@ -123,13 +123,13 @@ func TestProduceMessagePayloadJSONToPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decoded, err := newPayloadJSON(produce_message, json.RawMessage(tt.input))
+			decoded, err := newPayloadJSON(produceMessage, json.RawMessage(tt.input))
 			if err != nil {
-				t.Errorf("newPayloadJSON(%d, %s) error = %v, want nil", produce_message, tt.input, err)
+				t.Errorf("newPayloadJSON(%d, %s) error = %v, want nil", produceMessage, tt.input, err)
 				return
 			}
 			if decoded == nil {
-				t.Errorf("newPayloadJSON(%d, %s) = nil, want a payload decoder", produce_message, tt.input)
+				t.Errorf("newPayloadJSON(%d, %s) = nil, want a payload decoder", produceMessage, tt.input)
 				return
 			}
 

@@ -15,32 +15,32 @@ func TestNewDataFromFrame(t *testing.T) {
 		payload string
 		want    Payload
 	}{
-		{name: "list topic", opcode: list_topic, payload: `{}`, want: &ListTopicPayload{}},
-		{name: "create topic", opcode: create_topic, payload: `{}`, want: &CreateTopicPayload{}},
-		{name: "consumer info", opcode: consumer_info, payload: `{}`, want: &ConsumerInfoPayload{}},
-		{name: "topic subscription", opcode: topic_subsription, payload: `{}`, want: &TopicSubscriptionPayload{}},
-		{name: "acknowledgement", opcode: aknowledgement, payload: `{}`, want: &AcknowledgementPayload{}},
-		{name: "check topic", opcode: check_topic, payload: `{}`, want: &CheckTopicPayload{}},
+		{name: "list topic", opcode: listTopic, payload: `{}`, want: &ListTopicPayload{}},
+		{name: "create topic", opcode: createTopic, payload: `{}`, want: &CreateTopicPayload{}},
+		{name: "consumer info", opcode: consumerInfo, payload: `{}`, want: &ConsumerInfoPayload{}},
+		{name: "topic subscription", opcode: topicSubscription, payload: `{}`, want: &TopicSubscriptionPayload{}},
+		{name: "acknowledgement", opcode: acknowledgement, payload: `{}`, want: &AcknowledgementPayload{}},
+		{name: "check topic", opcode: checkTopic, payload: `{}`, want: &CheckTopicPayload{}},
 		{
 			name:    "produce raw message",
-			opcode:  produce_message,
+			opcode:  produceMessage,
 			payload: `{"raw":true,"message":{"key":"key","value":"value"}}`,
 			want:    &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
 		},
 		{
 			name:    "produce empty non-raw message",
-			opcode:  produce_message,
+			opcode:  produceMessage,
 			payload: `{"raw":false,"message":{"key":"","value":""}}`,
 			want:    &ProduceMessagePayload{},
 		},
 		{
 			name:    "produce message at byte limit",
-			opcode:  produce_message,
+			opcode:  produceMessage,
 			payload: fmt.Sprintf(`{"raw":false,"message":{"key":"","value":%q}}`, strings.Repeat("é", 512)),
 			want:    &ProduceMessagePayload{message: Message{value: strings.Repeat("é", 512)}},
 		},
-		{name: "consumer disconnect", opcode: consumer_disconnect, payload: `{}`, want: &ConsumerDisconnectPayload{}},
-		{name: "consumer heartbeat", opcode: consumer_heartbeat, payload: `{}`, want: &ConsumerHeartbeatPayload{}},
+		{name: "consumer disconnect", opcode: consumerDisconnect, payload: `{}`, want: &ConsumerDisconnectPayload{}},
+		{name: "consumer heartbeat", opcode: consumerHeartbeat, payload: `{}`, want: &ConsumerHeartbeatPayload{}},
 	}
 	emitters := []struct {
 		name     string
