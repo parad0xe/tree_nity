@@ -1,8 +1,6 @@
 package consumer
 
-import (
-	id "tree_nity/src/server/utils"
-)
+import "tree_nity/src/server/utils"
 
 type Info struct {
 	id      id.ID

@@ -8,7 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	id "tree_nity/src/server/utils"
+	"tree_nity/src/ipc"
+	"tree_nity/src/server/utils"
 	"tree_nity/src/server/utils/hashmap"
 )
 
@@ -35,8 +36,29 @@ func getTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Consumer
 		t.Errorf("GetConsumer(%q) = %+v, error = %v, want a consumer with a connection and nil error", consumerID, c, err)
 		return nil
 	}
-	t.Cleanup(c.Connection.Close)
+	cleanupTestConnection(t, c.Connection)
 	return c
+}
+
+// TestManagerGetConsumerPropagatesConnectionError checks initialization errors and metadata ownership.
+func TestManagerGetConsumerPropagatesConnectionError(t *testing.T) {
+	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: "/consumer-1"}
+	manager := newTestManager(t, original)
+	if manager == nil {
+		return
+	}
+	c, err := manager.GetConsumer(original.id)
+	if c != nil {
+		cleanupTestConnection(t, c.Connection)
+		t.Errorf("GetConsumer(%q) = %+v, want nil on connection initialization failure", original.id, c)
+	}
+	if !errors.Is(err, ipc.ErrNilEncoder) {
+		t.Errorf("GetConsumer(%q) error = %v, want %v", original.id, err, ipc.ErrNilEncoder)
+	}
+	stored, exists := manager.consumerTable.Get(original.id)
+	if !exists || stored == nil || *stored != original {
+		t.Errorf("stored metadata for %q after failed GetConsumer = %+v, exists = %t, want %+v and true", original.id, stored, exists, original)
+	}
 }
 
 // TestManagerUninitialized checks all public operations on missing manager state.
@@ -247,7 +269,9 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if c, err := manager.GetConsumer(original.id); c != nil || !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetConsumer(%q) after removal = %+v, error = %v, want nil and %v", original.id, c, err, ErrNotFound)
 	}
-	active.Connection.Close()
+	if err := active.Connection.Close(); err != nil {
+		t.Errorf("Close() on the connection retained after RemoveConsumer(%q) error = %v, want nil", original.id, err)
+	}
 	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
 		t.Errorf("Close() on the connection retained after RemoveConsumer(%q): context error = %v, want %v", original.id, err, context.Canceled)
 	}

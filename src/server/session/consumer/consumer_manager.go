@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"fmt"
 	"sync"
 
 	"tree_nity/src/server/utils"
@@ -36,19 +37,27 @@ func (m *Manager) AddConsumer(id id.ID, offset uint32, prefix string, ipcPath st
 
 // GetConsumer returns a copy of the stored metadata with a new connection.
 // It returns ErrNotFound when the consumer ID is absent from the manager.
+// Connection initialization errors leave the stored metadata unchanged.
 func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
 
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	info, exists := m.consumerTable.Get(id)
 	if !exists {
+		m.mu.RUnlock()
 		return nil, ErrNotFound
 	}
+	consumerInfo := *info
+	m.mu.RUnlock()
 
-	return newConsumer(info, newConnection(info.ipcPath)), nil
+	connection, err := newConnection(consumerInfo.ipcPath)
+	if err != nil {
+		return nil, fmt.Errorf("connect consumer %q: %w", id, err)
+	}
+
+	return newConsumer(&consumerInfo, connection), nil
 }
 
 // RemoveConsumer deletes stored metadata; active connections belong to their topics.
