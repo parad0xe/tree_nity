@@ -20,9 +20,9 @@ const (
 
 var errUnexpectedRecv = errors.New("unexpected recvFrame call")
 
-func testPrefix(t *testing.T) string {
+func testIPCPath(t *testing.T) string {
 	t.Helper()
-	return "test." + t.Name()
+	return fmt.Sprintf("/test.%s.%d", t.Name(), os.Getpid())
 }
 
 func testContext(t *testing.T) context.Context {
@@ -45,11 +45,11 @@ func (r *recordingDecoder) decode(frame []byte) (protocol.Data, error) {
 	return protocol.Data{}, nil
 }
 
-func newTestInbound(t *testing.T, prefix string, decode DecodeFunc) *Inbound {
+func newTestInbound(t *testing.T, ipcPath string, decode DecodeFunc) *Inbound {
 	t.Helper()
-	in, err := NewInbound(prefix, decode)
+	in, err := NewInbound(ipcPath, decode)
 	if err != nil {
-		t.Fatalf("NewInbound(%q) error = %v, want nil", prefix, err)
+		t.Fatalf("NewInbound(%q) error = %v, want nil", ipcPath, err)
 	}
 	t.Cleanup(func() {
 		if err := in.Drop(); err != nil {
@@ -59,9 +59,9 @@ func newTestInbound(t *testing.T, prefix string, decode DecodeFunc) *Inbound {
 	return in
 }
 
-func tryNewInbound(t *testing.T, prefix string) error {
+func tryNewInbound(t *testing.T, ipcPath string) error {
 	t.Helper()
-	in, err := NewInbound(prefix, ignoringDecoder)
+	in, err := NewInbound(ipcPath, ignoringDecoder)
 	if err == nil {
 		t.Cleanup(func() {
 			if err := in.Drop(); err != nil {
@@ -75,7 +75,7 @@ func tryNewInbound(t *testing.T, prefix string) error {
 func newUnconnectedInbound(t *testing.T, decode DecodeFunc) *Inbound {
 	t.Helper()
 	return &Inbound{
-		ipcPath: "/" + testPrefix(t),
+		ipcPath: testIPCPath(t),
 		decode:  decode,
 	}
 }
@@ -135,43 +135,49 @@ func (c fixedDeadlineContext) Deadline() (time.Time, bool) {
 }
 
 func TestNewInboundCreatesQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
-	if err := tryConnect(t, in.IPCPath()); err != nil {
-		t.Errorf("NewSender(%q) error = %v, want nil", in.IPCPath(), err)
+	ipcPath := testIPCPath(t)
+	newTestInbound(t, ipcPath, ignoringDecoder)
+	if err := tryConnect(t, ipcPath); err != nil {
+		t.Errorf("NewSender(%q) error = %v, want nil", ipcPath, err)
 	}
 }
 
-func TestNewInboundNamesQueueAfterPID(t *testing.T) {
-	prefix := "/" + testPrefix(t) + "."
-	in := newTestInbound(t, prefix, ignoringDecoder)
-	want := fmt.Sprintf("/%s.%d", testPrefix(t), os.Getpid())
-	if got := in.IPCPath(); got != want {
-		t.Errorf("NewInbound(%q) IPCPath() = %q, want %q", prefix, got, want)
+func TestNewInboundKeepsGivenPath(t *testing.T) {
+	ipcPath := testIPCPath(t)
+	in := newTestInbound(t, ipcPath, ignoringDecoder)
+	if got := in.IPCPath(); got != ipcPath {
+		t.Errorf("NewInbound(%q) IPCPath() = %q, want %q", ipcPath, got, ipcPath)
 	}
 }
 
 func TestNewInboundRejectsExistingQueue(t *testing.T) {
-	prefix := testPrefix(t)
-	newTestInbound(t, prefix, ignoringDecoder)
-	if err := tryNewInbound(t, prefix); !errors.Is(err, os.ErrExist) {
-		t.Errorf("NewInbound(%q) error = %v, want %v", prefix, err, os.ErrExist)
+	ipcPath := testIPCPath(t)
+	newTestInbound(t, ipcPath, ignoringDecoder)
+	if err := tryNewInbound(t, ipcPath); !errors.Is(err, os.ErrExist) {
+		t.Errorf("NewInbound(%q) error = %v, want %v", ipcPath, err, os.ErrExist)
+	}
+}
+
+func TestNewInboundRejectsInvalidPath(t *testing.T) {
+	ipcPath := "invalid"
+	if err := tryNewInbound(t, ipcPath); !errors.Is(err, mqueue.ErrInvalidName) {
+		t.Errorf("NewInbound(%q) error = %v, want %v", ipcPath, err, mqueue.ErrInvalidName)
 	}
 }
 
 func TestNewInboundRejectsNilDecoder(t *testing.T) {
-	prefix := testPrefix(t)
-	if _, err := NewInbound(prefix, nil); !errors.Is(err, ErrNilDecoder) {
-		t.Errorf("NewInbound(%q, nil) error = %v, want %v", prefix, err, ErrNilDecoder)
+	ipcPath := testIPCPath(t)
+	if _, err := NewInbound(ipcPath, nil); !errors.Is(err, ErrNilDecoder) {
+		t.Errorf("NewInbound(%q, nil) error = %v, want %v", ipcPath, err, ErrNilDecoder)
 	}
-	ipcPath := fmt.Sprintf("/%s.%d", prefix, os.Getpid())
 	if err := tryConnect(t, ipcPath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("NewSender(%q) after NewInbound(%q, nil) error = %v, want %v", ipcPath, prefix, err, os.ErrNotExist)
+		t.Errorf("NewSender(%q) after NewInbound(%q, nil) error = %v, want %v", ipcPath, ipcPath, err, os.ErrNotExist)
 	}
 }
 
 func TestRecvDecodesFrame(t *testing.T) {
 	rec := &recordingDecoder{}
-	in := newTestInbound(t, testPrefix(t), rec.decode)
+	in := newTestInbound(t, testIPCPath(t), rec.decode)
 	frame := []byte(testFrame)
 	if err := connect(t, in.IPCPath()).Send(frame); err != nil {
 		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
@@ -186,7 +192,7 @@ func TestRecvDecodesFrame(t *testing.T) {
 
 func TestRecvRejectsInvalidFrame(t *testing.T) {
 	errDecode := errors.New("decode failure")
-	in := newTestInbound(t, testPrefix(t), func([]byte) (protocol.Data, error) {
+	in := newTestInbound(t, testIPCPath(t), func([]byte) (protocol.Data, error) {
 		return protocol.Data{}, errDecode
 	})
 	frame := []byte(testFrame)
@@ -266,7 +272,7 @@ func TestRecvCapsSliceAtContextDeadline(t *testing.T) {
 }
 
 func TestRecvReturnsAtDeadline(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	err := startCall(t, "Recv()", func() error {
@@ -279,7 +285,7 @@ func TestRecvReturnsAtDeadline(t *testing.T) {
 }
 
 func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := in.Recv(ctx); !errors.Is(err, context.Canceled) {
@@ -288,10 +294,10 @@ func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 }
 
 func TestDropRemovesQueue(t *testing.T) {
-	prefix := testPrefix(t)
-	in, err := NewInbound(prefix, ignoringDecoder)
+	ipcPath := testIPCPath(t)
+	in, err := NewInbound(ipcPath, ignoringDecoder)
 	if err != nil {
-		t.Fatalf("NewInbound(%q) error = %v, want nil", prefix, err)
+		t.Fatalf("NewInbound(%q) error = %v, want nil", ipcPath, err)
 	}
 	if err := in.Drop(); err != nil {
 		t.Fatalf("Drop() error = %v, want nil", err)
