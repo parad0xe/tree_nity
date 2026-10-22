@@ -22,9 +22,13 @@ type Outbound struct {
 }
 
 // NewOutbound opens the existing queue ipcPath to send protocol data encoded
-// with encode. The returned error matches os.ErrNotExist when the queue does
-// not exist.
+// with encode. The returned error matches ErrNilEncoder when encode is nil, and
+// os.ErrNotExist when the queue does not exist.
 func NewOutbound(ipcPath string, encode EncodeFunc) (*Outbound, error) {
+	if encode == nil {
+		return nil, ErrNilEncoder
+	}
+
 	out := &Outbound{
 		ipcPath: ipcPath,
 		encode:  encode,

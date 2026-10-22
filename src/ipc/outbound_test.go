@@ -96,6 +96,13 @@ func TestNewOutboundRejectsMissingQueue(t *testing.T) {
 	}
 }
 
+func TestNewOutboundRejectsNilEncoder(t *testing.T) {
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	if _, err := NewOutbound(in.IPCPath(), nil); !errors.Is(err, ErrNilEncoder) {
+		t.Errorf("NewOutbound(%q, nil) error = %v, want %v", in.IPCPath(), err, ErrNilEncoder)
+	}
+}
+
 func TestSendReachesInbound(t *testing.T) {
 	rec := &recordingDecoder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)

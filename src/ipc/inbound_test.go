@@ -158,6 +158,17 @@ func TestNewInboundRejectsExistingQueue(t *testing.T) {
 	}
 }
 
+func TestNewInboundRejectsNilDecoder(t *testing.T) {
+	prefix := testPrefix(t)
+	if _, err := NewInbound(prefix, nil); !errors.Is(err, ErrNilDecoder) {
+		t.Errorf("NewInbound(%q, nil) error = %v, want %v", prefix, err, ErrNilDecoder)
+	}
+	ipcPath := fmt.Sprintf("/%s.%d", prefix, os.Getpid())
+	if err := tryConnect(t, ipcPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("NewSender(%q) after NewInbound(%q, nil) error = %v, want %v", ipcPath, prefix, err, os.ErrNotExist)
+	}
+}
+
 func TestRecvDecodesFrame(t *testing.T) {
 	rec := &recordingDecoder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)

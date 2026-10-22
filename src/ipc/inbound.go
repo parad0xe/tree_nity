@@ -23,9 +23,13 @@ type Inbound struct {
 }
 
 // NewInbound creates the queue /<prefix>.<pid> and opens it to receive
-// protocol data decoded with decode. The returned error matches os.ErrExist
-// when the queue already exists.
+// protocol data decoded with decode. The returned error matches ErrNilDecoder
+// when decode is nil, and os.ErrExist when the queue already exists.
 func NewInbound(prefix string, decode DecodeFunc) (*Inbound, error) {
+	if decode == nil {
+		return nil, ErrNilDecoder
+	}
+
 	prefix = strings.TrimPrefix(prefix, "/")
 	prefix = strings.TrimSuffix(prefix, ".")
 
