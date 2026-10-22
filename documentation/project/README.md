@@ -27,7 +27,7 @@ file to reuse the documentation in another project.
 | Static analysis | `go vet ./...`                                                                 |
 | Build           | `make`                                                                         |
 | Test            | `make test`                                                                    |
-| Race detection  | `go test -race ./...`                                                          |
+| Race detection  | `make test`                                                                    |
 
 ## Project rules
 

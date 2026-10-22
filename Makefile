@@ -24,7 +24,7 @@ clean:
 re: clean all
 
 test:
-	go test ./...
+	go test -race ./...
 
 clean-queue:
 	rm -f /dev/mqueue/operator.*
