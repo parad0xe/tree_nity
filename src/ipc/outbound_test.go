@@ -74,7 +74,7 @@ func fillInbound(t *testing.T, in *Inbound) {
 	}
 }
 
-func unconnectedOutbound(t *testing.T) *Outbound {
+func newUnconnectedOutbound(t *testing.T) *Outbound {
 	t.Helper()
 	return &Outbound{
 		ipcPath: "/" + testPrefix(t),
@@ -82,17 +82,17 @@ func unconnectedOutbound(t *testing.T) *Outbound {
 	}
 }
 
-type mockDeadlineContext struct {
+type fixedDeadlineContext struct {
 	context.Context
 	deadline time.Time
 }
 
-func (c mockDeadlineContext) Deadline() (time.Time, bool) {
+func (c fixedDeadlineContext) Deadline() (time.Time, bool) {
 	return c.deadline, true
 }
 
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	if err := tryNewOutbound(t, in.IPCPath()); err != nil {
 		t.Errorf("NewOutbound(%q) error = %v, want nil", in.IPCPath(), err)
 	}
@@ -106,7 +106,7 @@ func TestNewOutboundRejectsMissingQueue(t *testing.T) {
 }
 
 func TestSendReachesInbound(t *testing.T) {
-	rec := &frameRecorder{}
+	rec := &recordingDecoder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	if err := out.Send(testContext(t), protocol.Data{}); err != nil {
@@ -121,7 +121,7 @@ func TestSendReachesInbound(t *testing.T) {
 }
 
 func TestSendAheadOvertakesWaitingData(t *testing.T) {
-	rec := &frameRecorder{}
+	rec := &recordingDecoder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)
 	out := newTestOutbound(t, in.IPCPath(), sequenceEncoder([]byte(testFrame), []byte(otherTestFrame)))
 	if err := out.Send(testContext(t), protocol.Data{}); err != nil {
@@ -141,7 +141,7 @@ func TestSendAheadOvertakesWaitingData(t *testing.T) {
 }
 
 func TestSendRejectsInvalidData(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	errEncode := errors.New("encode failure")
 	out := newTestOutbound(t, in.IPCPath(), func(protocol.Data) ([]byte, error) {
 		return nil, errEncode
@@ -156,7 +156,7 @@ func TestSendRejectsInvalidData(t *testing.T) {
 }
 
 func TestSendRejectsTooLargeFrame(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	frame := bytes.Repeat([]byte("a"), 1<<20)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder(frame))
 	if err := out.Send(testContext(t), protocol.Data{}); !errors.Is(err, mqueue.ErrFrameTooLarge) {
@@ -165,7 +165,7 @@ func TestSendRejectsTooLargeFrame(t *testing.T) {
 }
 
 func TestSendRetriesAfterExpiredSlice(t *testing.T) {
-	out := unconnectedOutbound(t)
+	out := newUnconnectedOutbound(t)
 	calls := 0
 	mockSendFrame := func([]byte, time.Time) error {
 		calls++
@@ -187,7 +187,7 @@ func TestSendRetriesAfterExpiredSlice(t *testing.T) {
 }
 
 func TestSendStopsWhenCancelledAfterExpiredSlice(t *testing.T) {
-	out := unconnectedOutbound(t)
+	out := newUnconnectedOutbound(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	calls := 0
@@ -208,8 +208,8 @@ func TestSendStopsWhenCancelledAfterExpiredSlice(t *testing.T) {
 }
 
 func TestSendCapsSliceAtContextDeadline(t *testing.T) {
-	out := unconnectedOutbound(t)
-	ctx := mockDeadlineContext{Context: context.Background(), deadline: time.Now()}
+	out := newUnconnectedOutbound(t)
+	ctx := fixedDeadlineContext{Context: context.Background(), deadline: time.Now()}
 	var got time.Time
 	mockSendFrame := func(_ []byte, deadline time.Time) error {
 		got = deadline
@@ -224,7 +224,7 @@ func TestSendCapsSliceAtContextDeadline(t *testing.T) {
 }
 
 func TestSendReturnsAtDeadline(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	fillInbound(t, in)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -238,7 +238,7 @@ func TestSendReturnsAtDeadline(t *testing.T) {
 }
 
 func TestSendReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -248,7 +248,7 @@ func TestSendReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 }
 
 func TestCloseKeepsQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	out, err := NewOutbound(in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	if err != nil {
 		t.Fatalf("NewOutbound(%q) error = %v, want nil", in.IPCPath(), err)

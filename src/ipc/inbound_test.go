@@ -30,15 +30,15 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-func ignoreFrame([]byte) (protocol.Data, error) {
+func ignoringDecoder([]byte) (protocol.Data, error) {
 	return protocol.Data{}, nil
 }
 
-type frameRecorder struct {
+type recordingDecoder struct {
 	frames []string
 }
 
-func (r *frameRecorder) decode(frame []byte) (protocol.Data, error) {
+func (r *recordingDecoder) decode(frame []byte) (protocol.Data, error) {
 	r.frames = append(r.frames, string(frame))
 	return protocol.Data{}, nil
 }
@@ -59,7 +59,7 @@ func newTestInbound(t *testing.T, prefix string, decode DecodeFunc) *Inbound {
 
 func tryNewInbound(t *testing.T, prefix string) error {
 	t.Helper()
-	in, err := NewInbound(prefix, ignoreFrame)
+	in, err := NewInbound(prefix, ignoringDecoder)
 	if err == nil {
 		t.Cleanup(func() {
 			if err := in.Drop(); err != nil {
@@ -116,7 +116,7 @@ func startCall(t *testing.T, name string, call func() error) func() error {
 }
 
 func TestNewInboundCreatesQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	if err := tryConnect(t, in.IPCPath()); err != nil {
 		t.Errorf("NewSender(%q) error = %v, want nil", in.IPCPath(), err)
 	}
@@ -124,7 +124,7 @@ func TestNewInboundCreatesQueue(t *testing.T) {
 
 func TestNewInboundNamesQueueAfterPID(t *testing.T) {
 	prefix := "/" + testPrefix(t) + "."
-	in := newTestInbound(t, prefix, ignoreFrame)
+	in := newTestInbound(t, prefix, ignoringDecoder)
 	want := fmt.Sprintf("/%s.%d", testPrefix(t), os.Getpid())
 	if got := in.IPCPath(); got != want {
 		t.Errorf("NewInbound(%q) IPCPath() = %q, want %q", prefix, got, want)
@@ -133,14 +133,14 @@ func TestNewInboundNamesQueueAfterPID(t *testing.T) {
 
 func TestNewInboundRejectsExistingQueue(t *testing.T) {
 	prefix := testPrefix(t)
-	newTestInbound(t, prefix, ignoreFrame)
+	newTestInbound(t, prefix, ignoringDecoder)
 	if err := tryNewInbound(t, prefix); !errors.Is(err, os.ErrExist) {
 		t.Errorf("NewInbound(%q) error = %v, want %v", prefix, err, os.ErrExist)
 	}
 }
 
 func TestRecvDecodesFrame(t *testing.T) {
-	rec := &frameRecorder{}
+	rec := &recordingDecoder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)
 	frame := []byte(testFrame)
 	if err := connect(t, in.IPCPath()).Send(frame); err != nil {
@@ -173,7 +173,7 @@ func TestRecvRejectsInvalidFrame(t *testing.T) {
 }
 
 func TestRecvReturnsWhenCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	ctx, cancel := context.WithCancel(context.Background())
 	wait := startCall(t, "Recv()", func() error {
 		_, err := in.Recv(ctx)
@@ -187,7 +187,7 @@ func TestRecvReturnsWhenCancelled(t *testing.T) {
 }
 
 func TestRecvReturnsAtDeadline(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	err := startCall(t, "Recv()", func() error {
@@ -200,7 +200,7 @@ func TestRecvReturnsAtDeadline(t *testing.T) {
 }
 
 func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := in.Recv(ctx); !errors.Is(err, context.Canceled) {
@@ -209,7 +209,7 @@ func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 }
 
 func TestRecvSkipsStaleWakeFrame(t *testing.T) {
-	rec := &frameRecorder{}
+	rec := &recordingDecoder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)
 	s := connect(t, in.IPCPath())
 	if err := s.SendAhead(wakeFrame); err != nil {
@@ -229,7 +229,7 @@ func TestRecvSkipsStaleWakeFrame(t *testing.T) {
 
 func TestDropRemovesQueue(t *testing.T) {
 	prefix := testPrefix(t)
-	in, err := NewInbound(prefix, ignoreFrame)
+	in, err := NewInbound(prefix, ignoringDecoder)
 	if err != nil {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", prefix, err)
 	}
