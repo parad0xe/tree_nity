@@ -77,27 +77,27 @@ func fillInbound(t *testing.T, in *Inbound) {
 func newUnconnectedOutbound(t *testing.T) *Outbound {
 	t.Helper()
 	return &Outbound{
-		ipcPath: "/" + testPrefix(t),
+		ipcPath: testIPCPath(t),
 		encode:  fixedEncoder([]byte(testFrame)),
 	}
 }
 
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	if err := tryNewOutbound(t, in.IPCPath()); err != nil {
 		t.Errorf("NewOutbound(%q) error = %v, want nil", in.IPCPath(), err)
 	}
 }
 
 func TestNewOutboundRejectsMissingQueue(t *testing.T) {
-	ipcPath := "/" + testPrefix(t)
+	ipcPath := testIPCPath(t)
 	if err := tryNewOutbound(t, ipcPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("NewOutbound(%q) error = %v, want %v", ipcPath, err, os.ErrNotExist)
 	}
 }
 
 func TestNewOutboundRejectsNilEncoder(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	if _, err := NewOutbound(in.IPCPath(), nil); !errors.Is(err, ErrNilEncoder) {
 		t.Errorf("NewOutbound(%q, nil) error = %v, want %v", in.IPCPath(), err, ErrNilEncoder)
 	}
@@ -105,7 +105,7 @@ func TestNewOutboundRejectsNilEncoder(t *testing.T) {
 
 func TestSendReachesInbound(t *testing.T) {
 	rec := &recordingDecoder{}
-	in := newTestInbound(t, testPrefix(t), rec.decode)
+	in := newTestInbound(t, testIPCPath(t), rec.decode)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	if err := out.Send(testContext(t), protocol.Data{}); err != nil {
 		t.Fatalf("Send() error = %v, want nil", err)
@@ -120,7 +120,7 @@ func TestSendReachesInbound(t *testing.T) {
 
 func TestSendAheadOvertakesWaitingData(t *testing.T) {
 	rec := &recordingDecoder{}
-	in := newTestInbound(t, testPrefix(t), rec.decode)
+	in := newTestInbound(t, testIPCPath(t), rec.decode)
 	out := newTestOutbound(t, in.IPCPath(), sequenceEncoder([]byte(testFrame), []byte(otherTestFrame)))
 	if err := out.Send(testContext(t), protocol.Data{}); err != nil {
 		t.Fatalf("Send() error = %v, want nil", err)
@@ -139,7 +139,7 @@ func TestSendAheadOvertakesWaitingData(t *testing.T) {
 }
 
 func TestSendRejectsInvalidData(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	errEncode := errors.New("encode failure")
 	out := newTestOutbound(t, in.IPCPath(), func(protocol.Data) ([]byte, error) {
 		return nil, errEncode
@@ -154,7 +154,7 @@ func TestSendRejectsInvalidData(t *testing.T) {
 }
 
 func TestSendRejectsTooLargeFrame(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	frame := bytes.Repeat([]byte("a"), 1<<20)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder(frame))
 	if err := out.Send(testContext(t), protocol.Data{}); !errors.Is(err, mqueue.ErrFrameTooLarge) {
@@ -222,7 +222,7 @@ func TestSendCapsSliceAtContextDeadline(t *testing.T) {
 }
 
 func TestSendReturnsAtDeadline(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	fillInbound(t, in)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -236,7 +236,7 @@ func TestSendReturnsAtDeadline(t *testing.T) {
 }
 
 func TestSendReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -246,7 +246,7 @@ func TestSendReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 }
 
 func TestCloseKeepsQueue(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
 	out, err := NewOutbound(in.IPCPath(), fixedEncoder([]byte(testFrame)))
 	if err != nil {
 		t.Fatalf("NewOutbound(%q) error = %v, want nil", in.IPCPath(), err)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"tree_nity/src/ipc/mqueue"
@@ -22,21 +21,17 @@ type Inbound struct {
 	decode   DecodeFunc
 }
 
-// NewInbound creates the queue /<prefix>.<pid> and opens it to receive
-// protocol data decoded with decode. The returned error matches ErrNilDecoder
-// when decode is nil, and os.ErrExist when the queue already exists.
-func NewInbound(prefix string, decode DecodeFunc) (*Inbound, error) {
+// NewInbound creates the queue ipcPath and opens it to receive protocol data
+// decoded with decode. The returned error matches ErrNilDecoder when decode is
+// nil, mqueue.ErrInvalidName when ipcPath is not a valid queue name, and
+// os.ErrExist when the queue already exists.
+func NewInbound(ipcPath string, decode DecodeFunc) (*Inbound, error) {
 	if decode == nil {
 		return nil, ErrNilDecoder
 	}
 
-	prefix = strings.TrimPrefix(prefix, "/")
-	prefix = strings.TrimSuffix(prefix, ".")
-
-	pid := os.Getpid()
-
 	in := &Inbound{
-		ipcPath: fmt.Sprintf("/%s.%d", prefix, pid),
+		ipcPath: ipcPath,
 		decode:  decode,
 	}
 
