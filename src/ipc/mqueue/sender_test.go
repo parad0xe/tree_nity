@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 )
 
 func newSender(t *testing.T, name string) *Sender {
@@ -68,6 +69,44 @@ func TestSendAheadOvertakesWaitingFrames(t *testing.T) {
 	}
 	if err := sender.SendAhead(ahead); err != nil {
 		t.Fatalf("SendAhead(%q) error = %v, want nil", ahead, err)
+	}
+	got, err := receiver.Recv()
+	if err != nil {
+		t.Fatalf("Recv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, ahead) {
+		t.Errorf("Recv() = %q, want %q", got, ahead)
+	}
+}
+
+func TestTimedSendReachesReceiver(t *testing.T) {
+	name := queueName(t)
+	receiver := newReceiver(t, name)
+	sender := newSender(t, name)
+	frame := []byte("frame")
+	if err := sender.TimedSend(frame, time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("TimedSend(%q) error = %v, want nil", frame, err)
+	}
+	got, err := receiver.Recv()
+	if err != nil {
+		t.Fatalf("Recv() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("Recv() = %q, want %q", got, frame)
+	}
+}
+
+func TestTimedSendAheadOvertakesWaitingFrames(t *testing.T) {
+	name := queueName(t)
+	receiver := newReceiver(t, name)
+	sender := newSender(t, name)
+	deadline := time.Now().Add(time.Second)
+	normal, ahead := []byte("normal"), []byte("ahead")
+	if err := sender.TimedSend(normal, deadline); err != nil {
+		t.Fatalf("TimedSend(%q) error = %v, want nil", normal, err)
+	}
+	if err := sender.TimedSendAhead(ahead, deadline); err != nil {
+		t.Fatalf("TimedSendAhead(%q) error = %v, want nil", ahead, err)
 	}
 	got, err := receiver.Recv()
 	if err != nil {

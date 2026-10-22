@@ -107,14 +107,23 @@ func (q *queue) recv() ([]byte, error) {
 	return buffer[:size], nil
 }
 
-// timedRecv waits until deadline for a frame and returns its content. A past
-// deadline only returns a frame already waiting.
-func (q *queue) timedRecv(deadline time.Time) ([]byte, error) {
-	buffer := make([]byte, q.frameSize)
-
+// toTimespec converts deadline into the absolute time taken by the timed queue
+// operations.
+func toTimespec(deadline time.Time) C.struct_timespec {
 	var ts C.struct_timespec
 	ts.tv_sec = C.time_t(deadline.Unix())
 	ts.tv_nsec = C.long(deadline.Nanosecond())
+
+	return ts
+}
+
+// timedRecv waits until deadline for a frame and returns its content. A past
+// deadline only returns a frame already waiting. The zero time is not a valid
+// deadline.
+func (q *queue) timedRecv(deadline time.Time) ([]byte, error) {
+	buffer := make([]byte, q.frameSize)
+
+	ts := toTimespec(deadline)
 
 	cbuffer := unsafe.Pointer(&buffer[0])
 	size, err := C.mq_timedreceive(q.mqd, (*C.char)(cbuffer), C.size_t(len(buffer)), nil, &ts)
@@ -128,22 +137,58 @@ func (q *queue) timedRecv(deadline time.Time) ([]byte, error) {
 	return buffer[:size], nil
 }
 
+// checkFrame returns an error matching ErrEmptyFrame when frame is empty, and
+// ErrFrameTooLarge when it exceeds the frame size of the queue.
+func (q *queue) checkFrame(frame []byte) error {
+	if len(frame) == 0 {
+		return ErrEmptyFrame
+	}
+
+	if len(frame) > q.frameSize {
+		return fmt.Errorf("%w: %d bytes, maximum %d", ErrFrameTooLarge, len(frame), q.frameSize)
+	}
+
+	return nil
+}
+
 // send blocks while the queue is full, then sends frame with the given
 // priority. The returned error matches ErrEmptyFrame when frame is empty, and
 // ErrFrameTooLarge when it exceeds the frame size of the queue.
 func (q *queue) send(frame []byte, framePriority priority) error {
-	if len(frame) == 0 {
-		return fmt.Errorf("send to queue %q: %w", q.name, ErrEmptyFrame)
-	}
-
-	if len(frame) > q.frameSize {
-		return fmt.Errorf("send to queue %q: %w: %d bytes, maximum %d", q.name, ErrFrameTooLarge, len(frame), q.frameSize)
+	if err := q.checkFrame(frame); err != nil {
+		return fmt.Errorf("send to queue %q: %w", q.name, err)
 	}
 
 	cbuffer := unsafe.Pointer(&frame[0])
 	retcode, err := C.mq_send(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), C.uint(framePriority))
 	if retcode == -1 {
 		return fmt.Errorf("send to queue %q: %w", q.name, err)
+	}
+
+	return nil
+}
+
+// timedSend waits until deadline for room in the queue, then sends frame with
+// the given priority. A past deadline only sends when the queue has room. The
+// zero time is not a valid deadline. The returned error matches
+// os.ErrDeadlineExceeded when the queue stays full until deadline,
+// ErrEmptyFrame when frame is empty, and ErrFrameTooLarge when it exceeds the
+// frame size of the queue.
+func (q *queue) timedSend(frame []byte, framePriority priority, deadline time.Time) error {
+	if err := q.checkFrame(frame); err != nil {
+		return fmt.Errorf("timed send to queue %q: %w", q.name, err)
+	}
+
+	ts := toTimespec(deadline)
+
+	cbuffer := unsafe.Pointer(&frame[0])
+	retcode, err := C.mq_timedsend(q.mqd, (*C.char)(cbuffer), C.size_t(len(frame)), C.uint(framePriority), &ts)
+	if retcode == -1 {
+		if errors.Is(err, syscall.ETIMEDOUT) {
+			return fmt.Errorf("timed send to queue %q: %w", q.name, os.ErrDeadlineExceeded)
+		}
+
+		return fmt.Errorf("timed send to queue %q: %w", q.name, err)
 	}
 
 	return nil

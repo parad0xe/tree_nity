@@ -1,5 +1,7 @@
 package mqueue
 
+import "time"
+
 // Sender sends frames to an existing queue.
 type Sender struct {
 	queue *queue
@@ -28,6 +30,22 @@ func (s *Sender) Send(frame []byte) error {
 // frames already waiting.
 func (s *Sender) SendAhead(frame []byte) error {
 	return s.queue.send(frame, priorityHigh)
+}
+
+// TimedSend waits until deadline for room in the queue, then sends frame
+// behind the frames already waiting. A past deadline only sends when the queue
+// has room. The zero time is not a valid deadline. The returned error matches
+// os.ErrDeadlineExceeded when the queue stays full until deadline.
+func (s *Sender) TimedSend(frame []byte, deadline time.Time) error {
+	return s.queue.timedSend(frame, priorityNormal, deadline)
+}
+
+// TimedSendAhead waits until deadline for room in the queue, then sends frame
+// ahead of the frames already waiting. A past deadline only sends when the
+// queue has room. The zero time is not a valid deadline. The returned error
+// matches os.ErrDeadlineExceeded when the queue stays full until deadline.
+func (s *Sender) TimedSendAhead(frame []byte, deadline time.Time) error {
+	return s.queue.timedSend(frame, priorityHigh, deadline)
 }
 
 // Close closes the connection. The queue stays available to its owner.
