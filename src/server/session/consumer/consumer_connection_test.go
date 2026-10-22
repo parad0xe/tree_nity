@@ -3,19 +3,64 @@ package consumer
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"syscall"
 	"testing"
+
+	"tree_nity/src/ipc"
+	"tree_nity/src/ipc/mqueue"
+	"tree_nity/src/ipc/protocol"
 )
+
+func newTestConsumerQueue(t *testing.T) string {
+	t.Helper()
+	ipcPath := fmt.Sprintf("/consumer.%s.%d", strings.ReplaceAll(t.Name(), "/", "."), os.Getpid())
+	receiver, err := mqueue.NewReceiver(ipcPath)
+	if err != nil {
+		t.Errorf("NewReceiver(%q) error = %v, want nil", ipcPath, err)
+		return ""
+	}
+	t.Cleanup(func() {
+		if err := receiver.Drop(); err != nil {
+			t.Errorf("Drop() for queue %q error = %v, want nil", ipcPath, err)
+		}
+	})
+	return ipcPath
+}
+
+func cleanupTestConnection(t *testing.T, connection *Connection) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := connection.Close(); err != nil {
+			t.Errorf("Close() for connection %p error = %v, want nil", connection, err)
+		}
+	})
+}
 
 // TestNewConnection checks channel initialization and independence between connections.
 func TestNewConnection(t *testing.T) {
-	ipcPath := "/consumer-test"
-	first, second := newConnection(ipcPath), newConnection(ipcPath)
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	first, err := newConnection(ipcPath)
+	if err != nil {
+		t.Errorf("newConnection(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, first)
+	second, err := newConnection(ipcPath)
+	if err != nil {
+		t.Errorf("second newConnection(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, second)
 	if first == nil || second == nil {
 		t.Errorf("newConnection(%q) twice = (%p, %p), want two connections", ipcPath, first, second)
 		return
 	}
-	t.Cleanup(first.Close)
-	t.Cleanup(second.Close)
 	if first == second {
 		t.Errorf("newConnection(%q) twice returned the same pointer %p, want distinct connections", ipcPath, first)
 	}
@@ -28,6 +73,9 @@ func TestNewConnection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.connection.Outbound == nil {
+				t.Errorf("newConnection(%q).Outbound for %s connection = nil, want an initialized outbound", ipcPath, tt.name)
+			}
 			if tt.connection.MessageChan == nil {
 				t.Errorf("newConnection(%q).MessageChan for %s connection = nil, want an initialized channel", ipcPath, tt.name)
 			}
@@ -47,6 +95,19 @@ func TestNewConnection(t *testing.T) {
 	}
 	if first.HeartbeatChan == second.HeartbeatChan {
 		t.Errorf("newConnection(%q) twice shared HeartbeatChan %v, want distinct channels", ipcPath, first.HeartbeatChan)
+	}
+}
+
+// TestNewConnectionPropagatesEncoderError checks the temporary nil encoder failure.
+func TestNewConnectionPropagatesEncoderError(t *testing.T) {
+	ipcPath := "/consumer-test"
+	connection, err := newConnection(ipcPath)
+	if connection != nil {
+		cleanupTestConnection(t, connection)
+		t.Errorf("newConnection(%q) connection = %p, want nil on initialization failure", ipcPath, connection)
+	}
+	if !errors.Is(err, ipc.ErrNilEncoder) {
+		t.Errorf("newConnection(%q) error = %v, want %v", ipcPath, err, ipc.ErrNilEncoder)
 	}
 }
 
@@ -80,8 +141,11 @@ func TestConnectionCloseWithoutCancel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.connection.Close()
-			tt.connection.Close()
+			for i := 0; i < 2; i++ {
+				if err := tt.connection.Close(); err != nil {
+					t.Errorf("Close() call %d for %s error = %v, want nil", i+1, tt.name, err)
+				}
+			}
 		})
 	}
 }
@@ -108,7 +172,9 @@ func TestConnectionCloseCancelsContext(t *testing.T) {
 				cancel()
 			}
 			for i := 0; i < tt.closeCount; i++ {
-				connection.Close()
+				if err := connection.Close(); err != nil {
+					t.Errorf("Close() call %d with alreadyCanceled=%t error = %v, want nil", i+1, tt.alreadyCanceled, err)
+				}
 			}
 			if err := ctx.Err(); !errors.Is(err, context.Canceled) {
 				t.Errorf("Close() %d times with alreadyCanceled=%t: context error = %v, want %v", tt.closeCount, tt.alreadyCanceled, err, context.Canceled)
@@ -117,5 +183,38 @@ func TestConnectionCloseCancelsContext(t *testing.T) {
 				t.Errorf("Close() %d times with alreadyCanceled=%t: unrelated context error = %v, want nil", tt.closeCount, tt.alreadyCanceled, err)
 			}
 		})
+	}
+}
+
+// TestConnectionCloseOutbound checks descriptor closure, repeated closure, and queue ownership.
+func TestConnectionCloseOutbound(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	outbound, err := ipc.NewOutbound(ipcPath, func(protocol.Data) ([]byte, error) {
+		return []byte("consumer test frame"), nil
+	})
+	if err != nil {
+		t.Errorf("NewOutbound(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	connection := &Connection{Outbound: outbound}
+	cleanupTestConnection(t, connection)
+	for i := 0; i < 2; i++ {
+		if err := connection.Close(); err != nil {
+			t.Errorf("Close() call %d for outbound %q error = %v, want nil", i+1, ipcPath, err)
+		}
+	}
+	if err := outbound.Send(context.Background(), protocol.Data{}); !errors.Is(err, syscall.EBADF) {
+		t.Errorf("Send() after Close() for outbound %q error = %v, want %v", ipcPath, err, syscall.EBADF)
+	}
+	sender, err := mqueue.NewSender(ipcPath)
+	if err != nil {
+		t.Errorf("NewSender(%q) after Close() error = %v, want nil because the receiver still owns the queue", ipcPath, err)
+		return
+	}
+	if err := sender.Close(); err != nil {
+		t.Errorf("Close() for replacement sender %q error = %v, want nil", ipcPath, err)
 	}
 }
