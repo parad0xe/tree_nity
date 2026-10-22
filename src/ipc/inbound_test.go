@@ -18,6 +18,8 @@ const (
 	testTimeout = 5 * time.Second
 )
 
+var errUnexpectedRecv = errors.New("unexpected recvFrame call")
+
 func testPrefix(t *testing.T) string {
 	t.Helper()
 	return "test." + t.Name()
@@ -70,6 +72,14 @@ func tryNewInbound(t *testing.T, prefix string) error {
 	return err
 }
 
+func newUnconnectedInbound(t *testing.T, decode DecodeFunc) *Inbound {
+	t.Helper()
+	return &Inbound{
+		ipcPath: "/" + testPrefix(t),
+		decode:  decode,
+	}
+}
+
 func connect(t *testing.T, name string) *mqueue.Sender {
 	t.Helper()
 	s, err := mqueue.NewSender(name)
@@ -113,6 +123,15 @@ func startCall(t *testing.T, name string, call func() error) func() error {
 			return nil
 		}
 	}
+}
+
+type fixedDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c fixedDeadlineContext) Deadline() (time.Time, bool) {
+	return c.deadline, true
 }
 
 func TestNewInboundCreatesQueue(t *testing.T) {
@@ -172,17 +191,66 @@ func TestRecvRejectsInvalidFrame(t *testing.T) {
 	}
 }
 
-func TestRecvReturnsWhenCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
+func TestRecvRetriesAfterExpiredSlice(t *testing.T) {
+	rec := &recordingDecoder{}
+	in := newUnconnectedInbound(t, rec.decode)
+	calls := 0
+	mockRecvFrame := func(time.Time) ([]byte, error) {
+		calls++
+		switch calls {
+		case 1:
+			return nil, os.ErrDeadlineExceeded
+		case 2:
+			return []byte(testFrame), nil
+		default:
+			return nil, errUnexpectedRecv
+		}
+	}
+	if _, err := in.recv(testContext(t), mockRecvFrame); err != nil {
+		t.Errorf("recv() error = %v, want nil", err)
+	}
+	if calls != 2 {
+		t.Errorf("recv() called recvFrame %d times, want 2", calls)
+	}
+	if want := []string{testFrame}; !slices.Equal(rec.frames, want) {
+		t.Errorf("decoded frames = %q, want %q", rec.frames, want)
+	}
+}
+
+func TestRecvStopsWhenCancelledAfterExpiredSlice(t *testing.T) {
+	in := newUnconnectedInbound(t, ignoringDecoder)
 	ctx, cancel := context.WithCancel(context.Background())
-	wait := startCall(t, "Recv()", func() error {
-		_, err := in.Recv(ctx)
-		return err
-	})
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	if err := wait(); !errors.Is(err, context.Canceled) {
-		t.Errorf("Recv() after cancel error = %v, want %v", err, context.Canceled)
+	defer cancel()
+	calls := 0
+	mockRecvFrame := func(time.Time) ([]byte, error) {
+		calls++
+		if calls > 1 {
+			return nil, errUnexpectedRecv
+		}
+		cancel()
+		return nil, os.ErrDeadlineExceeded
+	}
+	if _, err := in.recv(ctx, mockRecvFrame); !errors.Is(err, context.Canceled) {
+		t.Errorf("recv() error = %v, want %v", err, context.Canceled)
+	}
+	if calls != 1 {
+		t.Errorf("recv() called recvFrame %d times, want 1", calls)
+	}
+}
+
+func TestRecvCapsSliceAtContextDeadline(t *testing.T) {
+	in := newUnconnectedInbound(t, ignoringDecoder)
+	ctx := fixedDeadlineContext{Context: context.Background(), deadline: time.Now()}
+	var got time.Time
+	mockRecvFrame := func(deadline time.Time) ([]byte, error) {
+		got = deadline
+		return []byte(testFrame), nil
+	}
+	if _, err := in.recv(ctx, mockRecvFrame); err != nil {
+		t.Errorf("recv() error = %v, want nil", err)
+	}
+	if !got.Equal(ctx.deadline) {
+		t.Errorf("recv() passed deadline %v to recvFrame, want the context deadline %v", got, ctx.deadline)
 	}
 }
 
@@ -205,25 +273,6 @@ func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 	cancel()
 	if _, err := in.Recv(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("Recv() with a cancelled context error = %v, want %v", err, context.Canceled)
-	}
-}
-
-func TestRecvSkipsStaleWakeFrame(t *testing.T) {
-	rec := &recordingDecoder{}
-	in := newTestInbound(t, testPrefix(t), rec.decode)
-	s := connect(t, in.IPCPath())
-	if err := s.SendAhead(wakeFrame); err != nil {
-		t.Fatalf("SendAhead(%q) error = %v, want nil", wakeFrame, err)
-	}
-	frame := []byte(testFrame)
-	if err := s.Send(frame); err != nil {
-		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
-	}
-	if _, err := in.Recv(testContext(t)); err != nil {
-		t.Fatalf("Recv() after a stale wake frame error = %v, want nil", err)
-	}
-	if want := []string{testFrame}; !slices.Equal(rec.frames, want) {
-		t.Errorf("decoded frames = %q, want %q", rec.frames, want)
 	}
 }
 

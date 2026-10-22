@@ -82,15 +82,6 @@ func newUnconnectedOutbound(t *testing.T) *Outbound {
 	}
 }
 
-type fixedDeadlineContext struct {
-	context.Context
-	deadline time.Time
-}
-
-func (c fixedDeadlineContext) Deadline() (time.Time, bool) {
-	return c.deadline, true
-}
-
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoringDecoder)
 	if err := tryNewOutbound(t, in.IPCPath()); err != nil {
