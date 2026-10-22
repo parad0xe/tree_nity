@@ -72,24 +72,6 @@ func fillInbound(t *testing.T, in *Inbound) {
 	}
 }
 
-func startCall(t *testing.T, name string, call func() error) func() error {
-	t.Helper()
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- call()
-	}()
-	return func() error {
-		t.Helper()
-		select {
-		case err := <-errCh:
-			return err
-		case <-time.After(testTimeout):
-			t.Fatalf("%s did not return within %v", name, testTimeout)
-			return nil
-		}
-	}
-}
-
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	if err := tryNewOutbound(t, in.IPCPath()); err != nil {

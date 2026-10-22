@@ -97,6 +97,24 @@ func tryConnect(t *testing.T, name string) error {
 	return err
 }
 
+func startCall(t *testing.T, name string, call func() error) func() error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- call()
+	}()
+	return func() error {
+		t.Helper()
+		select {
+		case err := <-errCh:
+			return err
+		case <-time.After(testTimeout):
+			t.Fatalf("%s did not return within %v", name, testTimeout)
+			return nil
+		}
+	}
+}
+
 func TestNewInboundCreatesQueue(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	if err := tryConnect(t, in.IPCPath()); err != nil {
@@ -157,19 +175,13 @@ func TestRecvRejectsInvalidFrame(t *testing.T) {
 func TestRecvReturnsWhenCancelled(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
+	wait := startCall(t, "Recv()", func() error {
 		_, err := in.Recv(ctx)
-		errCh <- err
-	}()
+		return err
+	})
 	cancel()
-	select {
-	case err := <-errCh:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("Recv() after cancel error = %v, want %v", err, context.Canceled)
-		}
-	case <-time.After(testTimeout):
-		t.Fatalf("Recv() did not return within %v after cancel", testTimeout)
+	if err := wait(); !errors.Is(err, context.Canceled) {
+		t.Errorf("Recv() after cancel error = %v, want %v", err, context.Canceled)
 	}
 }
 
@@ -177,18 +189,12 @@ func TestRecvReturnsAtDeadline(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	errCh := make(chan error, 1)
-	go func() {
+	err := startCall(t, "Recv()", func() error {
 		_, err := in.Recv(ctx)
-		errCh <- err
-	}()
-	select {
-	case err := <-errCh:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("Recv() error = %v, want %v", err, context.DeadlineExceeded)
-		}
-	case <-time.After(testTimeout):
-		t.Fatalf("Recv() did not return within %v after its deadline", testTimeout)
+		return err
+	})()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Recv() error = %v, want %v", err, context.DeadlineExceeded)
 	}
 }
 
