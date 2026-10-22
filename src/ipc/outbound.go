@@ -11,10 +11,6 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-// sendSlice is the longest a send waits on a full queue before it checks its
-// context again.
-const sendSlice = 100 * time.Millisecond
-
 // EncodeFunc turns protocol data into a frame.
 type EncodeFunc func(protocol.Data) ([]byte, error)
 
@@ -60,7 +56,7 @@ func (out *Outbound) SendAhead(ctx context.Context, data protocol.Data) error {
 }
 
 // send encodes data and hands the frame to sendFrame, one deadline of at most
-// sendSlice at a time, until the frame is sent or ctx is done.
+// waitSlice at a time, until the frame is sent or ctx is done.
 func (out *Outbound) send(ctx context.Context, data protocol.Data, sendFrame func([]byte, time.Time) error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -72,10 +68,7 @@ func (out *Outbound) send(ctx context.Context, data protocol.Data, sendFrame fun
 	}
 
 	for {
-		deadline := time.Now().Add(sendSlice)
-		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-			deadline = d
-		}
+		deadline := sliceDeadline(ctx)
 
 		err := sendFrame(frame, deadline)
 		if err == nil {
