@@ -15,6 +15,8 @@ import (
 
 const otherTestFrame = "other frame"
 
+var errUnexpectedSend = errors.New("unexpected sendFrame call")
+
 func fixedEncoder(frame []byte) EncodeFunc {
 	return func(protocol.Data) ([]byte, error) {
 		return frame, nil
@@ -70,6 +72,23 @@ func fillInbound(t *testing.T, in *Inbound) {
 			t.Fatalf("TimedSend(%q) error = %v, want nil", frame, err)
 		}
 	}
+}
+
+func unconnectedOutbound(t *testing.T) *Outbound {
+	t.Helper()
+	return &Outbound{
+		ipcPath: "/" + testPrefix(t),
+		encode:  fixedEncoder([]byte(testFrame)),
+	}
+}
+
+type mockDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c mockDeadlineContext) Deadline() (time.Time, bool) {
+	return c.deadline, true
 }
 
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
@@ -145,35 +164,62 @@ func TestSendRejectsTooLargeFrame(t *testing.T) {
 	}
 }
 
-func TestSendWaitsWhileQueueIsFull(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
-	fillInbound(t, in)
-	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
-	ctx := testContext(t)
-	wait := startCall(t, "Send()", func() error {
-		return out.Send(ctx, protocol.Data{})
-	})
-	time.Sleep(sendSlice + 50*time.Millisecond)
-	if _, err := in.Recv(ctx); err != nil {
-		t.Fatalf("Recv() error = %v, want nil", err)
+func TestSendRetriesAfterExpiredSlice(t *testing.T) {
+	out := unconnectedOutbound(t)
+	calls := 0
+	mockSendFrame := func([]byte, time.Time) error {
+		calls++
+		switch calls {
+		case 1:
+			return os.ErrDeadlineExceeded
+		case 2:
+			return nil
+		default:
+			return errUnexpectedSend
+		}
 	}
-	if err := wait(); err != nil {
-		t.Errorf("Send() after Recv() on a full queue error = %v, want nil", err)
+	if err := out.send(testContext(t), protocol.Data{}, mockSendFrame); err != nil {
+		t.Errorf("send() error = %v, want nil", err)
+	}
+	if calls != 2 {
+		t.Errorf("send() called sendFrame %d times, want 2", calls)
 	}
 }
 
-func TestSendReturnsWhenCancelled(t *testing.T) {
-	in := newTestInbound(t, testPrefix(t), ignoreFrame)
-	fillInbound(t, in)
-	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
+func TestSendStopsWhenCancelledAfterExpiredSlice(t *testing.T) {
+	out := unconnectedOutbound(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	wait := startCall(t, "Send()", func() error {
-		return out.Send(ctx, protocol.Data{})
-	})
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	if err := wait(); !errors.Is(err, context.Canceled) {
-		t.Errorf("Send() after cancel error = %v, want %v", err, context.Canceled)
+	defer cancel()
+	calls := 0
+	mockSendFrame := func([]byte, time.Time) error {
+		calls++
+		if calls > 1 {
+			return errUnexpectedSend
+		}
+		cancel()
+		return os.ErrDeadlineExceeded
+	}
+	if err := out.send(ctx, protocol.Data{}, mockSendFrame); !errors.Is(err, context.Canceled) {
+		t.Errorf("send() error = %v, want %v", err, context.Canceled)
+	}
+	if calls != 1 {
+		t.Errorf("send() called sendFrame %d times, want 1", calls)
+	}
+}
+
+func TestSendCapsSliceAtContextDeadline(t *testing.T) {
+	out := unconnectedOutbound(t)
+	ctx := mockDeadlineContext{Context: context.Background(), deadline: time.Now()}
+	var got time.Time
+	mockSendFrame := func(_ []byte, deadline time.Time) error {
+		got = deadline
+		return nil
+	}
+	if err := out.send(ctx, protocol.Data{}, mockSendFrame); err != nil {
+		t.Errorf("send() error = %v, want nil", err)
+	}
+	if !got.Equal(ctx.deadline) {
+		t.Errorf("send() passed deadline %v to sendFrame, want the context deadline %v", got, ctx.deadline)
 	}
 }
 
