@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
-	"tree_nity/src/ipc"
+	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/server/utils"
 	"tree_nity/src/server/utils/hashmap"
 )
@@ -40,24 +41,36 @@ func getTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Consumer
 	return c
 }
 
-// TestManagerGetConsumerPropagatesConnectionError checks initialization errors and metadata ownership.
+// TestManagerGetConsumerPropagatesConnectionError checks queue errors and metadata ownership.
 func TestManagerGetConsumerPropagatesConnectionError(t *testing.T) {
-	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: "/consumer-1"}
-	manager := newTestManager(t, original)
-	if manager == nil {
-		return
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/consumer.%s.%d", t.Name(), os.Getpid()), wantErr: os.ErrNotExist},
 	}
-	c, err := manager.GetConsumer(original.id)
-	if c != nil {
-		cleanupTestConnection(t, c.Connection)
-		t.Errorf("GetConsumer(%q) = %+v, want nil on connection initialization failure", original.id, c)
-	}
-	if !errors.Is(err, ipc.ErrNilEncoder) {
-		t.Errorf("GetConsumer(%q) error = %v, want %v", original.id, err, ipc.ErrNilEncoder)
-	}
-	stored, exists := manager.consumerTable.Get(original.id)
-	if !exists || stored == nil || *stored != original {
-		t.Errorf("stored metadata for %q after failed GetConsumer = %+v, exists = %t, want %+v and true", original.id, stored, exists, original)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: tt.ipcPath}
+			manager := newTestManager(t, original)
+			if manager == nil {
+				return
+			}
+			c, err := manager.GetConsumer(original.id)
+			if c != nil {
+				cleanupTestConnection(t, c.Connection)
+				t.Errorf("GetConsumer(%q) with queue %q = %+v, want nil on connection initialization failure", original.id, tt.ipcPath, c)
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("GetConsumer(%q) with queue %q error = %v, want %v", original.id, tt.ipcPath, err, tt.wantErr)
+			}
+			stored, exists := manager.consumerTable.Get(original.id)
+			if !exists || stored == nil || *stored != original {
+				t.Errorf("stored metadata for %q after failed GetConsumer with queue %q = %+v, exists = %t, want %+v and true", original.id, tt.ipcPath, stored, exists, original)
+			}
+		})
 	}
 }
 
@@ -152,6 +165,11 @@ func TestManagerRejectsAdd(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			original := original
+			original.ipcPath = newTestConsumerQueue(t)
+			if original.ipcPath == "" {
+				return
+			}
 			manager := newTestManager(t, original)
 			if manager == nil {
 				return
@@ -206,7 +224,11 @@ func TestManagerNotFound(t *testing.T) {
 
 // TestManagerGetConsumerCopies checks metadata isolation and fresh connection resources.
 func TestManagerGetConsumerCopies(t *testing.T) {
-	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: "/consumer-1"}
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: ipcPath}
 	manager := newTestManager(t, original)
 	if manager == nil {
 		return
@@ -247,7 +269,11 @@ func TestManagerGetConsumerCopies(t *testing.T) {
 
 // TestManagerRemoveKeepsConnection checks that metadata removal does not close an active connection.
 func TestManagerRemoveKeepsConnection(t *testing.T) {
-	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: "/consumer-1"}
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: ipcPath}
 	manager := newTestManager(t, original)
 	if manager == nil {
 		return
@@ -275,15 +301,19 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
 		t.Errorf("Close() on the connection retained after RemoveConsumer(%q): context error = %v, want %v", original.id, err, context.Canceled)
 	}
-	if err := manager.AddConsumer(original.id, 11, "new/", "/consumer-new"); err != nil {
-		t.Errorf("AddConsumer(%q, 11, %q, %q) after removal error = %v, want nil", original.id, "new/", "/consumer-new", err)
+	replacementIPCPath := newTestConsumerQueue(t, "replacement")
+	if replacementIPCPath == "" {
+		return
+	}
+	if err := manager.AddConsumer(original.id, 11, "new/", replacementIPCPath); err != nil {
+		t.Errorf("AddConsumer(%q, 11, %q, %q) after removal error = %v, want nil", original.id, "new/", replacementIPCPath, err)
 		return
 	}
 	replacement := getTestConsumer(t, manager, original.id)
 	if replacement == nil {
 		return
 	}
-	want := Info{id: original.id, offset: 11, prefix: "new/", ipcPath: "/consumer-new"}
+	want := Info{id: original.id, offset: 11, prefix: "new/", ipcPath: replacementIPCPath}
 	if replacement.Info != want {
 		t.Errorf("GetConsumer(%q).Info after adding the ID again = %+v, want %+v", original.id, replacement.Info, want)
 	}
@@ -294,6 +324,10 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 
 // TestManagerConcurrent checks concurrent additions, retrievals, lengths, and removals.
 func TestManagerConcurrent(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
 	manager := newTestManager(t)
 	if manager == nil {
 		return
@@ -308,7 +342,7 @@ func TestManagerConcurrent(t *testing.T) {
 			<-start
 			for i := 0; i < iterations; i++ {
 				consumerID := id.ID(fmt.Sprintf("consumer-%d-%d", worker, i))
-				want := Info{id: consumerID, offset: uint32(i), prefix: "events/", ipcPath: "/consumer-tests"}
+				want := Info{id: consumerID, offset: uint32(i), prefix: "events/", ipcPath: ipcPath}
 				if err := manager.AddConsumer(want.id, want.offset, want.prefix, want.ipcPath); err != nil {
 					t.Errorf("concurrent AddConsumer(%+v) error = %v, want nil", want, err)
 					return

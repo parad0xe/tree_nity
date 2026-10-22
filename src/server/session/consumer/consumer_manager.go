@@ -9,17 +9,22 @@ import (
 )
 
 // Manager stores consumer metadata independently of active connections.
+// Its methods are safe for concurrent use. Initialize it with NewManager.
 type Manager struct {
 	mu            sync.RWMutex
 	consumerTable *hashmap.HashMap[id.ID, *Info]
 }
 
+// NewManager returns an empty, initialized metadata manager.
 func NewManager() *Manager {
 	return &Manager{
 		consumerTable: hashmap.NewHashMap[id.ID, *Info](),
 	}
 }
 
+// AddConsumer stores metadata after validating the consumer ID, without opening a connection.
+// It returns hashmap.ErrKeyExists when the ID is already registered, or
+// ErrManagerUninitialized when the manager is nil or uninitialized.
 func (m *Manager) AddConsumer(id id.ID, offset uint32, prefix string, ipcPath string) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -36,7 +41,9 @@ func (m *Manager) AddConsumer(id id.ID, offset uint32, prefix string, ipcPath st
 }
 
 // GetConsumer returns a copy of the stored metadata with a new connection.
-// It returns ErrNotFound when the consumer ID is absent from the manager.
+// The caller owns the connection and must close it when it is no longer needed.
+// It returns ErrNotFound when the consumer ID is absent, or ErrManagerUninitialized
+// when the manager is nil or uninitialized. The consumer's queue must already exist.
 // Connection initialization errors leave the stored metadata unchanged.
 func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	if err := m.validate(); err != nil {
@@ -61,6 +68,8 @@ func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 }
 
 // RemoveConsumer deletes stored metadata; active connections belong to their topics.
+// It returns ErrNotFound when the consumer ID is absent, or
+// ErrManagerUninitialized when the manager is nil or uninitialized.
 func (m *Manager) RemoveConsumer(id id.ID) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -76,6 +85,7 @@ func (m *Manager) RemoveConsumer(id id.ID) error {
 	return m.consumerTable.Remove(id)
 }
 
+// Len returns the number of stored consumers, or zero for a nil or uninitialized manager.
 func (m *Manager) Len() uint64 {
 	if err := m.validate(); err != nil {
 		return 0

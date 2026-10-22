@@ -14,9 +14,9 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-func newTestConsumerQueue(t *testing.T) string {
+func newTestConsumerQueue(t *testing.T, suffix ...string) string {
 	t.Helper()
-	ipcPath := fmt.Sprintf("/consumer.%s.%d", strings.ReplaceAll(t.Name(), "/", "."), os.Getpid())
+	ipcPath := fmt.Sprintf("/consumer.%s.%d.%s", strings.ReplaceAll(t.Name(), "/", "."), os.Getpid(), strings.Join(suffix, "."))
 	receiver, err := mqueue.NewReceiver(ipcPath)
 	if err != nil {
 		t.Errorf("NewReceiver(%q) error = %v, want nil", ipcPath, err)
@@ -98,16 +98,27 @@ func TestNewConnection(t *testing.T) {
 	}
 }
 
-// TestNewConnectionPropagatesEncoderError checks the temporary nil encoder failure.
-func TestNewConnectionPropagatesEncoderError(t *testing.T) {
-	ipcPath := "/consumer-test"
-	connection, err := newConnection(ipcPath)
-	if connection != nil {
-		cleanupTestConnection(t, connection)
-		t.Errorf("newConnection(%q) connection = %p, want nil on initialization failure", ipcPath, connection)
+// TestNewConnectionPropagatesQueueError checks invalid and missing queue errors.
+func TestNewConnectionPropagatesQueueError(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/consumer.%s.%d", t.Name(), os.Getpid()), wantErr: os.ErrNotExist},
 	}
-	if !errors.Is(err, ipc.ErrNilEncoder) {
-		t.Errorf("newConnection(%q) error = %v, want %v", ipcPath, err, ipc.ErrNilEncoder)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			connection, err := newConnection(tt.ipcPath)
+			if connection != nil {
+				cleanupTestConnection(t, connection)
+				t.Errorf("newConnection(%q) connection = %p, want nil on initialization failure", tt.ipcPath, connection)
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("newConnection(%q) error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+		})
 	}
 }
 

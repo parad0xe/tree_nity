@@ -10,7 +10,7 @@ import (
 )
 
 // Connection holds the transient resources for one consumer connection.
-// A protocol encoder is still required before connections can be opened.
+// Sending requires a protocol encoder, which is not implemented yet.
 type Connection struct {
 	// Cancel requests termination of this connection's routines.
 	// It is set when the connection is attached to a topic.
@@ -23,8 +23,10 @@ type Connection struct {
 }
 
 func newConnection(ipcPath string) (*Connection, error) {
-	// TODO: supply a protocol encoder once frame encoding is implemented.
-	outbound, err := ipc.NewOutbound(ipcPath, nil)
+	// TODO: replace this temporary encoder with protocol frame encoding.
+	outbound, err := ipc.NewOutbound(ipcPath, func(protocol.Data) ([]byte, error) {
+		return nil, fmt.Errorf("protocol encoder is not implemented")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open consumer outbound %q: %w", ipcPath, err)
 	}
