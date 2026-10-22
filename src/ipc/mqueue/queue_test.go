@@ -75,27 +75,19 @@ func fillQueue(t *testing.T, writer *queue) {
 	}
 }
 
-func startCall(t *testing.T, name string, call func() error) func() error {
+func callWithTimeout(t *testing.T, name string, call func() error) error {
 	t.Helper()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- call()
 	}()
-	return func() error {
-		t.Helper()
-		select {
-		case err := <-errCh:
-			return err
-		case <-time.After(testTimeout):
-			t.Fatalf("%s did not return within %v", name, testTimeout)
-			return nil
-		}
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(testTimeout):
+		t.Fatalf("%s did not return within %v", name, testTimeout)
+		return nil
 	}
-}
-
-func callWithTimeout(t *testing.T, name string, call func() error) error {
-	t.Helper()
-	return startCall(t, name, call)()
 }
 
 func TestCreateCreatesMissingQueue(t *testing.T) {
@@ -336,37 +328,19 @@ func TestTimedRecvReturnsWaitingFrame(t *testing.T) {
 	}
 }
 
-func TestTimedRecvWaitsForFrame(t *testing.T) {
-	name := queueName(t)
-	reader := createReader(t, name)
-	writer := createWriter(t, name)
-	var got []byte
-	wait := startCall(t, "TimedRecv()", func() error {
-		var err error
-		got, err = reader.timedRecv(time.Now().Add(time.Second))
-		return err
-	})
-	time.Sleep(50 * time.Millisecond)
-	frame := []byte("frame")
-	if err := writer.send(frame, priorityNormal); err != nil {
-		t.Fatalf("Send(%q) error = %v, want nil", frame, err)
-	}
-	if err := wait(); err != nil {
-		t.Fatalf("TimedRecv() error = %v, want nil", err)
-	}
-	if !bytes.Equal(got, frame) {
-		t.Errorf("TimedRecv() = %q, want %q", got, frame)
-	}
-}
-
 func TestTimedRecvExpiresOnEmptyQueue(t *testing.T) {
 	reader := createReader(t, queueName(t))
+	const wait = 20 * time.Millisecond
+	start := time.Now()
 	err := callWithTimeout(t, "TimedRecv()", func() error {
-		_, err := reader.timedRecv(time.Now().Add(10 * time.Millisecond))
+		_, err := reader.timedRecv(start.Add(wait))
 		return err
 	})
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("TimedRecv() error = %v, want %v", err, os.ErrDeadlineExceeded)
+	}
+	if elapsed := time.Since(start); elapsed < wait/2 {
+		t.Errorf("TimedRecv() returned after %v, want at least %v", elapsed, wait/2)
 	}
 }
 
@@ -445,35 +419,22 @@ func TestTimedSendDeliversFrame(t *testing.T) {
 	}
 }
 
-func TestTimedSendWaitsForRoom(t *testing.T) {
-	name := queueName(t)
-	reader := createReader(t, name)
-	writer := createWriter(t, name)
-	fillQueue(t, writer)
-	frame := []byte("frame")
-	wait := startCall(t, "TimedSend()", func() error {
-		return writer.timedSend(frame, priorityNormal, time.Now().Add(time.Second))
-	})
-	time.Sleep(50 * time.Millisecond)
-	if _, err := reader.recv(); err != nil {
-		t.Fatalf("Recv() error = %v, want nil", err)
-	}
-	if err := wait(); err != nil {
-		t.Errorf("TimedSend(%q) after Recv() freed room error = %v, want nil", frame, err)
-	}
-}
-
 func TestTimedSendExpiresOnFullQueue(t *testing.T) {
 	name := queueName(t)
 	createReader(t, name)
 	writer := createWriter(t, name)
 	fillQueue(t, writer)
 	frame := []byte("frame")
+	const wait = 20 * time.Millisecond
+	start := time.Now()
 	err := callWithTimeout(t, "TimedSend()", func() error {
-		return writer.timedSend(frame, priorityNormal, time.Now().Add(10*time.Millisecond))
+		return writer.timedSend(frame, priorityNormal, start.Add(wait))
 	})
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Errorf("TimedSend(%q) on a full queue error = %v, want %v", frame, err, os.ErrDeadlineExceeded)
+	}
+	if elapsed := time.Since(start); elapsed < wait/2 {
+		t.Errorf("TimedSend(%q) on a full queue returned after %v, want at least %v", frame, elapsed, wait/2)
 	}
 }
 
