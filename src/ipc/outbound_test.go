@@ -2,10 +2,12 @@ package ipc
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
@@ -55,6 +57,39 @@ func tryNewOutbound(t *testing.T, ipcPath string) error {
 	return err
 }
 
+func fillInbound(t *testing.T, in *Inbound) {
+	t.Helper()
+	s := connect(t, in.IPCPath())
+	frame := []byte(testFrame)
+	for {
+		err := s.TimedSend(frame, time.Now())
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("TimedSend(%q) error = %v, want nil", frame, err)
+		}
+	}
+}
+
+func startCall(t *testing.T, name string, call func() error) func() error {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- call()
+	}()
+	return func() error {
+		t.Helper()
+		select {
+		case err := <-errCh:
+			return err
+		case <-time.After(testTimeout):
+			t.Fatalf("%s did not return within %v", name, testTimeout)
+			return nil
+		}
+	}
+}
+
 func TestNewOutboundConnectsToExistingQueue(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	if err := tryNewOutbound(t, in.IPCPath()); err != nil {
@@ -73,7 +108,7 @@ func TestSendReachesInbound(t *testing.T) {
 	rec := &frameRecorder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
-	if err := out.Send(protocol.Data{}); err != nil {
+	if err := out.Send(testContext(t), protocol.Data{}); err != nil {
 		t.Fatalf("Send() error = %v, want nil", err)
 	}
 	if _, err := in.Recv(testContext(t)); err != nil {
@@ -88,10 +123,10 @@ func TestSendAheadOvertakesWaitingData(t *testing.T) {
 	rec := &frameRecorder{}
 	in := newTestInbound(t, testPrefix(t), rec.decode)
 	out := newTestOutbound(t, in.IPCPath(), sequenceEncoder([]byte(testFrame), []byte(otherTestFrame)))
-	if err := out.Send(protocol.Data{}); err != nil {
+	if err := out.Send(testContext(t), protocol.Data{}); err != nil {
 		t.Fatalf("Send() error = %v, want nil", err)
 	}
-	if err := out.SendAhead(protocol.Data{}); err != nil {
+	if err := out.SendAhead(testContext(t), protocol.Data{}); err != nil {
 		t.Fatalf("SendAhead() error = %v, want nil", err)
 	}
 	for range 2 {
@@ -110,7 +145,7 @@ func TestSendRejectsInvalidData(t *testing.T) {
 	out := newTestOutbound(t, in.IPCPath(), func(protocol.Data) ([]byte, error) {
 		return nil, errEncode
 	})
-	err := out.Send(protocol.Data{})
+	err := out.Send(testContext(t), protocol.Data{})
 	if !errors.Is(err, ErrInvalidData) {
 		t.Errorf("Send() error = %v, want %v", err, ErrInvalidData)
 	}
@@ -123,8 +158,64 @@ func TestSendRejectsTooLargeFrame(t *testing.T) {
 	in := newTestInbound(t, testPrefix(t), ignoreFrame)
 	frame := bytes.Repeat([]byte("a"), 1<<20)
 	out := newTestOutbound(t, in.IPCPath(), fixedEncoder(frame))
-	if err := out.Send(protocol.Data{}); !errors.Is(err, mqueue.ErrFrameTooLarge) {
+	if err := out.Send(testContext(t), protocol.Data{}); !errors.Is(err, mqueue.ErrFrameTooLarge) {
 		t.Errorf("Send(%d bytes) error = %v, want %v", len(frame), err, mqueue.ErrFrameTooLarge)
+	}
+}
+
+func TestSendWaitsWhileQueueIsFull(t *testing.T) {
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	fillInbound(t, in)
+	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
+	ctx := testContext(t)
+	wait := startCall(t, "Send()", func() error {
+		return out.Send(ctx, protocol.Data{})
+	})
+	time.Sleep(sendSlice + 50*time.Millisecond)
+	if _, err := in.Recv(ctx); err != nil {
+		t.Fatalf("Recv() error = %v, want nil", err)
+	}
+	if err := wait(); err != nil {
+		t.Errorf("Send() after Recv() on a full queue error = %v, want nil", err)
+	}
+}
+
+func TestSendReturnsWhenCancelled(t *testing.T) {
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	fillInbound(t, in)
+	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := startCall(t, "Send()", func() error {
+		return out.Send(ctx, protocol.Data{})
+	})
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := wait(); !errors.Is(err, context.Canceled) {
+		t.Errorf("Send() after cancel error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestSendReturnsAtDeadline(t *testing.T) {
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	fillInbound(t, in)
+	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := startCall(t, "Send()", func() error {
+		return out.Send(ctx, protocol.Data{})
+	})()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Send() error = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
+func TestSendReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
+	in := newTestInbound(t, testPrefix(t), ignoreFrame)
+	out := newTestOutbound(t, in.IPCPath(), fixedEncoder([]byte(testFrame)))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := out.Send(ctx, protocol.Data{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Send() with a cancelled context error = %v, want %v", err, context.Canceled)
 	}
 }
 
