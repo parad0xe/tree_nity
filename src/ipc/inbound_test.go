@@ -179,6 +179,7 @@ func TestRecvReturnsWhenCancelled(t *testing.T) {
 		_, err := in.Recv(ctx)
 		return err
 	})
+	time.Sleep(50 * time.Millisecond)
 	cancel()
 	if err := wait(); !errors.Is(err, context.Canceled) {
 		t.Errorf("Recv() after cancel error = %v, want %v", err, context.Canceled)
