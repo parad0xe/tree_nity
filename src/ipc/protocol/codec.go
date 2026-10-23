@@ -6,12 +6,12 @@ import (
 	"io"
 )
 
-// NewDataFromFrame decodes and validates a single JSON frame.
+// Decode decodes and validates a single JSON frame.
 // Unknown fields, missing required fields, and trailing JSON values are rejected.
 // Metadata is selected by emitter, and payload is selected by opcode.
 // Errors for missing fields, unknown opcodes or emitters, oversized messages,
 // and additional JSON values can be matched with errors.Is.
-func NewDataFromFrame(frame []byte) (Data, error) {
+func Decode(frame []byte) (Data, error) {
 	var tmpData dataJSON
 
 	decoder := json.NewDecoder(bytes.NewReader(frame))
