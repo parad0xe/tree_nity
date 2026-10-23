@@ -14,27 +14,27 @@ type payloadJSON interface {
 	toPayload() (Payload, error)
 }
 
-func newPayloadJSON(opcode op, raw json.RawMessage) (payloadJSON, error) {
+func newPayloadJSON(opcode Op, raw json.RawMessage) (payloadJSON, error) {
 	var tmpPayload payloadJSON
 
 	switch opcode {
-	case listTopic:
+	case ListTopic:
 		tmpPayload = &listTopicPayloadJSON{}
-	case createTopic:
+	case CreateTopic:
 		tmpPayload = &createTopicPayloadJSON{}
-	case consumerInfo:
+	case ConsumerInfo:
 		tmpPayload = &consumerInfoPayloadJSON{}
-	case topicSubscription:
+	case TopicSubscription:
 		tmpPayload = &topicSubscriptionPayloadJSON{}
-	case acknowledgement:
+	case Acknowledgement:
 		tmpPayload = &acknowledgementPayloadJSON{}
-	case checkTopic:
+	case CheckTopic:
 		tmpPayload = &checkTopicPayloadJSON{}
-	case produceMessage:
+	case ProduceMessage:
 		tmpPayload = &produceMessagePayloadJSON{}
-	case consumerDisconnect:
+	case ConsumerDisconnect:
 		tmpPayload = &consumerDisconnectPayloadJSON{}
-	case consumerHeartbeat:
+	case ConsumerHeartbeat:
 		tmpPayload = &consumerHeartbeatPayloadJSON{}
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrUnknownOpcode, opcode)
