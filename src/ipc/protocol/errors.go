@@ -14,6 +14,10 @@ var (
 	ErrMissingMetadata = errors.New("missing metadata")
 	// ErrMissingPayload indicates that a frame has no payload.
 	ErrMissingPayload = errors.New("missing payload")
+	// ErrInvalidMetadata indicates metadata with an incompatible type or invalid content.
+	ErrInvalidMetadata = errors.New("invalid metadata")
+	// ErrInvalidPayload indicates a payload with an incompatible type or invalid content.
+	ErrInvalidPayload = errors.New("invalid payload")
 	// ErrUnknownOpcode indicates that an operation code is unsupported.
 	ErrUnknownOpcode = errors.New("unknown opcode")
 	// ErrUnknownEmitter indicates that a sender type is unsupported.

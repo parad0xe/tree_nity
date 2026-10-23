@@ -21,27 +21,27 @@ func TestNewMetadataJSON(t *testing.T) {
 			name:    "client",
 			emitter: client,
 			input:   `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:    ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			want:    &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
 		},
 		{
 			name:    "empty client strings",
 			emitter: client,
 			input:   `{"clientId":"","clientIPC":""}`,
-			want:    ClientMetadata{},
+			want:    &ClientMetadata{},
 		},
 		{
 			name:    "minimal client strings",
 			emitter: client,
 			input:   `{"clientId":"c","clientIPC":"q"}`,
-			want:    ClientMetadata{clientId: "c", clientIPC: "q"},
+			want:    &ClientMetadata{clientId: "c", clientIPC: "q"},
 		},
 		{
 			name:    "large client strings",
 			emitter: client,
 			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 4096), strings.Repeat("q", 4096)),
-			want:    ClientMetadata{clientId: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
+			want:    &ClientMetadata{clientId: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
 		},
-		{name: "server", emitter: server, input: `{}`, want: ServerMetadata{}},
+		{name: "server", emitter: server, input: `{}`, want: &ServerMetadata{}},
 	}
 
 	for _, tt := range tests {
@@ -131,8 +131,8 @@ func TestClientMetadataJSONToMetadata(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("toMetadata(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
-			if !reflect.DeepEqual(got, ClientMetadata{}) {
-				t.Errorf("toMetadata(%s) = %#v, want %#v", tt.input, got, ClientMetadata{})
+			if got != nil {
+				t.Errorf("toMetadata(%s) = %#v, want nil on error", tt.input, got)
 			}
 		})
 	}
