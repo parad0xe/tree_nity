@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// TestNewDataFromFrame checks every opcode for client and server frames.
-func TestNewDataFromFrame(t *testing.T) {
+// TestDecode checks every opcode for client and server frames.
+func TestDecode(t *testing.T) {
 	payloads := []struct {
 		name    string
 		opcode  Opcode
@@ -64,12 +64,12 @@ func TestNewDataFromFrame(t *testing.T) {
 				frame := fmt.Sprintf(" \n\t"+`{"opcode":%d,"emitter":%d,"metadata":%s,"payload":%s}`+"\r\n\t", p.opcode, e.emitter, e.metadata, p.payload)
 				want := Data{opcode: p.opcode, emitter: e.emitter, metadata: e.want, payload: p.want}
 
-				got, err := NewDataFromFrame([]byte(frame))
+				got, err := Decode([]byte(frame))
 				if err != nil {
-					t.Errorf("NewDataFromFrame(%q) error = %v, want nil", frame, err)
+					t.Errorf("Decode(%q) error = %v, want nil", frame, err)
 				}
 				if !reflect.DeepEqual(got, want) {
-					t.Errorf("NewDataFromFrame(%q) = %#v, want %#v", frame, got, want)
+					t.Errorf("Decode(%q) = %#v, want %#v", frame, got, want)
 				}
 				if gotOpcode := got.Opcode(); gotOpcode != p.opcode {
 					t.Errorf("NewDataFromFrame(%q).Opcode() = %d, want %d", frame, gotOpcode, p.opcode)
@@ -79,8 +79,8 @@ func TestNewDataFromFrame(t *testing.T) {
 	}
 }
 
-// TestNewDataFromFrameRejectsInvalidInput checks malformed and incomplete frames.
-func TestNewDataFromFrameRejectsInvalidInput(t *testing.T) {
+// TestDecodeRejectsInvalidInput checks malformed and incomplete frames.
+func TestDecodeRejectsInvalidInput(t *testing.T) {
 	validFrame := `{"opcode":0,"emitter":1,"metadata":{},"payload":{}}`
 	tests := []struct {
 		name    string
@@ -139,15 +139,15 @@ func TestNewDataFromFrameRejectsInvalidInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := NewDataFromFrame([]byte(tt.input))
+			got, err := Decode([]byte(tt.input))
 			if err == nil {
-				t.Errorf("NewDataFromFrame(%q) error = nil, want an error", tt.input)
+				t.Errorf("Decode(%q) error = nil, want an error", tt.input)
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Errorf("NewDataFromFrame(%q) error = %v, want %v", tt.input, err, tt.wantErr)
+				t.Errorf("Decode(%q) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
 			if !reflect.DeepEqual(got, Data{}) {
-				t.Errorf("NewDataFromFrame(%q) = %#v, want %#v", tt.input, got, Data{})
+				t.Errorf("Decode(%q) = %#v, want %#v", tt.input, got, Data{})
 			}
 		})
 	}
