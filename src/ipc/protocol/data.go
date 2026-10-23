@@ -4,7 +4,7 @@ import "encoding/json"
 
 // Data holds a frame's opcode, emitter, decoded metadata, and payload.
 type Data struct {
-	opcode   op
+	opcode   Op
 	emitter  emitter
 	metadata Metadata
 	payload  Payload
@@ -12,7 +12,7 @@ type Data struct {
 
 type dataJSON struct {
 	// Opcode is nil when the operation code is missing or null.
-	Opcode *op `json:"opcode"`
+	Opcode *Op `json:"opcode"`
 	// Emitter is nil when the sender type is missing or null.
 	Emitter *emitter `json:"emitter"`
 	// Metadata preserves emitter-specific JSON until its decoder is selected.

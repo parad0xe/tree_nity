@@ -59,7 +59,7 @@ func TestDataJSONValidate(t *testing.T) {
 func TestDataJSONToData(t *testing.T) {
 	tests := []struct {
 		name          string
-		opcode        op
+		opcode        Op
 		emitter       emitter
 		metadata      string
 		payload       string
@@ -69,12 +69,12 @@ func TestDataJSONToData(t *testing.T) {
 	}{
 		{
 			name:     "client message",
-			opcode:   produceMessage,
+			opcode:   ProduceMessage,
 			emitter:  client,
 			metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`,
 			payload:  `{"raw":false,"message":{"key":"key","value":"value"}}`,
 			want: Data{
-				opcode:   produceMessage,
+				opcode:   ProduceMessage,
 				emitter:  client,
 				metadata: ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
 				payload:  &ProduceMessagePayload{raw: false, message: Message{key: "key", value: "value"}},
@@ -82,12 +82,12 @@ func TestDataJSONToData(t *testing.T) {
 		},
 		{
 			name:     "server payload",
-			opcode:   listTopic,
+			opcode:   ListTopic,
 			emitter:  server,
 			metadata: `{}`,
 			payload:  `{}`,
 			want: Data{
-				opcode:   listTopic,
+				opcode:   ListTopic,
 				emitter:  server,
 				metadata: ServerMetadata{},
 				payload:  &ListTopicPayload{},
@@ -101,9 +101,9 @@ func TestDataJSONToData(t *testing.T) {
 		{name: "unknown opcode", opcode: 9, emitter: server, metadata: `{}`, payload: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "invalid payload JSON", emitter: server, metadata: `{}`, payload: `{`, wantDecodeErr: true},
 		{name: "unknown payload field", emitter: server, metadata: `{}`, payload: `{"extra":true}`, wantDecodeErr: true},
-		{name: "missing raw", opcode: produceMessage, emitter: server, metadata: `{}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
-		{name: "missing message", opcode: produceMessage, emitter: server, metadata: `{}`, payload: `{"raw":true}`, wantErr: ErrMissingMessage},
-		{name: "invalid message", opcode: produceMessage, emitter: server, metadata: `{}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
+		{name: "missing raw", opcode: ProduceMessage, emitter: server, metadata: `{}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
+		{name: "missing message", opcode: ProduceMessage, emitter: server, metadata: `{}`, payload: `{"raw":true}`, wantErr: ErrMissingMessage},
+		{name: "invalid message", opcode: ProduceMessage, emitter: server, metadata: `{}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
 	}
 
 	for _, tt := range tests {

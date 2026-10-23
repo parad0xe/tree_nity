@@ -12,36 +12,36 @@ import (
 func TestNewDataFromFrame(t *testing.T) {
 	payloads := []struct {
 		name    string
-		opcode  op
+		opcode  Op
 		payload string
 		want    Payload
 	}{
-		{name: "list topic", opcode: listTopic, payload: `{}`, want: &ListTopicPayload{}},
-		{name: "create topic", opcode: createTopic, payload: `{}`, want: &CreateTopicPayload{}},
-		{name: "consumer info", opcode: consumerInfo, payload: `{}`, want: &ConsumerInfoPayload{}},
-		{name: "topic subscription", opcode: topicSubscription, payload: `{}`, want: &TopicSubscriptionPayload{}},
-		{name: "acknowledgement", opcode: acknowledgement, payload: `{}`, want: &AcknowledgementPayload{}},
-		{name: "check topic", opcode: checkTopic, payload: `{}`, want: &CheckTopicPayload{}},
+		{name: "list topic", opcode: ListTopic, payload: `{}`, want: &ListTopicPayload{}},
+		{name: "create topic", opcode: CreateTopic, payload: `{}`, want: &CreateTopicPayload{}},
+		{name: "consumer info", opcode: ConsumerInfo, payload: `{}`, want: &ConsumerInfoPayload{}},
+		{name: "topic subscription", opcode: TopicSubscription, payload: `{}`, want: &TopicSubscriptionPayload{}},
+		{name: "acknowledgement", opcode: Acknowledgement, payload: `{}`, want: &AcknowledgementPayload{}},
+		{name: "check topic", opcode: CheckTopic, payload: `{}`, want: &CheckTopicPayload{}},
 		{
 			name:    "produce raw message",
-			opcode:  produceMessage,
+			opcode:  ProduceMessage,
 			payload: `{"raw":true,"message":{"key":"key","value":"value"}}`,
 			want:    &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
 		},
 		{
 			name:    "produce empty non-raw message",
-			opcode:  produceMessage,
+			opcode:  ProduceMessage,
 			payload: `{"raw":false,"message":{"key":"","value":""}}`,
 			want:    &ProduceMessagePayload{},
 		},
 		{
 			name:    "produce message at byte limit",
-			opcode:  produceMessage,
+			opcode:  ProduceMessage,
 			payload: fmt.Sprintf(`{"raw":false,"message":{"key":"","value":%q}}`, strings.Repeat("é", 512)),
 			want:    &ProduceMessagePayload{message: Message{value: strings.Repeat("é", 512)}},
 		},
-		{name: "consumer disconnect", opcode: consumerDisconnect, payload: `{}`, want: &ConsumerDisconnectPayload{}},
-		{name: "consumer heartbeat", opcode: consumerHeartbeat, payload: `{}`, want: &ConsumerHeartbeatPayload{}},
+		{name: "consumer disconnect", opcode: ConsumerDisconnect, payload: `{}`, want: &ConsumerDisconnectPayload{}},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, payload: `{}`, want: &ConsumerHeartbeatPayload{}},
 	}
 	emitters := []struct {
 		name     string
