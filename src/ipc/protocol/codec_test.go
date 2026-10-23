@@ -1,12 +1,292 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+type failingMetadata struct {
+	err error
+}
+
+func (m *failingMetadata) toJSON(_ emitter) (metadataJSON, error) {
+	if err := m.validate(); err != nil {
+		return nil, err
+	}
+	return nil, m.err
+}
+
+func (m *failingMetadata) validate() error {
+	if m == nil {
+		return ErrMissingMetadata
+	}
+	return nil
+}
+
+type failingPayload struct {
+	err error
+}
+
+func (p *failingPayload) toJSON(_ op) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	return nil, p.err
+}
+
+func (p *failingPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	return nil
+}
+
+// TestEncode checks the wire representation and round trips for every opcode and emitter.
+func TestEncode(t *testing.T) {
+	payloads := []struct {
+		name    string
+		opcode  op
+		payload Payload
+		json    string
+	}{
+		{name: "list topic", opcode: listTopic, payload: &ListTopicPayload{}, json: `{}`},
+		{name: "create topic", opcode: createTopic, payload: &CreateTopicPayload{}, json: `{}`},
+		{name: "consumer info", opcode: consumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`},
+		{name: "topic subscription", opcode: topicSubscription, payload: &TopicSubscriptionPayload{}, json: `{}`},
+		{name: "acknowledgement", opcode: acknowledgement, payload: &AcknowledgementPayload{}, json: `{}`},
+		{name: "check topic", opcode: checkTopic, payload: &CheckTopicPayload{}, json: `{}`},
+		{
+			name:    "produce raw message",
+			opcode:  produceMessage,
+			payload: &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
+			json:    `{"raw":true,"message":{"key":"key","value":"value"}}`,
+		},
+		{
+			name:    "produce empty non-raw message",
+			opcode:  produceMessage,
+			payload: &ProduceMessagePayload{},
+			json:    `{"raw":false,"message":{"key":"","value":""}}`,
+		},
+		{name: "consumer disconnect", opcode: consumerDisconnect, payload: &ConsumerDisconnectPayload{}, json: `{}`},
+		{name: "consumer heartbeat", opcode: consumerHeartbeat, payload: &ConsumerHeartbeatPayload{}, json: `{}`},
+	}
+	emitters := []struct {
+		name     string
+		emitter  emitter
+		metadata Metadata
+		json     string
+	}{
+		{
+			name:     "client",
+			emitter:  client,
+			metadata: &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			json:     `{"clientId":"client-1","clientIPC":"/client-1"}`,
+		},
+		{name: "server", emitter: server, metadata: &ServerMetadata{}, json: `{}`},
+	}
+
+	for _, p := range payloads {
+		for _, e := range emitters {
+			t.Run(p.name+"/"+e.name, func(t *testing.T) {
+				data := Data{opcode: p.opcode, emitter: e.emitter, metadata: e.metadata, payload: p.payload}
+				frame, err := Encode(data)
+				if err != nil {
+					t.Errorf("Encode(%#v) error = %v, want nil", data, err)
+					return
+				}
+
+				wantFrame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":%s,"payload":%s}`, p.opcode, e.emitter, e.json, p.json)
+				var gotJSON, wantJSON any
+				if err := json.Unmarshal(frame, &gotJSON); err != nil {
+					t.Errorf("Unmarshal(Encode(%#v)) with frame %q error = %v, want nil", data, frame, err)
+					return
+				}
+				if err := json.Unmarshal([]byte(wantFrame), &wantJSON); err != nil {
+					t.Errorf("Unmarshal(%q) for expected frame error = %v, want nil", wantFrame, err)
+					return
+				}
+				if !reflect.DeepEqual(gotJSON, wantJSON) {
+					t.Errorf("Encode(%#v) = %s, want JSON equivalent to %s", data, frame, wantFrame)
+				}
+
+				got, err := Decode(frame)
+				if err != nil {
+					t.Errorf("Decode(Encode(%#v)) with frame %q error = %v, want nil", data, frame, err)
+					return
+				}
+				if !reflect.DeepEqual(got, data) {
+					t.Errorf("Decode(Encode(%#v)) = %#v, want %#v", data, got, data)
+				}
+			})
+		}
+	}
+}
+
+// TestEncodeStringsAndLimits checks escaping, byte boundaries, and the internal offset.
+func TestEncodeStringsAndLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata ClientMetadata
+		message  Message
+	}{
+		{name: "empty strings"},
+		{name: "minimal strings", metadata: ClientMetadata{clientId: "c", clientIPC: "q"}, message: Message{key: "k", value: "v"}},
+		{
+			name:     "escaped strings",
+			metadata: ClientMetadata{clientId: "client\"\\\n\x00", clientIPC: "/é/猫<&>\u2028"},
+			message:  Message{key: "key\"\\\n\t\x00", value: "é/猫<&>\u2029"},
+		},
+		{name: "key at byte limit", message: Message{key: strings.Repeat("k", MessageSize)}},
+		{name: "value at byte limit", message: Message{value: strings.Repeat("v", MessageSize)}},
+		{name: "combined byte limit", message: Message{key: strings.Repeat("k", MessageSize/2), value: strings.Repeat("v", MessageSize/2)}},
+		{name: "UTF-8 at byte limit", message: Message{value: strings.Repeat("é", MessageSize/2)}},
+		{name: "JSON escaping at byte limit", message: Message{value: strings.Repeat("\x00", MessageSize)}},
+		{
+			name:     "large metadata",
+			metadata: ClientMetadata{clientId: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
+		},
+		{name: "internal offset", message: Message{offset: 42, key: "key", value: "value"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := Data{opcode: produceMessage, emitter: client, metadata: &tt.metadata, payload: &ProduceMessagePayload{message: tt.message}}
+			frame, err := Encode(data)
+			if err != nil {
+				t.Errorf("Encode(%#v) with message %+v error = %v, want nil", data, tt.message, err)
+				return
+			}
+			got, err := Decode(frame)
+			if err != nil {
+				t.Errorf("Decode(Encode(%#v)) with frame %q error = %v, want nil", data, frame, err)
+				return
+			}
+			want := Data{
+				opcode:   produceMessage,
+				emitter:  client,
+				metadata: &tt.metadata,
+				payload:  &ProduceMessagePayload{message: Message{key: tt.message.key, value: tt.message.value}},
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("Decode(Encode(%#v)) with message %+v = %#v, want %#v", data, tt.message, got, want)
+			}
+		})
+	}
+}
+
+// TestEncodeRejectsInvalidInput checks missing fields, unknown codes, types, and message limits.
+func TestEncodeRejectsInvalidInput(t *testing.T) {
+	conversionErr := errors.New("conversion failed")
+	tests := []struct {
+		name    string
+		data    Data
+		wantErr error
+	}{
+		{name: "zero value", wantErr: ErrMissingMetadata},
+		{name: "negative emitter", data: Data{emitter: -1, metadata: &ServerMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrUnknownEmitter},
+		{name: "unknown emitter", data: Data{emitter: 2, metadata: &ServerMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrUnknownEmitter},
+		{name: "negative opcode", data: Data{opcode: -1, emitter: server, metadata: &ServerMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrUnknownOpcode},
+		{name: "unknown opcode", data: Data{opcode: 9, emitter: server, metadata: &ServerMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrUnknownOpcode},
+		{name: "missing client metadata", data: Data{emitter: client, payload: &ListTopicPayload{}}, wantErr: ErrMissingMetadata},
+		{name: "missing server metadata", data: Data{emitter: server, payload: &ListTopicPayload{}}, wantErr: ErrMissingMetadata},
+		{name: "nil client metadata pointer", data: Data{emitter: client, metadata: (*ClientMetadata)(nil), payload: &ListTopicPayload{}}, wantErr: ErrMissingMetadata},
+		{name: "nil server metadata pointer", data: Data{emitter: server, metadata: (*ServerMetadata)(nil), payload: &ListTopicPayload{}}, wantErr: ErrMissingMetadata},
+		{name: "server metadata from client", data: Data{emitter: client, metadata: &ServerMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
+		{name: "client metadata from server", data: Data{emitter: server, metadata: &ClientMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
+		{name: "metadata conversion error", data: Data{emitter: server, metadata: &failingMetadata{err: ErrInvalidMetadata}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
+		{name: "wrapped metadata conversion error", data: Data{emitter: server, metadata: &failingMetadata{err: fmt.Errorf("metadata: %w", conversionErr)}, payload: &ListTopicPayload{}}, wantErr: conversionErr},
+		{name: "invalid UTF-8 client ID", data: Data{emitter: client, metadata: &ClientMetadata{clientId: "\xff"}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
+		{name: "invalid UTF-8 client IPC", data: Data{emitter: client, metadata: &ClientMetadata{clientIPC: "\xff"}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
+		{name: "missing payload", data: Data{emitter: server, metadata: &ServerMetadata{}}, wantErr: ErrMissingPayload},
+		{name: "payload conversion error", data: Data{emitter: server, metadata: &ServerMetadata{}, payload: &failingPayload{err: ErrInvalidPayload}}, wantErr: ErrInvalidPayload},
+		{name: "wrapped payload conversion error", data: Data{emitter: server, metadata: &ServerMetadata{}, payload: &failingPayload{err: fmt.Errorf("payload: %w", conversionErr)}}, wantErr: conversionErr},
+		{
+			name:    "oversized key",
+			data:    Data{opcode: produceMessage, emitter: server, metadata: &ServerMetadata{}, payload: &ProduceMessagePayload{message: Message{key: strings.Repeat("k", MessageSize+1)}}},
+			wantErr: ErrMessageTooLarge,
+		},
+		{
+			name:    "oversized value",
+			data:    Data{opcode: produceMessage, emitter: server, metadata: &ServerMetadata{}, payload: &ProduceMessagePayload{message: Message{value: strings.Repeat("v", MessageSize+1)}}},
+			wantErr: ErrMessageTooLarge,
+		},
+		{
+			name:    "combined size exceeds limit",
+			data:    Data{opcode: produceMessage, emitter: server, metadata: &ServerMetadata{}, payload: &ProduceMessagePayload{message: Message{key: strings.Repeat("k", MessageSize/2), value: strings.Repeat("v", MessageSize/2+1)}}},
+			wantErr: ErrMessageTooLarge,
+		},
+		{
+			name:    "UTF-8 exceeds byte limit",
+			data:    Data{opcode: produceMessage, emitter: server, metadata: &ServerMetadata{}, payload: &ProduceMessagePayload{message: Message{key: "k", value: strings.Repeat("é", MessageSize/2)}}},
+			wantErr: ErrMessageTooLarge,
+		},
+		{
+			name:    "invalid UTF-8 message key",
+			data:    Data{opcode: produceMessage, emitter: server, metadata: &ServerMetadata{}, payload: &ProduceMessagePayload{message: Message{key: "\xff"}}},
+			wantErr: ErrInvalidPayload,
+		},
+		{
+			name:    "invalid UTF-8 message value",
+			data:    Data{opcode: produceMessage, emitter: server, metadata: &ServerMetadata{}, payload: &ProduceMessagePayload{message: Message{value: "\xff"}}},
+			wantErr: ErrInvalidPayload,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame, err := Encode(tt.data)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Encode(%#v) error = %v, want %v", tt.data, err, tt.wantErr)
+			}
+			if frame != nil {
+				t.Errorf("Encode(%#v) frame = %q, want nil on error", tt.data, frame)
+			}
+		})
+	}
+}
+
+// TestEncodeRejectsIncompatiblePayloads checks opcode mismatches and nil payload pointers.
+func TestEncodeRejectsIncompatiblePayloads(t *testing.T) {
+	payloads := []struct {
+		name    string
+		opcode  op
+		payload Payload
+		nilPtr  Payload
+	}{
+		{name: "list topic", opcode: listTopic, payload: &ListTopicPayload{}, nilPtr: (*ListTopicPayload)(nil)},
+		{name: "create topic", opcode: createTopic, payload: &CreateTopicPayload{}, nilPtr: (*CreateTopicPayload)(nil)},
+		{name: "consumer info", opcode: consumerInfo, payload: &ConsumerInfoPayload{}, nilPtr: (*ConsumerInfoPayload)(nil)},
+		{name: "topic subscription", opcode: topicSubscription, payload: &TopicSubscriptionPayload{}, nilPtr: (*TopicSubscriptionPayload)(nil)},
+		{name: "acknowledgement", opcode: acknowledgement, payload: &AcknowledgementPayload{}, nilPtr: (*AcknowledgementPayload)(nil)},
+		{name: "check topic", opcode: checkTopic, payload: &CheckTopicPayload{}, nilPtr: (*CheckTopicPayload)(nil)},
+		{name: "produce message", opcode: produceMessage, payload: &ProduceMessagePayload{}, nilPtr: (*ProduceMessagePayload)(nil)},
+		{name: "consumer disconnect", opcode: consumerDisconnect, payload: &ConsumerDisconnectPayload{}, nilPtr: (*ConsumerDisconnectPayload)(nil)},
+		{name: "consumer heartbeat", opcode: consumerHeartbeat, payload: &ConsumerHeartbeatPayload{}, nilPtr: (*ConsumerHeartbeatPayload)(nil)},
+	}
+	for _, operation := range payloads {
+		t.Run(operation.name+"/nil pointer", func(t *testing.T) {
+			data := Data{opcode: operation.opcode, emitter: server, metadata: &ServerMetadata{}, payload: operation.nilPtr}
+			frame, err := Encode(data)
+			if !errors.Is(err, ErrMissingPayload) || frame != nil {
+				t.Errorf("Encode(%#v) = %q, error = %v, want nil frame and %v", data, frame, err, ErrMissingPayload)
+			}
+		})
+		for _, p := range payloads {
+			if p.opcode == operation.opcode {
+				continue
+			}
+			t.Run(operation.name+"/"+p.name, func(t *testing.T) {
+				data := Data{opcode: operation.opcode, emitter: server, metadata: &ServerMetadata{}, payload: p.payload}
+				frame, err := Encode(data)
+				if !errors.Is(err, ErrInvalidPayload) || frame != nil {
+					t.Errorf("Encode(%#v) = %q, error = %v, want nil frame and %v", data, frame, err, ErrInvalidPayload)
+				}
+			})
+		}
+	}
+}
 
 // TestDecode checks every opcode for client and server frames.
 func TestDecode(t *testing.T) {
@@ -53,9 +333,9 @@ func TestDecode(t *testing.T) {
 			name:     "client",
 			emitter:  client,
 			metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:     ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			want:     &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
 		},
-		{name: "server", emitter: server, metadata: `{}`, want: ServerMetadata{}},
+		{name: "server", emitter: server, metadata: `{}`, want: &ServerMetadata{}},
 	}
 
 	for _, p := range payloads {

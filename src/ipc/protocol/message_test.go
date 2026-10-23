@@ -8,6 +8,18 @@ import (
 	"testing"
 )
 
+// TestMessageToJSONNil checks that business validation rejects a nil message without panic.
+func TestMessageToJSONNil(t *testing.T) {
+	var message *Message
+	got, err := message.toJSON()
+	if !errors.Is(err, ErrMissingMessage) {
+		t.Errorf("toJSON() on a nil message error = %v, want %v", err, ErrMissingMessage)
+	}
+	if got != (messageJSON{}) {
+		t.Errorf("toJSON() on a nil message = %+v, want an empty JSON message on error", got)
+	}
+}
+
 // TestMessageJSONToMessage checks required fields, byte limits, and conversion.
 func TestMessageJSONToMessage(t *testing.T) {
 	tests := []struct {
