@@ -29,13 +29,12 @@ func run() (code int) {
 		// A startup failure is a general error; IPC covers failures while communicating.
 		return exitcode.General
 	}
-	defer func(app *application) {
-		err := app.drop()
-		if err != nil {
+	defer func() {
+		if err := app.drop(); err != nil {
 			logError("server:", err)
 			code = exitcode.General
 		}
-	}(app)
+	}()
 
 	if _, err := fmt.Println(app.inbound.IPCPath()); err != nil {
 		logError("server:", err)
