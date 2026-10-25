@@ -137,7 +137,7 @@ func (app *application) listen(ctx context.Context, sd shutdown) (int, error) {
 		// TODO: dispatch each opcode to its handler
 		default:
 			// TODO: reply to the client with an error once the server answers requests
-			logError("server: unhandled opcode")
+			logError("server:", errUnhandledOpcode)
 		}
 	}
 }

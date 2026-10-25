@@ -37,7 +37,7 @@ func run() (code int) {
 	}()
 
 	if _, err := fmt.Println(app.inbound.IPCPath()); err != nil {
-		logError("server:", err)
+		logError("server:", fmt.Errorf("%w: %w", errPrintIPCPath, err))
 		return exitcode.General
 	}
 
