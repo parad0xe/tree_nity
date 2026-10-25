@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,15 +13,16 @@ import (
 )
 
 func main() {
-	retcode := run()
+	retcode := run(context.Background(), os.Stdout)
 	os.Exit(retcode)
 }
 
 // run starts the server and prints its IPC identifier on stdout, then receives
-// frames until SIGINT or SIGTERM. It returns exitcode.General when the server
-// cannot start or clean up, and exitcode.IPC when receiving fails.
-func run() (code int) {
-	sigCtx, sigCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+// frames until SIGINT, SIGTERM or the end of ctx. It returns exitcode.General
+// when the server cannot start or clean up, and exitcode.IPC when receiving
+// fails.
+func run(ctx context.Context, stdout io.Writer) (code int) {
+	sigCtx, sigCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer sigCancel()
 
 	app, err := newApplication()
@@ -36,7 +38,7 @@ func run() (code int) {
 		}
 	}()
 
-	if _, err := fmt.Println(app.inbound.IPCPath()); err != nil {
+	if _, err := fmt.Fprintln(stdout, app.inbound.IPCPath()); err != nil {
 		logError("server:", fmt.Errorf("%w: %w", errPrintIPCPath, err))
 		return exitcode.General
 	}
