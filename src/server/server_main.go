@@ -20,8 +20,8 @@ func main() {
 // frames until SIGINT or SIGTERM. It returns exitcode.General when the server
 // cannot start or clean up, and exitcode.IPC when receiving fails.
 func run() (code int) {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	sigCtx, sigCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer sigCancel()
 
 	app, err := newApplication()
 	if err != nil {
@@ -42,14 +42,12 @@ func run() (code int) {
 		return exitcode.General
 	}
 
-	if c, err := app.run(ctx); err != nil {
+	if c, err := app.run(sigCtx); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			logError("server:", err)
 			return c
 		}
 	}
-
-	// TODO: on shutdown, wait up to 5 s for consumers to commit.
 
 	return exitcode.Success
 }
