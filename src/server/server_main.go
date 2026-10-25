@@ -16,8 +16,9 @@ func main() {
 	os.Exit(retcode)
 }
 
-// run starts the server, prints its IPC identifier on stdout, and receives
-// frames until SIGINT or SIGTERM. It returns the process exit code.
+// run starts the server and prints its IPC identifier on stdout, then receives
+// frames until SIGINT or SIGTERM. It returns exitcode.General when the server
+// cannot start or clean up, and exitcode.IPC when receiving fails.
 func run() (code int) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

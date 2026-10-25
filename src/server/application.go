@@ -16,8 +16,8 @@ type application struct {
 	inbound *ipc.Inbound
 }
 
-// newApplication creates the server inbound queue, named after the process
-// ID so that several servers can run side by side.
+// newApplication creates the server inbound queue, named after the process ID.
+// The returned error matches os.ErrExist when the queue already exists.
 func newApplication() (*application, error) {
 	pid := os.Getpid()
 	ipcPath := fmt.Sprintf("/operator.server.%d", pid)
@@ -64,7 +64,8 @@ func (app *application) run(ctx context.Context) (int, error) {
 	}
 }
 
-// drop closes and removes the inbound queue, if it was created.
+// drop closes and removes the inbound queue, if it was created. The returned
+// error joins the close and unlink errors.
 func (app *application) drop() error {
 	var err error
 
