@@ -34,6 +34,12 @@ func (sd shutdown) requested() bool {
 	}
 }
 
+// exitResult is an exit code with the error that caused it.
+type exitResult struct {
+	code int
+	err  error
+}
+
 // application holds the resources the server owns while it runs.
 type application struct {
 	inbound *ipc.Inbound
@@ -68,11 +74,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 		requestedChan: sigCtx.Done(),
 	}
 
-	type listenResult struct {
-		code int
-		err  error
-	}
-	done := make(chan listenResult, 1)
+	done := make(chan exitResult, 1)
 
 	// runCtx does not derive from sigCtx: a signal must not stop listen.
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -80,7 +82,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 
 	go func() {
 		code, err := app.listen(runCtx, sd)
-		done <- listenResult{code, err}
+		done <- exitResult{code, err}
 	}()
 
 	select {
