@@ -13,7 +13,7 @@ import (
 func TestNewPayloadJSON(t *testing.T) {
 	tests := []struct {
 		name   string
-		opcode Op
+		opcode Opcode
 		input  string
 		want   Payload
 	}{
@@ -71,7 +71,7 @@ func TestNewPayloadJSON(t *testing.T) {
 func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
-		opcode  Op
+		opcode  Opcode
 		input   string
 		wantErr error
 	}{

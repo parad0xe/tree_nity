@@ -12,7 +12,7 @@ import (
 func TestNewDataFromFrame(t *testing.T) {
 	payloads := []struct {
 		name    string
-		opcode  Op
+		opcode  Opcode
 		payload string
 		want    Payload
 	}{
@@ -70,6 +70,9 @@ func TestNewDataFromFrame(t *testing.T) {
 				}
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("NewDataFromFrame(%q) = %#v, want %#v", frame, got, want)
+				}
+				if gotOpcode := got.Opcode(); gotOpcode != p.opcode {
+					t.Errorf("NewDataFromFrame(%q).Opcode() = %d, want %d", frame, gotOpcode, p.opcode)
 				}
 			})
 		}

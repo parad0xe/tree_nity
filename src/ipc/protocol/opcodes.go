@@ -1,11 +1,11 @@
 package protocol
 
-// Op identifies an operation in a protocol frame.
-type Op int
+// Opcode identifies an operation in a protocol frame.
+type Opcode int
 
 const (
 	// ListTopic identifies a list topic operation.
-	ListTopic = iota
+	ListTopic Opcode = iota
 	// CreateTopic identifies a topic creation operation.
 	CreateTopic
 	// ConsumerInfo identifies a consumer information operation.

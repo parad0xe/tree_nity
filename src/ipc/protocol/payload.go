@@ -14,7 +14,7 @@ type payloadJSON interface {
 	toPayload() (Payload, error)
 }
 
-func newPayloadJSON(opcode Op, raw json.RawMessage) (payloadJSON, error) {
+func newPayloadJSON(opcode Opcode, raw json.RawMessage) (payloadJSON, error) {
 	var tmpPayload payloadJSON
 
 	switch opcode {

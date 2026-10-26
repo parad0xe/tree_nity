@@ -59,7 +59,7 @@ func TestDataJSONValidate(t *testing.T) {
 func TestDataJSONToData(t *testing.T) {
 	tests := []struct {
 		name          string
-		opcode        Op
+		opcode        Opcode
 		emitter       emitter
 		metadata      string
 		payload       string
