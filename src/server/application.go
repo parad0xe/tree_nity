@@ -20,12 +20,6 @@ const (
 	shutdownPollInterval = 200 * time.Millisecond
 )
 
-// exitResult is an exit code with the error that caused it.
-type exitResult struct {
-	code int
-	err  error
-}
-
 // application holds the resources the server owns while it runs.
 type application struct {
 	inbound *ipc.Inbound
@@ -57,7 +51,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 	}
 
 	shutdown := lifecycle.NewGracefulShutdown(sigCtx.Done())
-	done := make(chan exitResult, 1)
+	done := make(chan lifecycle.ExitResult, 1)
 
 	// runCtx does not derive from sigCtx: a signal must not stop listen.
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -65,25 +59,25 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 
 	go func() {
 		code, err := app.listen(runCtx, shutdown)
-		done <- exitResult{code, err}
+		done <- lifecycle.NewExitResult(code, err)
 	}()
 
 	select {
 	case res := <-done:
-		return res.code, res.err
+		return res.Code(), res.Err()
 	case <-sigCtx.Done():
 	}
 
 	select {
 	case res := <-done:
-		return res.code, res.err
+		return res.Code(), res.Err()
 	case <-time.After(gracePeriod):
 	}
 
 	// The inbound must not be dropped while Recv is running.
 	runCancel()
-	if res := <-done; !errors.Is(res.err, context.Canceled) {
-		return res.code, res.err
+	if res := <-done; !errors.Is(res.Err(), context.Canceled) {
+		return res.Code(), res.Err()
 	}
 
 	return exitcode.Success, nil

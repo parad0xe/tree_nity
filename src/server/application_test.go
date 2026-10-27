@@ -31,8 +31,8 @@ const (
 type call struct {
 	name     string
 	cancel   context.CancelFunc
-	done     chan exitResult
-	result   exitResult
+	done     chan lifecycle.ExitResult
+	result   lifecycle.ExitResult
 	returned bool
 }
 
@@ -43,11 +43,11 @@ func startCall(t *testing.T, parent context.Context, name string, f func(context
 	c := &call{
 		name:   name,
 		cancel: cancel,
-		done:   make(chan exitResult, 1),
+		done:   make(chan lifecycle.ExitResult, 1),
 	}
 	go func() {
 		code, err := f(ctx)
-		c.done <- exitResult{code, err}
+		c.done <- lifecycle.NewExitResult(code, err)
 	}()
 	t.Cleanup(func() {
 		c.cancel()
@@ -58,7 +58,7 @@ func startCall(t *testing.T, parent context.Context, name string, f func(context
 
 // wait returns the result of the call. It fails the test when the call does
 // not return within testTimeout.
-func (c *call) wait(t *testing.T) exitResult {
+func (c *call) wait(t *testing.T) lifecycle.ExitResult {
 	t.Helper()
 	if !c.returned {
 		select {
@@ -270,11 +270,11 @@ func TestListenStopsWhenReady(t *testing.T) {
 	})
 
 	res := c.wait(t)
-	if res.code != exitcode.Success {
-		t.Errorf("listen() after a shutdown request code = %d, want %d", res.code, exitcode.Success)
+	if res.Code() != exitcode.Success {
+		t.Errorf("listen() after a shutdown request code = %d, want %d", res.Code(), exitcode.Success)
 	}
-	if res.err != nil {
-		t.Errorf("listen() after a shutdown request error = %v, want nil", res.err)
+	if res.Err() != nil {
+		t.Errorf("listen() after a shutdown request error = %v, want nil", res.Err())
 	}
 }
 
@@ -287,11 +287,11 @@ func TestListenStopsWhenCancelled(t *testing.T) {
 	c.cancel()
 
 	res := c.wait(t)
-	if res.code != exitcode.Success {
-		t.Errorf("listen() with a cancelled context code = %d, want %d", res.code, exitcode.Success)
+	if res.Code() != exitcode.Success {
+		t.Errorf("listen() with a cancelled context code = %d, want %d", res.Code(), exitcode.Success)
 	}
-	if !errors.Is(res.err, context.Canceled) {
-		t.Errorf("listen() with a cancelled context error = %v, want %v", res.err, context.Canceled)
+	if !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() with a cancelled context error = %v, want %v", res.Err(), context.Canceled)
 	}
 }
 
@@ -308,11 +308,11 @@ func TestListenSkipsInvalidFrame(t *testing.T) {
 	close(requestedChan)
 
 	res := c.wait(t)
-	if res.code != exitcode.Success {
-		t.Errorf("listen() after an invalid frame then a shutdown request code = %d, want %d", res.code, exitcode.Success)
+	if res.Code() != exitcode.Success {
+		t.Errorf("listen() after an invalid frame then a shutdown request code = %d, want %d", res.Code(), exitcode.Success)
 	}
-	if res.err != nil {
-		t.Errorf("listen() after an invalid frame then a shutdown request error = %v, want nil", res.err)
+	if res.Err() != nil {
+		t.Errorf("listen() after an invalid frame then a shutdown request error = %v, want nil", res.Err())
 	}
 }
 
@@ -329,11 +329,11 @@ func TestListenSkipsUnhandledOpcode(t *testing.T) {
 	close(requestedChan)
 
 	res := c.wait(t)
-	if res.code != exitcode.Success {
-		t.Errorf("listen() after an unhandled opcode then a shutdown request code = %d, want %d", res.code, exitcode.Success)
+	if res.Code() != exitcode.Success {
+		t.Errorf("listen() after an unhandled opcode then a shutdown request code = %d, want %d", res.Code(), exitcode.Success)
 	}
-	if res.err != nil {
-		t.Errorf("listen() after an unhandled opcode then a shutdown request error = %v, want nil", res.err)
+	if res.Err() != nil {
+		t.Errorf("listen() after an unhandled opcode then a shutdown request error = %v, want nil", res.Err())
 	}
 }
 
@@ -344,11 +344,11 @@ func TestListenReportsReceiveFailure(t *testing.T) {
 	})
 
 	res := c.wait(t)
-	if res.code != exitcode.IPC {
-		t.Errorf("listen() on a closed queue code = %d, want %d", res.code, exitcode.IPC)
+	if res.Code() != exitcode.IPC {
+		t.Errorf("listen() on a closed queue code = %d, want %d", res.Code(), exitcode.IPC)
 	}
-	if !errors.Is(res.err, syscall.EBADF) {
-		t.Errorf("listen() on a closed queue error = %v, want %v", res.err, syscall.EBADF)
+	if !errors.Is(res.Err(), syscall.EBADF) {
+		t.Errorf("listen() on a closed queue error = %v, want %v", res.Err(), syscall.EBADF)
 	}
 }
 
@@ -357,11 +357,11 @@ func TestRunReturnsWhenAlreadySignalled(t *testing.T) {
 	c := startCall(t, cancelledContext(), "run()", app.run)
 
 	res := c.wait(t)
-	if res.code != exitcode.Success {
-		t.Errorf("run() with a done context code = %d, want %d", res.code, exitcode.Success)
+	if res.Code() != exitcode.Success {
+		t.Errorf("run() with a done context code = %d, want %d", res.Code(), exitcode.Success)
 	}
-	if !errors.Is(res.err, context.Canceled) {
-		t.Errorf("run() with a done context error = %v, want %v", res.err, context.Canceled)
+	if !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("run() with a done context error = %v, want %v", res.Err(), context.Canceled)
 	}
 }
 
@@ -377,11 +377,11 @@ func TestRunStopsAfterSignal(t *testing.T) {
 	c.cancel()
 
 	res := c.wait(t)
-	if res.code != exitcode.Success {
-		t.Errorf("run() after a signal code = %d, want %d", res.code, exitcode.Success)
+	if res.Code() != exitcode.Success {
+		t.Errorf("run() after a signal code = %d, want %d", res.Code(), exitcode.Success)
 	}
-	if res.err != nil {
-		t.Errorf("run() after a signal error = %v, want nil", res.err)
+	if res.Err() != nil {
+		t.Errorf("run() after a signal error = %v, want nil", res.Err())
 	}
 }
 
@@ -390,10 +390,10 @@ func TestRunReportsReceiveFailure(t *testing.T) {
 	c := startCall(t, context.Background(), "run()", app.run)
 
 	res := c.wait(t)
-	if res.code != exitcode.IPC {
-		t.Errorf("run() on a closed queue code = %d, want %d", res.code, exitcode.IPC)
+	if res.Code() != exitcode.IPC {
+		t.Errorf("run() on a closed queue code = %d, want %d", res.Code(), exitcode.IPC)
 	}
-	if !errors.Is(res.err, syscall.EBADF) {
-		t.Errorf("run() on a closed queue error = %v, want %v", res.err, syscall.EBADF)
+	if !errors.Is(res.Err(), syscall.EBADF) {
+		t.Errorf("run() on a closed queue error = %v, want %v", res.Err(), syscall.EBADF)
 	}
 }
