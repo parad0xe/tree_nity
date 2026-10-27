@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -15,6 +16,7 @@ type Data struct {
 
 // NewData creates a validated frame and infers its emitter from metadata.
 // Metadata must be *ClientMetadata or *ServerMetadata, and payload must match opcode.
+// Opcodes are interpreted by emitter; no server opcodes are defined yet.
 // On error, it returns a zero Data and an error inspectable with errors.Is.
 func NewData(opcode Opcode, metadata Metadata, payload Payload) (Data, error) {
 	data := Data{opcode: opcode, metadata: metadata, payload: payload}
@@ -62,6 +64,9 @@ func (d Data) toJSON() (dataJSON, error) {
 	if err != nil {
 		return dataJSON{}, err
 	}
+	if err := d.opcode.validate(d.emitter); err != nil {
+		return dataJSON{}, err
+	}
 
 	tmpPayload, err := d.payload.toJSON(d.opcode)
 	if err != nil {
@@ -92,12 +97,6 @@ func (d Data) validate() error {
 	case Client, Server:
 	default:
 		return fmt.Errorf("%w: %d", ErrUnknownEmitter, d.emitter)
-	}
-	switch d.opcode {
-	case ListTopic, CreateTopic, ConsumerInfo, TopicSubscription, Acknowledgement,
-		CheckTopic, ProduceMessage, ConsumerDisconnect, ConsumerHeartbeat:
-	default:
-		return fmt.Errorf("%w: %d", ErrUnknownOpcode, d.opcode)
 	}
 	if d.metadata == nil {
 		return ErrMissingMetadata
@@ -133,8 +132,41 @@ func (d dataJSON) toData() (Data, error) {
 		return Data{}, err
 	}
 
-	tmpPayload, err := newPayloadJSON(*d.Opcode, *d.Payload)
-	if err != nil {
+	var tmpPayload payloadJSON
+	switch *d.Emitter {
+	case Client:
+		switch *d.Opcode {
+		case ListTopic:
+			tmpPayload = &listTopicPayloadJSON{}
+		case CreateTopic:
+			tmpPayload = &createTopicPayloadJSON{}
+		case ConsumerInfo:
+			tmpPayload = &consumerInfoPayloadJSON{}
+		case TopicSubscription:
+			tmpPayload = &topicSubscriptionPayloadJSON{}
+		case Acknowledgement:
+			tmpPayload = &acknowledgementPayloadJSON{}
+		case CheckTopic:
+			tmpPayload = &checkTopicPayloadJSON{}
+		case ProduceMessage:
+			tmpPayload = &produceMessagePayloadJSON{}
+		case ConsumerDisconnect:
+			tmpPayload = &consumerDisconnectPayloadJSON{}
+		case ConsumerHeartbeat:
+			tmpPayload = &consumerHeartbeatPayloadJSON{}
+		}
+	case Server:
+		// No server payloads are defined yet.
+	default:
+		return Data{}, fmt.Errorf("%w: %d", ErrUnknownEmitter, *d.Emitter)
+	}
+	if tmpPayload == nil {
+		return Data{}, fmt.Errorf("%w for emitter %d: %d", ErrUnknownOpcode, *d.Emitter, *d.Opcode)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(*d.Payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(tmpPayload); err != nil {
 		return Data{}, err
 	}
 	payload, err := tmpPayload.toPayload()

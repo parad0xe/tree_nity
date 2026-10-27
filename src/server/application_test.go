@@ -21,7 +21,7 @@ const (
 	// testTimeout is the longest a test waits for an event before it fails.
 	testTimeout = 5 * time.Second
 	// validFrame decodes to protocol data whose opcode the server does not handle.
-	validFrame = `{"opcode":0,"emitter":1,"metadata":{},"payload":{}}`
+	validFrame = `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`
 	// invalidFrame does not decode to protocol data.
 	invalidFrame = "not json"
 )
