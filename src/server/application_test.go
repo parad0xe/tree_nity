@@ -14,6 +14,7 @@ import (
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/mqueue"
+	"tree_nity/src/lifecycle"
 )
 
 const (
@@ -212,31 +213,10 @@ func cancelledContext() context.Context {
 }
 
 // requestedShutdown returns a shutdown that is already requested.
-func requestedShutdown() shutdown {
+func requestedShutdown() lifecycle.GracefulShutdown {
 	requestedChan := make(chan struct{})
 	close(requestedChan)
-	return shutdown{requestedChan: requestedChan}
-}
-
-func TestShutdownNotRequestedByDefault(t *testing.T) {
-	var sd shutdown
-	if got := sd.requested(); got {
-		t.Errorf("requested() on the zero value = %v, want %v", got, false)
-	}
-}
-
-func TestShutdownNotRequestedWhileOpen(t *testing.T) {
-	sd := shutdown{requestedChan: make(chan struct{})}
-	if got := sd.requested(); got {
-		t.Errorf("requested() with an open channel = %v, want %v", got, false)
-	}
-}
-
-func TestShutdownRequestedWhenClosed(t *testing.T) {
-	sd := requestedShutdown()
-	if got := sd.requested(); !got {
-		t.Errorf("requested() with a closed channel = %v, want %v", got, true)
-	}
+	return lifecycle.NewGracefulShutdown(requestedChan)
 }
 
 func TestNewApplicationCreatesQueue(t *testing.T) {
@@ -301,7 +281,7 @@ func TestListenStopsWhenReady(t *testing.T) {
 func TestListenStopsWhenCancelled(t *testing.T) {
 	app := newTestApplication(t)
 	c := startCall(t, context.Background(), "listen()", func(ctx context.Context) (int, error) {
-		return app.listen(ctx, shutdown{})
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
 	})
 
 	c.cancel()
@@ -320,7 +300,7 @@ func TestListenSkipsInvalidFrame(t *testing.T) {
 	stderr := captureStderr(t)
 	requestedChan := make(chan struct{})
 	c := startCall(t, context.Background(), "listen()", func(ctx context.Context) (int, error) {
-		return app.listen(ctx, shutdown{requestedChan: requestedChan})
+		return app.listen(ctx, lifecycle.NewGracefulShutdown(requestedChan))
 	})
 
 	send(t, app.inbound.IPCPath(), invalidFrame)
@@ -341,7 +321,7 @@ func TestListenSkipsUnhandledOpcode(t *testing.T) {
 	stderr := captureStderr(t)
 	requestedChan := make(chan struct{})
 	c := startCall(t, context.Background(), "listen()", func(ctx context.Context) (int, error) {
-		return app.listen(ctx, shutdown{requestedChan: requestedChan})
+		return app.listen(ctx, lifecycle.NewGracefulShutdown(requestedChan))
 	})
 
 	send(t, app.inbound.IPCPath(), validFrame)
@@ -360,7 +340,7 @@ func TestListenSkipsUnhandledOpcode(t *testing.T) {
 func TestListenReportsReceiveFailure(t *testing.T) {
 	app := newBrokenApplication(t)
 	c := startCall(t, context.Background(), "listen()", func(ctx context.Context) (int, error) {
-		return app.listen(ctx, shutdown{})
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
 	})
 
 	res := c.wait(t)

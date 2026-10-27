@@ -10,6 +10,7 @@ import (
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 )
 
 const (
@@ -18,21 +19,6 @@ const (
 	// shutdownPollInterval is how often listen checks for a shutdown request.
 	shutdownPollInterval = 200 * time.Millisecond
 )
-
-// shutdown tells listen whether a shutdown was requested.
-type shutdown struct {
-	requestedChan <-chan struct{}
-}
-
-// requested reports whether SIGINT or SIGTERM was received.
-func (sd shutdown) requested() bool {
-	select {
-	case <-sd.requestedChan:
-		return true
-	default:
-		return false
-	}
-}
 
 // exitResult is an exit code with the error that caused it.
 type exitResult struct {
@@ -70,10 +56,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 		return exitcode.Success, sigCtx.Err()
 	}
 
-	sd := shutdown{
-		requestedChan: sigCtx.Done(),
-	}
-
+	shutdown := lifecycle.NewGracefulShutdown(sigCtx.Done())
 	done := make(chan exitResult, 1)
 
 	// runCtx does not derive from sigCtx: a signal must not stop listen.
@@ -81,7 +64,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 	defer runCancel()
 
 	go func() {
-		code, err := app.listen(runCtx, sd)
+		code, err := app.listen(runCtx, shutdown)
 		done <- exitResult{code, err}
 	}()
 
@@ -110,9 +93,9 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 // Invalid frames are logged and skipped. The returned error matches
 // context.Canceled or context.DeadlineExceeded when ctx is done first, and is
 // the error of Recv, with exitcode.IPC, when receiving fails.
-func (app *application) listen(ctx context.Context, sd shutdown) (int, error) {
+func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
 	for {
-		if sd.requested() && app.readyToFinish() {
+		if shutdown.Requested() && app.readyToFinish() {
 			return exitcode.Success, nil
 		}
 
