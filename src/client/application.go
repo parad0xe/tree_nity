@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"tree_nity/src/exitcode"
+	"tree_nity/src/client/commands"
 	"tree_nity/src/ipc"
 	"tree_nity/src/lifecycle"
 )
@@ -35,9 +35,6 @@ type appConfig struct {
 	decoder ipc.DecodeFunc
 }
 
-type runArgs struct {
-}
-
 // newApplication connects to the server, then creates the client inbound queue,
 // named after the process ID.
 func newApplication(config appConfig) (*application, error) {
@@ -63,15 +60,19 @@ func newApplication(config appConfig) (*application, error) {
 
 // run runs the requested command. After SIGINT or SIGTERM, the command has at
 // most gracePeriod to finish.
-func (app *application) run(sigCtx context.Context, args runArgs) (int, error) {
-	shutdown := lifecycle.NewGracefulShutdown(sigCtx.Done())
+func (app *application) run(sigCtx context.Context, command commands.Command) (int, error) {
+	env := commands.Env{
+		Shutdown: lifecycle.NewGracefulShutdown(sigCtx.Done()),
+		Inbound:  app.inbound,
+		Outbound: app.outbound,
+	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())
 	defer runCancel()
 
 	done := make(chan lifecycle.ExitResult, 1)
 	go func() {
-		c, err := app.handle(runCtx, shutdown, args)
+		c, err := command.Execute(runCtx, env)
 		done <- lifecycle.NewExitResult(c, err)
 	}()
 
@@ -91,13 +92,6 @@ func (app *application) run(sigCtx context.Context, args runArgs) (int, error) {
 	res := <-done
 
 	return res.Code(), res.Err()
-}
-
-// handle runs the requested command. It should stop once a shutdown is
-// requested.
-func (app *application) handle(ctx context.Context, shutdown lifecycle.GracefulShutdown, args runArgs) (int, error) {
-	// TODO: call the handler of the requested command: create, list, produce, subscribe or info.
-	return exitcode.Success, nil
 }
 
 // drop removes the client queue and closes the server queue, if they were

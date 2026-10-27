@@ -8,9 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"tree_nity/src/client/commands"
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc/protocol"
 )
+
+// usage describes the command line of the client.
+const usage = "usage: %s <ipc_identifier> <command> [arguments]"
 
 func main() {
 	retcode := run(context.Background())
@@ -22,11 +26,15 @@ func run(ctx context.Context) (code int) {
 	sigCtx, sigCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer sigCancel()
 
-	// TODO: parse "<ipc_identifier> <command> [arguments]" into runArgs and return exitcode.General on invalid arguments.
-	args := runArgs{}
+	serverIPCPath, command, err := parse(os.Args[1:])
+	if err != nil {
+		logError("client:", err)
+		logError(fmt.Errorf(usage, os.Args[0]))
+		return exitcode.General
+	}
 
 	app, err := newApplication(appConfig{
-		serverIPCPath: "",
+		serverIPCPath: serverIPCPath,
 		// TODO: use protocol.Encode once the encoder is merged.
 		encoder: func(data protocol.Data) ([]byte, error) {
 			return make([]byte, 0), nil
@@ -45,7 +53,7 @@ func run(ctx context.Context) (code int) {
 		}
 	}()
 
-	if c, err := app.run(sigCtx, args); err != nil {
+	if c, err := app.run(sigCtx, command); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			logError("client:", err)
 			return c
@@ -53,6 +61,24 @@ func run(ctx context.Context) (code int) {
 	}
 
 	return exitcode.Success
+}
+
+// parse returns the server IPC identifier and the command requested by args.
+func parse(args []string) (string, commands.Command, error) {
+	if len(args) < 1 {
+		return "", nil, errMissingIPCIdentifier
+	}
+
+	if len(args) < 2 {
+		return "", nil, errMissingCommand
+	}
+	commandName := args[1]
+
+	switch commandName {
+	// TODO: parse the produce, create, list, subscribe and info commands.
+	default:
+		return "", nil, fmt.Errorf("%w: %s", errUnknownCommand, commandName)
+	}
 }
 
 // logError writes a diagnostic line to stderr. A failed write is ignored
