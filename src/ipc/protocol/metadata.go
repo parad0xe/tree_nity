@@ -9,7 +9,7 @@ import (
 
 // Metadata holds emitter-specific data and converts it to JSON for its emitter.
 type Metadata interface {
-	toJSON(emitter emitter) (metadataJSON, error)
+	toJSON(emitter Emitter) (metadataJSON, error)
 	validate() error
 }
 
@@ -18,13 +18,13 @@ type metadataJSON interface {
 	toMetadata() (Metadata, error)
 }
 
-func newMetadataJSON(emitter emitter, raw json.RawMessage) (metadataJSON, error) {
+func newMetadataJSON(emitter Emitter, raw json.RawMessage) (metadataJSON, error) {
 	var tmpMetadata metadataJSON
 
 	switch emitter {
-	case client:
+	case Client:
 		tmpMetadata = &clientMetadataJSON{}
-	case server:
+	case Server:
 		tmpMetadata = &ServerMetadataJSON{}
 	default:
 		return nil, fmt.Errorf("%w: %d", ErrUnknownEmitter, emitter)
@@ -46,11 +46,27 @@ type ClientMetadata struct {
 	clientIPC string
 }
 
-func (m *ClientMetadata) toJSON(emitter emitter) (metadataJSON, error) {
+// NewClientMetadata identifies a client and its return IPC endpoint.
+// NewData and Encode validate its strings.
+func NewClientMetadata(clientID, clientIPC string) *ClientMetadata {
+	return &ClientMetadata{clientId: clientID, clientIPC: clientIPC}
+}
+
+// ClientID returns the client's identifier.
+func (m ClientMetadata) ClientID() string {
+	return m.clientId
+}
+
+// ClientIPC returns the client's return IPC endpoint.
+func (m ClientMetadata) ClientIPC() string {
+	return m.clientIPC
+}
+
+func (m *ClientMetadata) toJSON(emitter Emitter) (metadataJSON, error) {
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
-	if emitter != client {
+	if emitter != Client {
 		return nil, fmt.Errorf("%w for emitter %d: %T", ErrInvalidMetadata, emitter, m)
 	}
 	return &clientMetadataJSON{ClientID: &m.clientId, ClientIPC: &m.clientIPC}, nil
@@ -98,11 +114,16 @@ func (m clientMetadataJSON) validate() error {
 type ServerMetadata struct {
 }
 
-func (s *ServerMetadata) toJSON(emitter emitter) (metadataJSON, error) {
+// NewServerMetadata creates metadata for a server frame.
+func NewServerMetadata() *ServerMetadata {
+	return &ServerMetadata{}
+}
+
+func (s *ServerMetadata) toJSON(emitter Emitter) (metadataJSON, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	if emitter != server {
+	if emitter != Server {
 		return nil, fmt.Errorf("%w for emitter %d: %T", ErrInvalidMetadata, emitter, s)
 	}
 	return &ServerMetadataJSON{}, nil
