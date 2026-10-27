@@ -12,6 +12,27 @@ type Message struct {
 	value  string
 }
 
+// NewMessage creates a message with an internal offset of zero.
+// NewData and Encode validate its size and strings.
+func NewMessage(key, value string) Message {
+	return Message{key: key, value: value}
+}
+
+// Key returns the message's key.
+func (m Message) Key() string {
+	return m.key
+}
+
+// Value returns the message's value.
+func (m Message) Value() string {
+	return m.value
+}
+
+// Offset returns the message's internal queue offset, which is not encoded.
+func (m Message) Offset() int32 {
+	return m.offset
+}
+
 func (m *Message) toJSON() (messageJSON, error) {
 	if err := m.validate(); err != nil {
 		return messageJSON{}, err

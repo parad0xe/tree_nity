@@ -84,6 +84,8 @@ func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 		{name: "string", opcode: ListTopic, input: `"payload"`},
 		{name: "number", opcode: ListTopic, input: `1`},
 		{name: "boolean", opcode: ListTopic, input: `false`},
+		{name: "unknown topic field", opcode: CreateTopic, input: `{"topic":1}`},
+		{name: "unknown create field", opcode: CreateTopic, input: `{"topic":"orders","extra":true}`},
 		{name: "raw has wrong type", opcode: ProduceMessage, input: `{"raw":"true","message":{"key":"k","value":"v"}}`},
 		{name: "message has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":[]}`},
 		{name: "key has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":{"key":1,"value":"v"}}`},
@@ -99,6 +101,26 @@ func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
 				t.Errorf("newPayloadJSON(%d, %q) error = %v, want %v", tt.opcode, tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestCreateTopicPayloadJSONRejectsFields keeps topic creation payloads empty.
+func TestCreateTopicPayloadJSONRejectsFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "empty topic", input: `{"topic":""}`},
+		{name: "named topic", input: `{"topic":"orders"}`},
+		{name: "null topic", input: `{"topic":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := newPayloadJSON(CreateTopic, json.RawMessage(tt.input))
+			if err == nil || got != nil {
+				t.Errorf("newPayloadJSON(%d, %s) = %#v, error = %v, want nil and an unknown field error", CreateTopic, tt.input, got, err)
 			}
 		})
 	}

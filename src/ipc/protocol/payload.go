@@ -56,6 +56,11 @@ func newPayloadJSON(opcode Opcode, raw json.RawMessage) (payloadJSON, error) {
 // ListTopicPayload represents a list topic operation with no payload fields.
 type ListTopicPayload struct{}
 
+// NewListTopicPayload creates an empty list topic payload.
+func NewListTopicPayload() *ListTopicPayload {
+	return &ListTopicPayload{}
+}
+
 func (p *ListTopicPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
@@ -88,6 +93,11 @@ func (p listTopicPayloadJSON) validate() error {
 
 // CreateTopicPayload represents a topic creation operation with no payload fields.
 type CreateTopicPayload struct{}
+
+// NewCreateTopicPayload creates an empty topic creation payload.
+func NewCreateTopicPayload() *CreateTopicPayload {
+	return &CreateTopicPayload{}
+}
 
 func (p *CreateTopicPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
@@ -122,6 +132,11 @@ func (p createTopicPayloadJSON) validate() error {
 // ConsumerInfoPayload represents a consumer information operation with no payload fields.
 type ConsumerInfoPayload struct{}
 
+// NewConsumerInfoPayload creates an empty consumer information payload.
+func NewConsumerInfoPayload() *ConsumerInfoPayload {
+	return &ConsumerInfoPayload{}
+}
+
 func (p *ConsumerInfoPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
@@ -154,6 +169,11 @@ func (p consumerInfoPayloadJSON) validate() error {
 
 // TopicSubscriptionPayload represents a subscription operation with no payload fields.
 type TopicSubscriptionPayload struct{}
+
+// NewTopicSubscriptionPayload creates an empty topic subscription payload.
+func NewTopicSubscriptionPayload() *TopicSubscriptionPayload {
+	return &TopicSubscriptionPayload{}
+}
 
 func (p *TopicSubscriptionPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
@@ -188,6 +208,11 @@ func (p topicSubscriptionPayloadJSON) validate() error {
 // AcknowledgementPayload represents an acknowledgement with no payload fields.
 type AcknowledgementPayload struct{}
 
+// NewAcknowledgementPayload creates an empty acknowledgement payload.
+func NewAcknowledgementPayload() *AcknowledgementPayload {
+	return &AcknowledgementPayload{}
+}
+
 func (p *AcknowledgementPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
@@ -220,6 +245,11 @@ func (p acknowledgementPayloadJSON) validate() error {
 
 // CheckTopicPayload represents a topic check operation with no payload fields.
 type CheckTopicPayload struct{}
+
+// NewCheckTopicPayload creates an empty topic check payload.
+func NewCheckTopicPayload() *CheckTopicPayload {
+	return &CheckTopicPayload{}
+}
 
 func (p *CheckTopicPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
@@ -255,6 +285,22 @@ func (p checkTopicPayloadJSON) validate() error {
 type ProduceMessagePayload struct {
 	raw     bool
 	message Message
+}
+
+// NewProduceMessagePayload creates a payload with a message and its raw flag.
+// NewData and Encode validate the message's size and strings.
+func NewProduceMessagePayload(raw bool, message Message) *ProduceMessagePayload {
+	return &ProduceMessagePayload{raw: raw, message: message}
+}
+
+// Raw reports whether the message should be produced in raw mode.
+func (p ProduceMessagePayload) Raw() bool {
+	return p.raw
+}
+
+// Message returns the message to produce.
+func (p ProduceMessagePayload) Message() Message {
+	return p.message
 }
 
 func (p *ProduceMessagePayload) toJSON(opcode Opcode) (payloadJSON, error) {
@@ -314,6 +360,11 @@ func (p produceMessagePayloadJSON) validate() error {
 // ConsumerDisconnectPayload represents a disconnection with no payload fields.
 type ConsumerDisconnectPayload struct{}
 
+// NewConsumerDisconnectPayload creates an empty consumer disconnection payload.
+func NewConsumerDisconnectPayload() *ConsumerDisconnectPayload {
+	return &ConsumerDisconnectPayload{}
+}
+
 func (p *ConsumerDisconnectPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
@@ -346,6 +397,11 @@ func (p consumerDisconnectPayloadJSON) validate() error {
 
 // ConsumerHeartbeatPayload represents a heartbeat with no payload fields.
 type ConsumerHeartbeatPayload struct{}
+
+// NewConsumerHeartbeatPayload creates an empty consumer heartbeat payload.
+func NewConsumerHeartbeatPayload() *ConsumerHeartbeatPayload {
+	return &ConsumerHeartbeatPayload{}
+}
 
 func (p *ConsumerHeartbeatPayload) toJSON(opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
