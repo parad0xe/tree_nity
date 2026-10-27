@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"syscall"
@@ -10,27 +9,67 @@ import (
 	"tree_nity/src/exitcode"
 )
 
-// errWrite is the error returned by failingWriter.
-var errWrite = errors.New("write failed")
+// redirectStdout sets os.Stdout to f until the test ends.
+func redirectStdout(t *testing.T, f *os.File) {
+	t.Helper()
+	stdout := os.Stdout
+	os.Stdout = f
+	t.Cleanup(func() {
+		os.Stdout = stdout
+	})
+}
 
-// failingWriter is an io.Writer whose writes always fail.
-type failingWriter struct{}
+// captureStdout sends os.Stdout to a temporary file until the test ends, and
+// returns the name of that file.
+func captureStdout(t *testing.T) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("Close() error = %v, want nil", err)
+		}
+	})
+	redirectStdout(t, f)
+	return f.Name()
+}
 
-// Write fails with errWrite.
-func (failingWriter) Write([]byte) (int, error) {
-	return 0, errWrite
+// breakStdout sets os.Stdout to a closed file until the test ends, so that
+// every write to it fails.
+func breakStdout(t *testing.T) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v, want nil", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	redirectStdout(t, f)
+}
+
+// readFile returns the content of the file name.
+func readFile(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v, want nil", name, err)
+	}
+	return string(data)
 }
 
 func TestRunPrintsIPCPath(t *testing.T) {
-	var stdout bytes.Buffer
+	stdoutName := captureStdout(t)
 
-	code := run(cancelledContext(), &stdout)
+	code := run(cancelledContext())
 
 	if code != exitcode.Success {
 		t.Errorf("run() code = %d, want %d", code, exitcode.Success)
 	}
 	ipcPath := serverIPCPath(os.Getpid())
-	if got, want := stdout.String(), ipcPath+"\n"; got != want {
+	if got, want := readFile(t, stdoutName), ipcPath+"\n"; got != want {
 		t.Errorf("run() stdout = %q, want %q", got, want)
 	}
 	if err := tryConnect(t, ipcPath); !errors.Is(err, os.ErrNotExist) {
@@ -40,8 +79,9 @@ func TestRunPrintsIPCPath(t *testing.T) {
 
 func TestRunFailsWhenStdoutFails(t *testing.T) {
 	stderr := captureStderr(t)
+	breakStdout(t)
 
-	code := run(cancelledContext(), failingWriter{})
+	code := run(cancelledContext())
 
 	if code != exitcode.General {
 		t.Errorf("run() with a failing stdout code = %d, want %d", code, exitcode.General)
@@ -56,14 +96,14 @@ func TestRunFailsWhenStdoutFails(t *testing.T) {
 func TestRunFailsWhenQueueExists(t *testing.T) {
 	newTestApplication(t)
 	stderr := captureStderr(t)
-	var stdout bytes.Buffer
+	stdoutName := captureStdout(t)
 
-	code := run(cancelledContext(), &stdout)
+	code := run(cancelledContext())
 
 	if code != exitcode.General {
 		t.Errorf("run() with an existing queue code = %d, want %d", code, exitcode.General)
 	}
-	if got := stdout.String(); got != "" {
+	if got := readFile(t, stdoutName); got != "" {
 		t.Errorf("run() with an existing queue stdout = %q, want empty", got)
 	}
 	stderr.waitFor(t, syscall.EEXIST.Error())
