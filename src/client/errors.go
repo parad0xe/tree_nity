@@ -9,4 +9,6 @@ var (
 	errMissingCommand = errors.New("missing command name")
 	// errUnknownCommand reports a command that the client does not handle.
 	errUnknownCommand = errors.New("unknown command")
+	// errCommandNotStopped reports a command that did not stop once cancelled.
+	errCommandNotStopped = errors.New("command did not stop once cancelled")
 )

@@ -357,7 +357,7 @@ func TestRunLetsCommandFinishAfterSignal(t *testing.T) {
 }
 
 func TestRunCancelsCommandAfterGracePeriod(t *testing.T) {
-	app := &application{gracePeriod: shortGracePeriod}
+	app := &application{gracePeriod: shortGracePeriod, cancelTimeout: testTimeout}
 	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
 		<-ctx.Done()
 		return exitcode.Success, ctx.Err()
