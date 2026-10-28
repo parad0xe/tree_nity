@@ -1,12 +1,12 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 )
 
 // Data holds a frame's opcode, emitter, decoded metadata, and payload.
+// Use Encode and Decode for JSON serialization.
 type Data struct {
 	opcode   Opcode
 	emitter  Emitter
@@ -60,6 +60,7 @@ func (d Data) toJSON() (dataJSON, error) {
 	if err := d.validate(); err != nil {
 		return dataJSON{}, err
 	}
+
 	tmpMetadata, err := d.metadata.toJSON(d.emitter)
 	if err != nil {
 		return dataJSON{}, err
@@ -67,7 +68,6 @@ func (d Data) toJSON() (dataJSON, error) {
 	if err := d.opcode.validate(d.emitter); err != nil {
 		return dataJSON{}, err
 	}
-
 	tmpPayload, err := d.payload.toJSON(d.opcode)
 	if err != nil {
 		return dataJSON{}, err
@@ -102,97 +102,6 @@ func (d Data) validate() error {
 		return ErrMissingMetadata
 	}
 	if d.payload == nil {
-		return ErrMissingPayload
-	}
-	return nil
-}
-
-type dataJSON struct {
-	// Opcode is nil when the operation code is missing or null.
-	Opcode *Opcode `json:"opcode"`
-	// Emitter is nil when the sender type is missing or null.
-	Emitter *Emitter `json:"emitter"`
-	// Metadata preserves emitter-specific JSON until its decoder is selected.
-	Metadata *json.RawMessage `json:"metadata"`
-	// Payload preserves operation-specific JSON until its decoder is selected.
-	Payload *json.RawMessage `json:"payload"`
-}
-
-func (d dataJSON) toData() (Data, error) {
-	if err := d.validate(); err != nil {
-		return Data{}, err
-	}
-
-	tmpMetadata, err := newMetadataJSON(*d.Emitter, *d.Metadata)
-	if err != nil {
-		return Data{}, err
-	}
-	metadata, err := tmpMetadata.toMetadata()
-	if err != nil {
-		return Data{}, err
-	}
-
-	var tmpPayload payloadJSON
-	switch *d.Emitter {
-	case Client:
-		switch *d.Opcode {
-		case ListTopic:
-			tmpPayload = &listTopicPayloadJSON{}
-		case CreateTopic:
-			tmpPayload = &createTopicPayloadJSON{}
-		case ConsumerInfo:
-			tmpPayload = &consumerInfoPayloadJSON{}
-		case TopicSubscription:
-			tmpPayload = &topicSubscriptionPayloadJSON{}
-		case Acknowledgement:
-			tmpPayload = &acknowledgementPayloadJSON{}
-		case CheckTopic:
-			tmpPayload = &checkTopicPayloadJSON{}
-		case ProduceMessage:
-			tmpPayload = &produceMessagePayloadJSON{}
-		case ConsumerDisconnect:
-			tmpPayload = &consumerDisconnectPayloadJSON{}
-		case ConsumerHeartbeat:
-			tmpPayload = &consumerHeartbeatPayloadJSON{}
-		}
-	case Server:
-		// No server payloads are defined yet.
-	default:
-		return Data{}, fmt.Errorf("%w: %d", ErrUnknownEmitter, *d.Emitter)
-	}
-	if tmpPayload == nil {
-		return Data{}, fmt.Errorf("%w for emitter %d: %d", ErrUnknownOpcode, *d.Emitter, *d.Opcode)
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(*d.Payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(tmpPayload); err != nil {
-		return Data{}, err
-	}
-	payload, err := tmpPayload.toPayload()
-	if err != nil {
-		return Data{}, err
-	}
-
-	return Data{
-		opcode:   *d.Opcode,
-		emitter:  *d.Emitter,
-		metadata: metadata,
-		payload:  payload,
-	}, nil
-}
-
-func (d dataJSON) validate() error {
-	if d.Opcode == nil {
-		return ErrMissingOpcode
-	}
-	if d.Emitter == nil {
-		return ErrMissingEmitter
-	}
-	if d.Metadata == nil {
-		return ErrMissingMetadata
-	}
-	if d.Payload == nil {
 		return ErrMissingPayload
 	}
 	return nil
