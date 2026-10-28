@@ -219,6 +219,23 @@ func TestUnlinkRejectsMissingQueue(t *testing.T) {
 	}
 }
 
+func TestUnlinkKeepsQueueRecreatedAfterUnlink(t *testing.T) {
+	name := queueName(t)
+	q := createReader(t, name)
+	if err := q.unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	createReader(t, name)
+
+	if err := q.unlink(); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("second Unlink() error = %v, want %v", err, os.ErrNotExist)
+	}
+
+	if err := tryCreateWriter(t, name); err != nil {
+		t.Errorf("Connect(%q) after the second Unlink() error = %v, want nil", name, err)
+	}
+}
+
 func TestDropRemovesQueue(t *testing.T) {
 	name := queueName(t)
 	q := createReader(t, name)
@@ -227,6 +244,36 @@ func TestDropRemovesQueue(t *testing.T) {
 	}
 	if err := tryCreateWriter(t, name); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("Connect(%q) after Drop() error = %v, want %v", name, err, os.ErrNotExist)
+	}
+}
+
+func TestDropAfterUnlinkOnlyCloses(t *testing.T) {
+	q := createReader(t, queueName(t))
+	if err := q.unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	if err := q.drop(); err != nil {
+		t.Errorf("Drop() after Unlink() error = %v, want nil", err)
+	}
+	if err := q.close(); !errors.Is(err, syscall.EBADF) {
+		t.Errorf("Close() after Drop() error = %v, want %v", err, syscall.EBADF)
+	}
+}
+
+func TestDropKeepsQueueRecreatedAfterUnlink(t *testing.T) {
+	name := queueName(t)
+	q := createReader(t, name)
+	if err := q.unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	createReader(t, name)
+
+	if err := q.drop(); err != nil {
+		t.Fatalf("Drop() error = %v, want nil", err)
+	}
+
+	if err := tryCreateWriter(t, name); err != nil {
+		t.Errorf("Connect(%q) after Drop() of the unlinked queue error = %v, want nil", name, err)
 	}
 }
 

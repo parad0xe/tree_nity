@@ -26,6 +26,8 @@ type queue struct {
 	mqd       C.mqd_t
 	frameSize int
 	maxFrame  int
+	// unlinked reports whether unlink removed the queue name.
+	unlinked bool
 }
 
 // nameMax is the maximum length, in bytes, of a queue name after its leading "/".
@@ -204,21 +206,34 @@ func (q *queue) close() error {
 	return nil
 }
 
-// unlink removes the queue name from the system. open descriptors remain
-// usable until they are closed.
+// unlink removes the queue name from the system. Open descriptors remain
+// usable until they are closed. A second call does not remove the name again,
+// which a new queue may have taken, and returns an error matching
+// os.ErrNotExist.
 func (q *queue) unlink() error {
+	if q.unlinked {
+		return fmt.Errorf("unlink queue %q: %w", q.name, os.ErrNotExist)
+	}
+
 	cname := C.CString(q.name)
 	defer C.free(unsafe.Pointer(cname))
 
 	if retcode, err := C.mq_unlink(cname); retcode == -1 {
 		return fmt.Errorf("unlink queue %q: %w", q.name, err)
 	}
+	q.unlinked = true
 
 	return nil
 }
 
-// drop closes the descriptor and removes the queue. It attempts both
-// operations even when the first one fails.
+// drop closes the descriptor and removes the queue, unless unlink already
+// removed it. It attempts both operations even when the first one fails.
 func (q *queue) drop() error {
-	return errors.Join(q.close(), q.unlink())
+	err := q.close()
+
+	if !q.unlinked {
+		err = errors.Join(err, q.unlink())
+	}
+
+	return err
 }

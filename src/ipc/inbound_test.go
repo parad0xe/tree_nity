@@ -293,6 +293,73 @@ func TestRecvReturnsImmediatelyWhenAlreadyCancelled(t *testing.T) {
 	}
 }
 
+func TestUnlinkRemovesQueue(t *testing.T) {
+	in := newTestInbound(t, testIPCPath(t), ignoringDecoder)
+	if err := in.Unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	if err := tryConnect(t, in.IPCPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("NewSender(%q) after Unlink() error = %v, want %v", in.IPCPath(), err, os.ErrNotExist)
+	}
+}
+
+func TestUnlinkKeepsReceiving(t *testing.T) {
+	rec := &recordingDecoder{}
+	in := newTestInbound(t, testIPCPath(t), rec.decode)
+	s := connect(t, in.IPCPath())
+	if err := in.Unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	if err := s.Send([]byte(testFrame)); err != nil {
+		t.Fatalf("Send(%q) after Unlink() error = %v, want nil", testFrame, err)
+	}
+	if _, err := in.Recv(testContext(t)); err != nil {
+		t.Fatalf("Recv() after Unlink() error = %v, want nil", err)
+	}
+	if want := []string{testFrame}; !slices.Equal(rec.frames, want) {
+		t.Errorf("decoded frames = %q, want %q", rec.frames, want)
+	}
+}
+
+func TestUnlinkDuringRecv(t *testing.T) {
+	rec := &recordingDecoder{}
+	in := newTestInbound(t, testIPCPath(t), rec.decode)
+	s := connect(t, in.IPCPath())
+	ctx := testContext(t)
+	started := make(chan struct{})
+	first := true
+	mockRecvFrame := func(deadline time.Time) ([]byte, error) {
+		if first {
+			first = false
+			close(started)
+		}
+		return in.receiver.TimedRecv(deadline)
+	}
+	wait := startCall(t, "recv()", func() error {
+		_, err := in.recv(ctx, mockRecvFrame)
+		return err
+	})
+	select {
+	case <-started:
+	case <-time.After(testTimeout):
+		t.Fatalf("recv() did not call recvFrame within %v", testTimeout)
+	}
+
+	if err := in.Unlink(); err != nil {
+		t.Fatalf("Unlink() during recv() error = %v, want nil", err)
+	}
+	if err := s.Send([]byte(testFrame)); err != nil {
+		t.Fatalf("Send(%q) error = %v, want nil", testFrame, err)
+	}
+
+	if err := wait(); err != nil {
+		t.Errorf("recv() during Unlink() error = %v, want nil", err)
+	}
+	if want := []string{testFrame}; !slices.Equal(rec.frames, want) {
+		t.Errorf("decoded frames = %q, want %q", rec.frames, want)
+	}
+}
+
 func TestDropRemovesQueue(t *testing.T) {
 	ipcPath := testIPCPath(t)
 	in, err := NewInbound(ipcPath, ignoringDecoder)
