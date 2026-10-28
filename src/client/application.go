@@ -23,6 +23,9 @@ type application struct {
 	gracePeriod time.Duration
 	// cancelTimeout is the time the command has to stop once cancelled.
 	cancelTimeout time.Duration
+	// gracefulShutdownFailed reports that the command did not stop once
+	// cancelled and may still use the queues.
+	gracefulShutdownFailed bool
 }
 
 // appConfig holds what newApplication needs to start the client.
@@ -100,27 +103,32 @@ func (app *application) run(sigCtx context.Context, command commands.Command) (i
 	case <-time.After(app.gracePeriod):
 	}
 
-	// A command that ignores the cancellation is abandoned, and its queues are
-	// dropped while it may still use them.
+	// A command that does not stop once cancelled is left running.
 	runCancel()
 	select {
 	case res := <-done:
 		return res.Code(), res.Err()
 	case <-time.After(app.cancelTimeout):
+		app.gracefulShutdownFailed = true
 		return exitcode.General, errCommandNotStopped
 	}
 }
 
 // drop removes the client queue and closes the server queue, if they were
-// opened.
+// opened. After a failed graceful shutdown, it only removes the client queue
+// name and leaves both queues open.
 func (app *application) drop() error {
 	var err error
 
 	if app.inbound != nil {
-		err = errors.Join(err, app.inbound.Drop())
+		if app.gracefulShutdownFailed {
+			err = errors.Join(err, app.inbound.Unlink())
+		} else {
+			err = errors.Join(err, app.inbound.Drop())
+		}
 	}
 
-	if app.outbound != nil {
+	if app.outbound != nil && !app.gracefulShutdownFailed {
 		err = errors.Join(err, app.outbound.Close())
 	}
 
