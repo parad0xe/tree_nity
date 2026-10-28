@@ -33,7 +33,7 @@ func newApplication() (*application, error) {
 
 	app := &application{}
 
-	inbound, err := ipc.NewInbound(ipcPath, protocol.NewDataFromFrame)
+	inbound, err := ipc.NewInbound(ipcPath, protocol.Decode)
 	if err != nil {
 		return nil, err
 	}
