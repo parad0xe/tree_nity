@@ -1,9 +1,11 @@
 package mqueue
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"testing"
+	"time"
 )
 
 func newReceiver(t *testing.T, name string) *Receiver {
@@ -52,5 +54,36 @@ func TestReceiverDropRemovesQueue(t *testing.T) {
 	}
 	if err := tryNewSender(t, name); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("NewSender(%q) after Drop() error = %v, want %v", name, err, os.ErrNotExist)
+	}
+}
+
+func TestReceiverUnlinkRemovesQueue(t *testing.T) {
+	name := queueName(t)
+	r := newReceiver(t, name)
+	if err := r.Unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	if err := tryNewSender(t, name); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("NewSender(%q) after Unlink() error = %v, want %v", name, err, os.ErrNotExist)
+	}
+}
+
+func TestReceiverUnlinkKeepsQueueOpen(t *testing.T) {
+	name := queueName(t)
+	r := newReceiver(t, name)
+	s := newSender(t, name)
+	if err := r.Unlink(); err != nil {
+		t.Fatalf("Unlink() error = %v, want nil", err)
+	}
+	frame := []byte("frame")
+	if err := s.Send(frame); err != nil {
+		t.Fatalf("Send(%q) after Unlink() error = %v, want nil", frame, err)
+	}
+	got, err := r.TimedRecv(time.Now().Add(testTimeout))
+	if err != nil {
+		t.Fatalf("TimedRecv() after Unlink() error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Errorf("TimedRecv() after Unlink() = %q, want %q", got, frame)
 	}
 }
