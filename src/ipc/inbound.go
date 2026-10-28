@@ -92,6 +92,12 @@ func (in *Inbound) IPCPath() string {
 	return in.ipcPath
 }
 
+// Unlink removes the queue from the system without closing it. It may be called
+// while Recv is running.
+func (in *Inbound) Unlink() error {
+	return in.receiver.Unlink()
+}
+
 // Drop closes the queue and removes it from the system. It must not be called
 // while Recv is running.
 func (in *Inbound) Drop() error {

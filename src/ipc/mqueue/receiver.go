@@ -33,6 +33,12 @@ func (r *Receiver) TimedRecv(deadline time.Time) ([]byte, error) {
 	return r.queue.timedRecv(deadline)
 }
 
+// Unlink removes the queue from the system without closing it. The queue keeps
+// working until it is closed.
+func (r *Receiver) Unlink() error {
+	return r.queue.unlink()
+}
+
 // Drop closes the queue and removes it from the system.
 func (r *Receiver) Drop() error {
 	return r.queue.drop()
