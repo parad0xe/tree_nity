@@ -155,7 +155,7 @@ func TestNewDataRejectsServerOpcodes(t *testing.T) {
 	}
 }
 
-// TestProduceMessagePayloadAccessors checks public payload fields after a round trip.
+// TestProduceMessagePayloadAccessors checks payload and message accessors after a round trip.
 func TestProduceMessagePayloadAccessors(t *testing.T) {
 	tests := []struct {
 		name  string

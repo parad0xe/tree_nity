@@ -186,8 +186,8 @@ func TestCreateTopicPayloadJSONRejectsFields(t *testing.T) {
 	}
 }
 
-// TestProduceMessagePayloadJSONToPayload checks required fields and message errors.
-func TestProduceMessagePayloadJSONToPayload(t *testing.T) {
+// TestProduceMessagePayloadJSONToPayloadRejectsInvalidInput checks required fields and message errors.
+func TestProduceMessagePayloadJSONToPayloadRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string

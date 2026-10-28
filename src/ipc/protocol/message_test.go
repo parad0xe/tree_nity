@@ -20,19 +20,13 @@ func TestMessageToJSONNil(t *testing.T) {
 	}
 }
 
-// TestMessageJSONToMessage checks required fields, byte limits, and conversion.
+// TestMessageJSONToMessage checks conversion up to the message byte limit.
 func TestMessageJSONToMessage(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		want    Message
-		wantErr error
+		name  string
+		input string
+		want  Message
 	}{
-		{name: "missing fields", input: `{}`, wantErr: ErrMissingMessageKey},
-		{name: "missing key", input: `{"value":"v"}`, wantErr: ErrMissingMessageKey},
-		{name: "null key", input: `{"key":null,"value":"v"}`, wantErr: ErrMissingMessageKey},
-		{name: "missing value", input: `{"key":"k"}`, wantErr: ErrMissingMessageValue},
-		{name: "null value", input: `{"key":"k","value":null}`, wantErr: ErrMissingMessageValue},
 		{name: "empty strings", input: `{"key":"","value":""}`, want: Message{}},
 		{name: "minimal key", input: `{"key":"k","value":""}`, want: Message{key: "k"}},
 		{name: "minimal value", input: `{"key":"","value":"v"}`, want: Message{value: "v"}},
@@ -53,6 +47,44 @@ func TestMessageJSONToMessage(t *testing.T) {
 			want:  Message{key: strings.Repeat("k", 512), value: strings.Repeat("v", 512)},
 		},
 		{
+			name:  "UTF-8 at byte limit",
+			input: fmt.Sprintf(`{"key":"","value":%q}`, strings.Repeat("é", 512)),
+			want:  Message{value: strings.Repeat("é", 512)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var input messageJSON
+			if err := json.Unmarshal([]byte(tt.input), &input); err != nil {
+				t.Errorf("Unmarshal(%q) error = %v, want nil", tt.input, err)
+				return
+			}
+
+			got, err := input.toMessage()
+			if err != nil {
+				t.Errorf("toMessage(%s) error = %v, want nil", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("toMessage(%s) = %+v, want %+v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMessageJSONToMessageRejectsInvalidInput checks required fields and oversized messages.
+func TestMessageJSONToMessageRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr error
+	}{
+		{name: "missing fields", input: `{}`, wantErr: ErrMissingMessageKey},
+		{name: "missing key", input: `{"value":"v"}`, wantErr: ErrMissingMessageKey},
+		{name: "null key", input: `{"key":null,"value":"v"}`, wantErr: ErrMissingMessageKey},
+		{name: "missing value", input: `{"key":"k"}`, wantErr: ErrMissingMessageValue},
+		{name: "null value", input: `{"key":"k","value":null}`, wantErr: ErrMissingMessageValue},
+		{
 			name:    "oversized key",
 			input:   fmt.Sprintf(`{"key":%q,"value":""}`, strings.Repeat("k", 1025)),
 			wantErr: ErrMessageTooLarge,
@@ -66,11 +98,6 @@ func TestMessageJSONToMessage(t *testing.T) {
 			name:    "combined size exceeds limit",
 			input:   fmt.Sprintf(`{"key":%q,"value":%q}`, strings.Repeat("k", 512), strings.Repeat("v", 513)),
 			wantErr: ErrMessageTooLarge,
-		},
-		{
-			name:  "UTF-8 at byte limit",
-			input: fmt.Sprintf(`{"key":"","value":%q}`, strings.Repeat("é", 512)),
-			want:  Message{value: strings.Repeat("é", 512)},
 		},
 		{
 			name:    "UTF-8 exceeds byte limit",
@@ -91,8 +118,8 @@ func TestMessageJSONToMessage(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("toMessage(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
-			if got != tt.want {
-				t.Errorf("toMessage(%s) = %+v, want %+v", tt.input, got, tt.want)
+			if got != (Message{}) {
+				t.Errorf("toMessage(%s) = %+v, want zero Message", tt.input, got)
 			}
 		})
 	}

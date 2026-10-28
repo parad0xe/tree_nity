@@ -27,19 +27,6 @@ func (p *ListTopicPayload) validate() error {
 	return nil
 }
 
-type listTopicPayloadJSON struct{}
-
-func (p listTopicPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &ListTopicPayload{}, nil
-}
-
-func (p listTopicPayloadJSON) validate() error {
-	return nil
-}
-
 // CreateTopicPayload represents a topic creation operation with no payload fields.
 type CreateTopicPayload struct{}
 
@@ -62,19 +49,6 @@ func (p *CreateTopicPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
 	}
-	return nil
-}
-
-type createTopicPayloadJSON struct{}
-
-func (p createTopicPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &CreateTopicPayload{}, nil
-}
-
-func (p createTopicPayloadJSON) validate() error {
 	return nil
 }
 
@@ -103,19 +77,6 @@ func (p *ConsumerInfoPayload) validate() error {
 	return nil
 }
 
-type consumerInfoPayloadJSON struct{}
-
-func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &ConsumerInfoPayload{}, nil
-}
-
-func (p consumerInfoPayloadJSON) validate() error {
-	return nil
-}
-
 // TopicSubscriptionPayload represents a subscription operation with no payload fields.
 type TopicSubscriptionPayload struct{}
 
@@ -138,19 +99,6 @@ func (p *TopicSubscriptionPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
 	}
-	return nil
-}
-
-type topicSubscriptionPayloadJSON struct{}
-
-func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &TopicSubscriptionPayload{}, nil
-}
-
-func (p topicSubscriptionPayloadJSON) validate() error {
 	return nil
 }
 
@@ -179,19 +127,6 @@ func (p *AcknowledgementPayload) validate() error {
 	return nil
 }
 
-type acknowledgementPayloadJSON struct{}
-
-func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &AcknowledgementPayload{}, nil
-}
-
-func (p acknowledgementPayloadJSON) validate() error {
-	return nil
-}
-
 // CheckTopicPayload represents a topic check operation with no payload fields.
 type CheckTopicPayload struct{}
 
@@ -214,19 +149,6 @@ func (p *CheckTopicPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
 	}
-	return nil
-}
-
-type checkTopicPayloadJSON struct{}
-
-func (p checkTopicPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &CheckTopicPayload{}, nil
-}
-
-func (p checkTopicPayloadJSON) validate() error {
 	return nil
 }
 
@@ -273,39 +195,6 @@ func (p *ProduceMessagePayload) validate() error {
 	return nil
 }
 
-type produceMessagePayloadJSON struct {
-	// Raw must be present even when its value is false.
-	Raw *bool `json:"raw"`
-	// Message must be present and pass key, value, and size validation.
-	Message *messageJSON `json:"message"`
-}
-
-func (p produceMessagePayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-
-	message, err := p.Message.toMessage()
-	if err != nil {
-		return nil, err
-	}
-
-	return &ProduceMessagePayload{
-		raw:     *p.Raw,
-		message: message,
-	}, nil
-}
-
-func (p produceMessagePayloadJSON) validate() error {
-	if p.Raw == nil {
-		return ErrMissingRaw
-	}
-	if p.Message == nil {
-		return ErrMissingMessage
-	}
-	return nil
-}
-
 // ConsumerDisconnectPayload represents a disconnection with no payload fields.
 type ConsumerDisconnectPayload struct{}
 
@@ -331,19 +220,6 @@ func (p *ConsumerDisconnectPayload) validate() error {
 	return nil
 }
 
-type consumerDisconnectPayloadJSON struct{}
-
-func (p consumerDisconnectPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &ConsumerDisconnectPayload{}, nil
-}
-
-func (p consumerDisconnectPayloadJSON) validate() error {
-	return nil
-}
-
 // ConsumerHeartbeatPayload represents a heartbeat with no payload fields.
 type ConsumerHeartbeatPayload struct{}
 
@@ -366,18 +242,5 @@ func (p *ConsumerHeartbeatPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
 	}
-	return nil
-}
-
-type consumerHeartbeatPayloadJSON struct{}
-
-func (p consumerHeartbeatPayloadJSON) toPayload() (Payload, error) {
-	if err := p.validate(); err != nil {
-		return nil, err
-	}
-	return &ConsumerHeartbeatPayload{}, nil
-}
-
-func (p consumerHeartbeatPayloadJSON) validate() error {
 	return nil
 }

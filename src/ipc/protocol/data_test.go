@@ -8,8 +8,33 @@ import (
 	"testing"
 )
 
-// TestDataJSONValidate checks that every envelope field must be present and non-null.
+// TestDataJSONValidate checks envelopes with every required field present.
 func TestDataJSONValidate(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "complete envelope", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":{}}`},
+		{name: "zero opcode and emitter", input: `{"opcode":0,"emitter":0,"metadata":{},"payload":{}}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var input dataJSON
+			if err := json.Unmarshal([]byte(tt.input), &input); err != nil {
+				t.Errorf("Unmarshal(%q) error = %v, want nil", tt.input, err)
+				return
+			}
+
+			if err := input.validate(); err != nil {
+				t.Errorf("validate(%s) error = %v, want nil", tt.input, err)
+			}
+		})
+	}
+}
+
+// TestDataJSONValidateRejectsMissingFields checks rejection before frame conversion.
+func TestDataJSONValidateRejectsMissingFields(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -24,8 +49,6 @@ func TestDataJSONValidate(t *testing.T) {
 		{name: "null metadata", input: `{"opcode":0,"emitter":1,"metadata":null,"payload":{}}`, wantErr: ErrMissingMetadata},
 		{name: "missing payload", input: `{"opcode":0,"emitter":1,"metadata":{}}`, wantErr: ErrMissingPayload},
 		{name: "null payload", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":null}`, wantErr: ErrMissingPayload},
-		{name: "complete envelope", input: `{"opcode":0,"emitter":1,"metadata":{},"payload":{}}`},
-		{name: "zero opcode and emitter", input: `{"opcode":0,"emitter":0,"metadata":{},"payload":{}}`},
 	}
 
 	for _, tt := range tests {
@@ -40,10 +63,6 @@ func TestDataJSONValidate(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("validate(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
-			if tt.wantErr == nil {
-				return
-			}
-
 			got, err := input.toData()
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("toData(%s) error = %v, want %v", tt.input, err, tt.wantErr)
@@ -103,6 +122,43 @@ func TestDataJSONToData(t *testing.T) {
 			got, err := input.toData()
 			if err != nil || !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("toData(%s) = %#v, error = %v, want %#v and nil", frame, got, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestDecodeRejectsInheritedJSONFields checks that fields cannot leak between decoded frames.
+func TestDecodeRejectsInheritedJSONFields(t *testing.T) {
+	previousFrame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"previous","clientIPC":"/previous"},"payload":{"raw":true,"message":{"key":"previous","value":"previous"}}}`
+	tests := []struct {
+		name     string
+		metadata string
+		payload  string
+		wantErr  error
+	}{
+		{
+			name: "missing client ID", metadata: `{"clientIPC":"/next"}`,
+			payload: `{"raw":false,"message":{"key":"next","value":"next"}}`, wantErr: ErrMissingClientID,
+		},
+		{
+			name: "missing raw", metadata: `{"clientId":"next","clientIPC":"/next"}`,
+			payload: `{"message":{"key":"next","value":"next"}}`, wantErr: ErrMissingRaw,
+		},
+		{
+			name: "missing message value", metadata: `{"clientId":"next","clientIPC":"/next"}`,
+			payload: `{"raw":false,"message":{"key":"next"}}`, wantErr: ErrMissingMessageValue,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Decode([]byte(previousFrame)); err != nil {
+				t.Errorf("Decode(%q) error = %v, want nil", previousFrame, err)
+				return
+			}
+			frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":%s,"payload":%s}`, ProduceMessage, Client, tt.metadata, tt.payload)
+			got, err := Decode([]byte(frame))
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) after Decode(%q) = %#v, error = %v, want zero Data and %v", frame, previousFrame, got, err, tt.wantErr)
 			}
 		})
 	}

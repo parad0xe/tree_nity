@@ -105,8 +105,8 @@ func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestClientMetadataJSONToMetadata checks missing and null client fields.
-func TestClientMetadataJSONToMetadata(t *testing.T) {
+// TestClientMetadataJSONToMetadataRejectsMissingFields checks missing and null client fields.
+func TestClientMetadataJSONToMetadataRejectsMissingFields(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
