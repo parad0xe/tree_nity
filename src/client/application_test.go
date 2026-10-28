@@ -21,6 +21,8 @@ const (
 	testTimeout = 5 * time.Second
 	// shortGracePeriod is a grace period short enough to wait for in a test.
 	shortGracePeriod = 10 * time.Millisecond
+	// shortCancelTimeout is a cancel timeout short enough to wait for in a test.
+	shortCancelTimeout = 10 * time.Millisecond
 )
 
 // errUnexpectedEncode reports an encoding that the test did not expect.
@@ -369,5 +371,28 @@ func TestRunCancelsCommandAfterGracePeriod(t *testing.T) {
 	res := c.wait(t)
 	if !errors.Is(res.Err(), context.Canceled) {
 		t.Errorf("run() after a signal and the grace period error = %v, want %v", res.Err(), context.Canceled)
+	}
+}
+
+func TestRunStopsWaitingForCommandIgnoringCancellation(t *testing.T) {
+	app := &application{gracePeriod: shortGracePeriod, cancelTimeout: shortCancelTimeout}
+	release := make(chan struct{})
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		<-release
+		return exitcode.Success, nil
+	})
+	c := startCall(t, cancelledContext(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, command)
+	})
+	t.Cleanup(func() {
+		close(release)
+	})
+
+	res := c.wait(t)
+	if res.Code() != exitcode.General {
+		t.Errorf("run() with a command ignoring the cancellation code = %d, want %d", res.Code(), exitcode.General)
+	}
+	if !errors.Is(res.Err(), errCommandNotStopped) {
+		t.Errorf("run() with a command ignoring the cancellation error = %v, want %v", res.Err(), errCommandNotStopped)
 	}
 }
