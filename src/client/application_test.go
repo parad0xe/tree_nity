@@ -23,6 +23,8 @@ const (
 	shortGracePeriod = 10 * time.Millisecond
 	// shortCancelTimeout is a cancel timeout short enough to wait for in a test.
 	shortCancelTimeout = 10 * time.Millisecond
+	// shortRecvTimeout is a receive timeout short enough to wait for in a test.
+	shortRecvTimeout = 10 * time.Millisecond
 )
 
 // errUnexpectedEncode reports an encoding that the test did not expect.
@@ -142,6 +144,26 @@ func tryNewApplication(t *testing.T, config appConfig) error {
 		})
 	}
 	return err
+}
+
+// newFailedShutdownApplication creates the client application as a failed
+// graceful shutdown leaves it, and closes its queues when the test ends.
+func newFailedShutdownApplication(t *testing.T, config appConfig) *application {
+	t.Helper()
+	app, err := newApplication(config)
+	if err != nil {
+		t.Fatalf("newApplication() error = %v, want nil", err)
+	}
+	app.gracefulShutdownFailed = true
+	t.Cleanup(func() {
+		if err := app.inbound.Drop(); err != nil {
+			t.Errorf("Drop() error = %v, want nil", err)
+		}
+		if err := app.outbound.Close(); err != nil {
+			t.Errorf("Close() error = %v, want nil", err)
+		}
+	})
+	return app
 }
 
 // tryConnect opens and closes a sender on the queue ipcPath, and returns the
@@ -394,5 +416,79 @@ func TestRunStopsWaitingForCommandIgnoringCancellation(t *testing.T) {
 	}
 	if !errors.Is(res.Err(), errCommandNotStopped) {
 		t.Errorf("run() with a command ignoring the cancellation error = %v, want %v", res.Err(), errCommandNotStopped)
+	}
+}
+
+func TestRunRecordsFailedGracefulShutdown(t *testing.T) {
+	app := &application{gracePeriod: shortGracePeriod, cancelTimeout: shortCancelTimeout}
+	release := make(chan struct{})
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		<-release
+		return exitcode.Success, nil
+	})
+	c := startCall(t, cancelledContext(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, command)
+	})
+	t.Cleanup(func() {
+		close(release)
+	})
+
+	c.wait(t)
+	if !app.gracefulShutdownFailed {
+		t.Errorf("gracefulShutdownFailed after a command ignoring the cancellation = %v, want %v", app.gracefulShutdownFailed, true)
+	}
+}
+
+func TestRunKeepsGracefulShutdownWhenCommandStops(t *testing.T) {
+	app := &application{gracePeriod: shortGracePeriod, cancelTimeout: testTimeout}
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		<-ctx.Done()
+		return exitcode.Success, ctx.Err()
+	})
+	c := startCall(t, cancelledContext(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, command)
+	})
+
+	c.wait(t)
+	if app.gracefulShutdownFailed {
+		t.Errorf("gracefulShutdownFailed after a command stopping once cancelled = %v, want %v", app.gracefulShutdownFailed, false)
+	}
+}
+
+func TestDropAfterFailedGracefulShutdownRemovesClientQueue(t *testing.T) {
+	serverIPCPath := testServerIPCPath(os.Getpid())
+	newTestQueue(t, serverIPCPath)
+	app := newFailedShutdownApplication(t, testConfig(serverIPCPath))
+
+	if err := app.drop(); err != nil {
+		t.Fatalf("drop() after a failed graceful shutdown error = %v, want nil", err)
+	}
+
+	ipcPath := app.inbound.IPCPath()
+	if err := tryConnect(t, ipcPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("NewSender(%q) after drop() error = %v, want %v", ipcPath, err, os.ErrNotExist)
+	}
+}
+
+func TestDropAfterFailedGracefulShutdownKeepsQueuesOpen(t *testing.T) {
+	serverIPCPath := testServerIPCPath(os.Getpid())
+	newTestQueue(t, serverIPCPath)
+	config := testConfig(serverIPCPath)
+	config.encoder = func(protocol.Data) ([]byte, error) {
+		return []byte("frame"), nil
+	}
+	app := newFailedShutdownApplication(t, config)
+
+	if err := app.drop(); err != nil {
+		t.Fatalf("drop() after a failed graceful shutdown error = %v, want nil", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), shortRecvTimeout)
+	defer cancel()
+	if _, err := app.inbound.Recv(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Recv() after drop() error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if err := app.outbound.Send(context.Background(), protocol.Data{}); err != nil {
+		t.Errorf("Send() after drop() error = %v, want nil", err)
 	}
 }
