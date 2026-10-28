@@ -12,17 +12,14 @@ import (
 	"tree_nity/src/lifecycle"
 )
 
-const (
-	// gracePeriod is the longest the client keeps running after SIGINT or SIGTERM.
-	gracePeriod = 5 * time.Second
-)
-
 // application holds the resources the client owns while it runs.
 type application struct {
 	// inbound receives what the server sends to the client.
 	inbound *ipc.Inbound
 	// outbound sends the requests of the client to the server.
 	outbound *ipc.Outbound
+	// gracePeriod is the longest the client keeps running after SIGINT or SIGTERM.
+	gracePeriod time.Duration
 }
 
 // appConfig holds what newApplication needs to start the client.
@@ -33,6 +30,8 @@ type appConfig struct {
 	encoder ipc.EncodeFunc
 	// decoder turns the frames received from the server into data.
 	decoder ipc.DecodeFunc
+	// gracePeriod is the longest the client keeps running after SIGINT or SIGTERM.
+	gracePeriod time.Duration
 }
 
 // newApplication connects to the server, then creates the client inbound queue,
@@ -41,7 +40,9 @@ func newApplication(config appConfig) (*application, error) {
 	pid := os.Getpid()
 	ipcPath := fmt.Sprintf("/operator.client.%d", pid)
 
-	app := &application{}
+	app := &application{
+		gracePeriod: config.gracePeriod,
+	}
 
 	outbound, err := ipc.NewOutbound(config.serverIPCPath, config.encoder)
 	if err != nil {
@@ -85,7 +86,7 @@ func (app *application) run(sigCtx context.Context, command commands.Command) (i
 	select {
 	case res := <-done:
 		return res.Code(), res.Err()
-	case <-time.After(gracePeriod):
+	case <-time.After(app.gracePeriod):
 	}
 
 	runCancel()
