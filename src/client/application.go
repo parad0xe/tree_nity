@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tree_nity/src/client/commands"
+	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
 	"tree_nity/src/lifecycle"
 )
@@ -18,8 +19,10 @@ type application struct {
 	inbound *ipc.Inbound
 	// outbound sends the requests of the client to the server.
 	outbound *ipc.Outbound
-	// gracePeriod is the longest the client keeps running after SIGINT or SIGTERM.
+	// gracePeriod is the time the command has to finish after SIGINT or SIGTERM.
 	gracePeriod time.Duration
+	// cancelTimeout is the time the command has to stop once cancelled.
+	cancelTimeout time.Duration
 }
 
 // appConfig holds what newApplication needs to start the client.
@@ -30,8 +33,10 @@ type appConfig struct {
 	encoder ipc.EncodeFunc
 	// decoder turns the frames received from the server into data.
 	decoder ipc.DecodeFunc
-	// gracePeriod is the longest the client keeps running after SIGINT or SIGTERM.
+	// gracePeriod is the time the command has to finish after SIGINT or SIGTERM.
 	gracePeriod time.Duration
+	// cancelTimeout is the time the command has to stop once cancelled.
+	cancelTimeout time.Duration
 }
 
 // clientIPCPath returns the inbound queue name of the client running as pid.
@@ -45,7 +50,8 @@ func newApplication(config appConfig) (*application, error) {
 	ipcPath := clientIPCPath(os.Getpid())
 
 	app := &application{
-		gracePeriod: config.gracePeriod,
+		gracePeriod:   config.gracePeriod,
+		cancelTimeout: config.cancelTimeout,
 	}
 
 	outbound, err := ipc.NewOutbound(config.serverIPCPath, config.encoder)
@@ -64,7 +70,8 @@ func newApplication(config appConfig) (*application, error) {
 }
 
 // run runs the requested command. After SIGINT or SIGTERM, the command has at
-// most gracePeriod to finish.
+// most gracePeriod to finish, then at most cancelTimeout to stop. If it does
+// not stop, run returns errCommandNotStopped.
 func (app *application) run(sigCtx context.Context, command commands.Command) (int, error) {
 	env := commands.Env{
 		Shutdown: lifecycle.NewGracefulShutdown(sigCtx.Done()),
@@ -93,10 +100,15 @@ func (app *application) run(sigCtx context.Context, command commands.Command) (i
 	case <-time.After(app.gracePeriod):
 	}
 
+	// A command that ignores the cancellation is abandoned, and its queues are
+	// dropped while it may still use them.
 	runCancel()
-	res := <-done
-
-	return res.Code(), res.Err()
+	select {
+	case res := <-done:
+		return res.Code(), res.Err()
+	case <-time.After(app.cancelTimeout):
+		return exitcode.General, errCommandNotStopped
+	}
 }
 
 // drop removes the client queue and closes the server queue, if they were

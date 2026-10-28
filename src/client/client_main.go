@@ -17,9 +17,12 @@ import (
 // usage describes the command line of the client.
 const usage = "usage: %s <ipc_identifier> <command> [arguments]"
 
-// defaultGracePeriod is the longest the client keeps running after SIGINT or
+// defaultGracePeriod is the time the command has to finish after SIGINT or
 // SIGTERM.
-const defaultGracePeriod = 5 * time.Second
+const defaultGracePeriod = 4 * time.Second
+
+// defaultCancelTimeout is the time the command has to stop once cancelled.
+const defaultCancelTimeout = 1 * time.Second
 
 func main() {
 	retcode := run(context.Background())
@@ -44,8 +47,9 @@ func run(ctx context.Context) (code int) {
 		encoder: func(data protocol.Data) ([]byte, error) {
 			return make([]byte, 0), nil
 		},
-		decoder:     protocol.NewDataFromFrame,
-		gracePeriod: defaultGracePeriod,
+		decoder:       protocol.NewDataFromFrame,
+		gracePeriod:   defaultGracePeriod,
+		cancelTimeout: defaultCancelTimeout,
 	})
 	if err != nil {
 		logError("client:", err)
