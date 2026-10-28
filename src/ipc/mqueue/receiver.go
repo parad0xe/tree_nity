@@ -39,7 +39,8 @@ func (r *Receiver) Unlink() error {
 	return r.queue.unlink()
 }
 
-// Drop closes the queue and removes it from the system.
+// Drop closes the queue and removes it from the system, unless Unlink already
+// removed it.
 func (r *Receiver) Drop() error {
 	return r.queue.drop()
 }

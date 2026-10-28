@@ -98,8 +98,8 @@ func (in *Inbound) Unlink() error {
 	return in.receiver.Unlink()
 }
 
-// Drop closes the queue and removes it from the system. It must not be called
-// while Recv is running.
+// Drop closes the queue and removes it from the system, unless Unlink already
+// removed it. It must not be called while Recv is running.
 func (in *Inbound) Drop() error {
 	return in.receiver.Drop()
 }
