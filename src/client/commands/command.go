@@ -19,6 +19,7 @@ type Env struct {
 
 // Command is a client command parsed from the command line, ready to run.
 type Command interface {
-	// Execute runs the command and returns the exit code of the client.
-	Execute(context.Context, Env) (int, error)
+	// Execute runs the command and returns the exit code of the client, which is
+	// exitcode.Success when the error is nil. It returns once ctx is cancelled.
+	Execute(ctx context.Context, env Env) (int, error)
 }
