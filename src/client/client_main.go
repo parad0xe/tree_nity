@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"tree_nity/src/client/commands"
 	"tree_nity/src/exitcode"
@@ -15,6 +16,10 @@ import (
 
 // usage describes the command line of the client.
 const usage = "usage: %s <ipc_identifier> <command> [arguments]"
+
+// defaultGracePeriod is the longest the client keeps running after SIGINT or
+// SIGTERM.
+const defaultGracePeriod = 5 * time.Second
 
 func main() {
 	retcode := run(context.Background())
@@ -39,7 +44,8 @@ func run(ctx context.Context) (code int) {
 		encoder: func(data protocol.Data) ([]byte, error) {
 			return make([]byte, 0), nil
 		},
-		decoder: protocol.NewDataFromFrame,
+		decoder:     protocol.NewDataFromFrame,
+		gracePeriod: defaultGracePeriod,
 	})
 	if err != nil {
 		logError("client:", err)
