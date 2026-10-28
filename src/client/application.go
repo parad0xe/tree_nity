@@ -34,11 +34,15 @@ type appConfig struct {
 	gracePeriod time.Duration
 }
 
+// clientIPCPath returns the inbound queue name of the client running as pid.
+func clientIPCPath(pid int) string {
+	return fmt.Sprintf("/operator.client.%d", pid)
+}
+
 // newApplication connects to the server, then creates the client inbound queue,
 // named after the process ID.
 func newApplication(config appConfig) (*application, error) {
-	pid := os.Getpid()
-	ipcPath := fmt.Sprintf("/operator.client.%d", pid)
+	ipcPath := clientIPCPath(os.Getpid())
 
 	app := &application{
 		gracePeriod: config.gracePeriod,
