@@ -6,11 +6,7 @@ import (
 	"io"
 )
 
-// Encode validates data and encodes it as a single JSON frame.
-// Metadata and payload must match the emitter and opcode and contain valid UTF-8.
-// Opcodes are interpreted by emitter; no server opcodes are defined yet.
-// Messages must respect MessageSize; offsets and transport size limits are excluded.
-// Validation errors support errors.Is. On error, the frame is nil.
+// Encode returns the JSON encoding of data after validation.
 func Encode(data Data) ([]byte, error) {
 	tmpData, err := data.toJSON()
 	if err != nil {
@@ -20,12 +16,7 @@ func Encode(data Data) ([]byte, error) {
 	return json.Marshal(tmpData)
 }
 
-// Decode decodes and validates a single JSON frame.
-// Unknown fields, missing required fields, and trailing JSON values are rejected.
-// Metadata is selected by emitter, and payload is selected by emitter and opcode.
-// Server opcodes are not defined yet and are rejected with ErrUnknownOpcode.
-// Errors for missing fields, unknown opcodes or emitters, oversized messages,
-// and additional JSON values can be matched with errors.Is.
+// Decode returns validated protocol data from a single JSON frame.
 func Decode(frame []byte) (Data, error) {
 	var tmpData dataJSON
 

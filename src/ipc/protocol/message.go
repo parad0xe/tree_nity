@@ -12,8 +12,7 @@ type Message struct {
 	value  string
 }
 
-// NewMessage creates a message with an internal offset of zero.
-// NewData and Encode validate its size and strings.
+// NewMessage returns a message with a zero queue offset.
 func NewMessage(key, value string) Message {
 	return Message{key: key, value: value}
 }

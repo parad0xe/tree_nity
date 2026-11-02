@@ -5,7 +5,7 @@ import "fmt"
 // ListTopicPayload represents a list topic operation with no payload fields.
 type ListTopicPayload struct{}
 
-// NewListTopicPayload creates an empty list topic payload.
+// NewListTopicPayload returns an empty list topic payload.
 func NewListTopicPayload() *ListTopicPayload {
 	return &ListTopicPayload{}
 }
@@ -30,7 +30,7 @@ func (p *ListTopicPayload) validate() error {
 // CreateTopicPayload represents a topic creation operation with no payload fields.
 type CreateTopicPayload struct{}
 
-// NewCreateTopicPayload creates an empty topic creation payload.
+// NewCreateTopicPayload returns an empty topic creation payload.
 func NewCreateTopicPayload() *CreateTopicPayload {
 	return &CreateTopicPayload{}
 }
@@ -55,7 +55,7 @@ func (p *CreateTopicPayload) validate() error {
 // ConsumerInfoPayload represents a consumer information operation with no payload fields.
 type ConsumerInfoPayload struct{}
 
-// NewConsumerInfoPayload creates an empty consumer information payload.
+// NewConsumerInfoPayload returns an empty consumer information payload.
 func NewConsumerInfoPayload() *ConsumerInfoPayload {
 	return &ConsumerInfoPayload{}
 }
@@ -80,7 +80,7 @@ func (p *ConsumerInfoPayload) validate() error {
 // TopicSubscriptionPayload represents a subscription operation with no payload fields.
 type TopicSubscriptionPayload struct{}
 
-// NewTopicSubscriptionPayload creates an empty topic subscription payload.
+// NewTopicSubscriptionPayload returns an empty topic subscription payload.
 func NewTopicSubscriptionPayload() *TopicSubscriptionPayload {
 	return &TopicSubscriptionPayload{}
 }
@@ -105,7 +105,7 @@ func (p *TopicSubscriptionPayload) validate() error {
 // AcknowledgementPayload represents an acknowledgement with no payload fields.
 type AcknowledgementPayload struct{}
 
-// NewAcknowledgementPayload creates an empty acknowledgement payload.
+// NewAcknowledgementPayload returns an empty acknowledgement payload.
 func NewAcknowledgementPayload() *AcknowledgementPayload {
 	return &AcknowledgementPayload{}
 }
@@ -130,7 +130,7 @@ func (p *AcknowledgementPayload) validate() error {
 // CheckTopicPayload represents a topic check operation with no payload fields.
 type CheckTopicPayload struct{}
 
-// NewCheckTopicPayload creates an empty topic check payload.
+// NewCheckTopicPayload returns an empty topic check payload.
 func NewCheckTopicPayload() *CheckTopicPayload {
 	return &CheckTopicPayload{}
 }
@@ -158,8 +158,7 @@ type ProduceMessagePayload struct {
 	message Message
 }
 
-// NewProduceMessagePayload creates a payload with a message and its raw flag.
-// NewData and Encode validate the message's size and strings.
+// NewProduceMessagePayload returns a payload containing a message and its raw flag.
 func NewProduceMessagePayload(raw bool, message Message) *ProduceMessagePayload {
 	return &ProduceMessagePayload{raw: raw, message: message}
 }
@@ -198,7 +197,7 @@ func (p *ProduceMessagePayload) validate() error {
 // ConsumerDisconnectPayload represents a disconnection with no payload fields.
 type ConsumerDisconnectPayload struct{}
 
-// NewConsumerDisconnectPayload creates an empty consumer disconnection payload.
+// NewConsumerDisconnectPayload returns an empty consumer disconnection payload.
 func NewConsumerDisconnectPayload() *ConsumerDisconnectPayload {
 	return &ConsumerDisconnectPayload{}
 }
@@ -223,7 +222,7 @@ func (p *ConsumerDisconnectPayload) validate() error {
 // ConsumerHeartbeatPayload represents a heartbeat with no payload fields.
 type ConsumerHeartbeatPayload struct{}
 
-// NewConsumerHeartbeatPayload creates an empty consumer heartbeat payload.
+// NewConsumerHeartbeatPayload returns an empty consumer heartbeat payload.
 func NewConsumerHeartbeatPayload() *ConsumerHeartbeatPayload {
 	return &ConsumerHeartbeatPayload{}
 }

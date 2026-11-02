@@ -14,10 +14,7 @@ type Data struct {
 	payload  Payload
 }
 
-// NewData creates a validated frame and infers its emitter from metadata.
-// Metadata must be *ClientMetadata or *ServerMetadata, and payload must match opcode.
-// Opcodes are interpreted by emitter; no server opcodes are defined yet.
-// On error, it returns a zero Data and an error inspectable with errors.Is.
+// NewData returns a validated frame with its emitter inferred from metadata.
 func NewData(opcode Opcode, metadata Metadata, payload Payload) (Data, error) {
 	data := Data{opcode: opcode, metadata: metadata, payload: payload}
 	switch metadata.(type) {

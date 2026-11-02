@@ -6,7 +6,7 @@ import "fmt"
 type ServerMetadata struct {
 }
 
-// NewServerMetadata creates metadata for a server frame.
+// NewServerMetadata returns metadata for a server frame.
 func NewServerMetadata() *ServerMetadata {
 	return &ServerMetadata{}
 }

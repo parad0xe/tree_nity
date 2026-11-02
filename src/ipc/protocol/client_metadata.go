@@ -11,8 +11,7 @@ type ClientMetadata struct {
 	clientIPC string
 }
 
-// NewClientMetadata identifies a client and its return IPC endpoint.
-// NewData and Encode validate its strings.
+// NewClientMetadata returns metadata identifying a client and its IPC endpoint.
 func NewClientMetadata(clientID, clientIPC string) *ClientMetadata {
 	return &ClientMetadata{clientID: clientID, clientIPC: clientIPC}
 }
@@ -22,7 +21,7 @@ func (m ClientMetadata) ClientID() string {
 	return m.clientID
 }
 
-// ClientIPC returns the client's return IPC endpoint.
+// ClientIPC returns the client's IPC endpoint.
 func (m ClientMetadata) ClientIPC() string {
 	return m.clientIPC
 }
