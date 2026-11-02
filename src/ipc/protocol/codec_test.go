@@ -83,7 +83,7 @@ func TestEncode(t *testing.T) {
 		{
 			name:     "client",
 			emitter:  Client,
-			metadata: &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			metadata: &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
 			json:     `{"clientId":"client-1","clientIPC":"/client-1"}`,
 		},
 	}
@@ -133,10 +133,10 @@ func TestEncodeStringsAndLimits(t *testing.T) {
 		message  Message
 	}{
 		{name: "empty strings"},
-		{name: "minimal strings", metadata: ClientMetadata{clientId: "c", clientIPC: "q"}, message: Message{key: "k", value: "v"}},
+		{name: "minimal strings", metadata: ClientMetadata{clientID: "c", clientIPC: "q"}, message: Message{key: "k", value: "v"}},
 		{
 			name:     "escaped strings",
-			metadata: ClientMetadata{clientId: "client\"\\\n\x00", clientIPC: "/é/猫<&>\u2028"},
+			metadata: ClientMetadata{clientID: "client\"\\\n\x00", clientIPC: "/é/猫<&>\u2028"},
 			message:  Message{key: "key\"\\\n\t\x00", value: "é/猫<&>\u2029"},
 		},
 		{name: "key at byte limit", message: Message{key: strings.Repeat("k", MessageSize)}},
@@ -146,7 +146,7 @@ func TestEncodeStringsAndLimits(t *testing.T) {
 		{name: "JSON escaping at byte limit", message: Message{value: strings.Repeat("\x00", MessageSize)}},
 		{
 			name:     "large metadata",
-			metadata: ClientMetadata{clientId: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
+			metadata: ClientMetadata{clientID: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
 		},
 		{name: "internal offset", message: Message{offset: 42, key: "key", value: "value"}},
 	}
@@ -197,7 +197,7 @@ func TestEncodeRejectsInvalidInput(t *testing.T) {
 		{name: "client metadata from server", data: Data{emitter: Server, metadata: &ClientMetadata{}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
 		{name: "metadata conversion error", data: Data{emitter: Server, metadata: &failingMetadata{err: ErrInvalidMetadata}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
 		{name: "wrapped metadata conversion error", data: Data{emitter: Server, metadata: &failingMetadata{err: fmt.Errorf("metadata: %w", conversionErr)}, payload: &ListTopicPayload{}}, wantErr: conversionErr},
-		{name: "invalid UTF-8 client ID", data: Data{emitter: Client, metadata: &ClientMetadata{clientId: "\xff"}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
+		{name: "invalid UTF-8 client ID", data: Data{emitter: Client, metadata: &ClientMetadata{clientID: "\xff"}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
 		{name: "invalid UTF-8 client IPC", data: Data{emitter: Client, metadata: &ClientMetadata{clientIPC: "\xff"}, payload: &ListTopicPayload{}}, wantErr: ErrInvalidMetadata},
 		{name: "missing payload", data: Data{emitter: Client, metadata: &ClientMetadata{}}, wantErr: ErrMissingPayload},
 		{name: "payload conversion error", data: Data{emitter: Client, metadata: &ClientMetadata{}, payload: &failingPayload{err: ErrInvalidPayload}}, wantErr: ErrInvalidPayload},
@@ -332,7 +332,7 @@ func TestDecode(t *testing.T) {
 			name:     "client",
 			emitter:  Client,
 			metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:     &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			want:     &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
 		},
 	}
 

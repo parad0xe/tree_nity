@@ -21,7 +21,7 @@ func TestNewMetadataJSON(t *testing.T) {
 			name:    "client",
 			emitter: Client,
 			input:   `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:    &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			want:    &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
 		},
 		{
 			name:    "empty client strings",
@@ -33,13 +33,13 @@ func TestNewMetadataJSON(t *testing.T) {
 			name:    "minimal client strings",
 			emitter: Client,
 			input:   `{"clientId":"c","clientIPC":"q"}`,
-			want:    &ClientMetadata{clientId: "c", clientIPC: "q"},
+			want:    &ClientMetadata{clientID: "c", clientIPC: "q"},
 		},
 		{
 			name:    "large client strings",
 			emitter: Client,
 			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 4096), strings.Repeat("q", 4096)),
-			want:    &ClientMetadata{clientId: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
+			want:    &ClientMetadata{clientID: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
 		},
 		{name: "server", emitter: Server, input: `{}`, want: &ServerMetadata{}},
 	}

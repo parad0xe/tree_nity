@@ -13,7 +13,7 @@ func (m clientMetadataJSON) toMetadata() (Metadata, error) {
 	}
 
 	return &ClientMetadata{
-		clientId:  *m.ClientID,
+		clientID:  *m.ClientID,
 		clientIPC: *m.ClientIPC,
 	}, nil
 }

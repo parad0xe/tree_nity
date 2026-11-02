@@ -93,7 +93,7 @@ func TestDataJSONToData(t *testing.T) {
 			want: Data{
 				opcode:   ProduceMessage,
 				emitter:  Client,
-				metadata: &ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+				metadata: &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
 				payload:  &ProduceMessagePayload{raw: false, message: Message{key: "key", value: "value"}},
 			},
 		},
