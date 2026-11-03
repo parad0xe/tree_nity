@@ -43,10 +43,7 @@ func run(ctx context.Context) (code int) {
 
 	app, err := newApplication(appConfig{
 		serverIPCPath: serverIPCPath,
-		// TODO: use protocol.Encode once the encoder is merged.
-		encoder: func(data protocol.Data) ([]byte, error) {
-			return make([]byte, 0), nil
-		},
+		encoder:       protocol.Encode,
 		decoder:       protocol.Decode,
 		gracePeriod:   defaultGracePeriod,
 		cancelTimeout: defaultCancelTimeout,

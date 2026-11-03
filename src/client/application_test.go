@@ -27,9 +27,6 @@ const (
 	shortRecvTimeout = 10 * time.Millisecond
 )
 
-// errUnexpectedEncode reports an encoding that the test did not expect.
-var errUnexpectedEncode = errors.New("unexpected encode")
-
 // call is a function running in its own goroutine. Its context is cancelled,
 // and the goroutine waited for, when the test ends.
 type call struct {
@@ -107,11 +104,9 @@ func newTestQueue(t *testing.T, ipcPath string) {
 func testConfig(serverIPCPath string) appConfig {
 	return appConfig{
 		serverIPCPath: serverIPCPath,
-		encoder: func(protocol.Data) ([]byte, error) {
-			return nil, errUnexpectedEncode
-		},
-		decoder:     protocol.Decode,
-		gracePeriod: testTimeout,
+		encoder:       protocol.Encode,
+		decoder:       protocol.Decode,
+		gracePeriod:   testTimeout,
 	}
 }
 
