@@ -33,7 +33,7 @@ type failingPayload struct {
 	err error
 }
 
-func (p *failingPayload) toJSON(_ Opcode) (payloadJSON, error) {
+func (p *failingPayload) toJSON(_ Emitter, _ Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
@@ -424,40 +424,43 @@ func TestDecode(t *testing.T) {
 	}
 }
 
-// TestCodecRejectsServerOpcodes checks that client operations cannot form server frames.
-func TestCodecRejectsServerOpcodes(t *testing.T) {
+// TestCodecRejectsClientPayloadsFromServer checks emitter-specific payload validation.
+func TestCodecRejectsClientPayloadsFromServer(t *testing.T) {
 	tests := []struct {
-		name    string
-		opcode  Opcode
-		payload Payload
-		json    string
+		name          string
+		opcode        Opcode
+		payload       Payload
+		json          string
+		wantEncodeErr error
+		wantDecodeErr error
 	}{
-		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`},
-		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{}, json: `{}`},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`},
-		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, json: `{}`},
-		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{}`},
-		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{}, json: `{}`},
+		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrMissingErrorKind},
 		{
 			name: "produce message", opcode: ProduceMessage,
-			payload: &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
-			json:    `{"raw":true,"message":{"key":"key","value":"value"}}`,
+			payload:       &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
+			json:          `{"raw":true,"message":{"key":"key","value":"value"}}`,
+			wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode,
 		},
-		{name: "consumer disconnect", opcode: ConsumerDisconnect, payload: &ConsumerDisconnectPayload{}, json: `{}`},
-		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, payload: &ConsumerHeartbeatPayload{}, json: `{}`},
+		{name: "consumer disconnect", opcode: ConsumerDisconnect, payload: &ConsumerDisconnectPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, payload: &ConsumerHeartbeatPayload{}, json: `{}`, wantEncodeErr: ErrUnknownOpcode, wantDecodeErr: ErrUnknownOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := Data{opcode: tt.opcode, emitter: Server, metadata: &ServerMetadata{}, payload: tt.payload}
 			frame, err := Encode(data)
-			if !errors.Is(err, ErrUnknownOpcode) || frame != nil {
-				t.Errorf("Encode(%#v) = %q, error = %v, want nil and %v", data, frame, err, ErrUnknownOpcode)
+			if !errors.Is(err, tt.wantEncodeErr) || frame != nil {
+				t.Errorf("Encode(%#v) = %q, error = %v, want nil and %v", data, frame, err, tt.wantEncodeErr)
 			}
 
 			input := fmt.Sprintf(`{"opcode":%d,"emitter":1,"metadata":{},"payload":%s}`, tt.opcode, tt.json)
 			got, err := Decode([]byte(input))
-			if !errors.Is(err, ErrUnknownOpcode) || !reflect.DeepEqual(got, Data{}) {
-				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", input, got, err, ErrUnknownOpcode)
+			if !errors.Is(err, tt.wantDecodeErr) || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", input, got, err, tt.wantDecodeErr)
 			}
 		})
 	}

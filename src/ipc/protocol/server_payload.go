@@ -1,3 +1,50 @@
 package protocol
 
-// TODO: define payloads for frames emitted by the server alongside server opcodes.
+import (
+	"fmt"
+	"unicode/utf8"
+)
+
+// ErrorReplyPayload carries a rejection kind and a reason for the client.
+type ErrorReplyPayload struct {
+	kind   ErrorKind
+	reason string
+}
+
+// NewErrorReplyPayload returns a payload describing a rejected request.
+func NewErrorReplyPayload(kind ErrorKind, reason string) *ErrorReplyPayload {
+	return &ErrorReplyPayload{kind: kind, reason: reason}
+}
+
+// Kind returns the reason's machine-readable category.
+func (p ErrorReplyPayload) Kind() ErrorKind {
+	return p.kind
+}
+
+// Reason returns the diagnostic for the client to display.
+func (p ErrorReplyPayload) Reason() string {
+	return p.reason
+}
+
+func (p *ErrorReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ErrorReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &errorReplyPayloadJSON{Kind: &p.kind, Reason: &p.reason}, nil
+}
+
+func (p *ErrorReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	if err := p.kind.validate(); err != nil {
+		return err
+	}
+	if !utf8.ValidString(p.reason) {
+		return fmt.Errorf("%w: error reason must contain valid UTF-8", ErrInvalidPayload)
+	}
+	return nil
+}

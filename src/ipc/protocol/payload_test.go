@@ -83,8 +83,8 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// TestPayloadDecodingRejectsUnsupportedOperations checks emitter-specific opcode selection.
-func TestPayloadDecodingRejectsUnsupportedOperations(t *testing.T) {
+// TestPayloadDecodingRejectsInvalidOperations checks opcode selection and required fields.
+func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 	tests := []struct {
 		name    string
 		emitter Emitter
@@ -98,7 +98,7 @@ func TestPayloadDecodingRejectsUnsupportedOperations(t *testing.T) {
 		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
 		{name: "server topic subscription", emitter: Server, opcode: TopicSubscription, wantErr: ErrUnknownOpcode},
 		{name: "server acknowledgement", emitter: Server, opcode: Acknowledgement, wantErr: ErrUnknownOpcode},
-		{name: "server check topic", emitter: Server, opcode: CheckTopic, wantErr: ErrUnknownOpcode},
+		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
 		{name: "server produce message", emitter: Server, opcode: ProduceMessage, wantErr: ErrUnknownOpcode},
 		{name: "server consumer disconnect", emitter: Server, opcode: ConsumerDisconnect, wantErr: ErrUnknownOpcode},
 		{name: "server consumer heartbeat", emitter: Server, opcode: ConsumerHeartbeat, wantErr: ErrUnknownOpcode},

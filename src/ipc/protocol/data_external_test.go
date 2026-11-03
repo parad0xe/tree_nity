@@ -124,32 +124,34 @@ func TestNewDataRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestNewDataRejectsServerOpcodes checks emitter inference against the empty server opcode list.
-func TestNewDataRejectsServerOpcodes(t *testing.T) {
+// TestNewDataRejectsClientPayloadsFromServer checks emitter inference against client payloads.
+func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 	tests := []struct {
 		name    string
 		opcode  protocol.Opcode
 		payload protocol.Payload
+		wantErr error
 	}{
-		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload()},
-		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload()},
-		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload()},
-		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload()},
-		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload()},
-		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload()},
+		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload(), wantErr: protocol.ErrInvalidPayload},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
 			payload: protocol.NewProduceMessagePayload(true, protocol.NewMessage("key", "value")),
+			wantErr: protocol.ErrInvalidPayload,
 		},
-		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload()},
-		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload()},
+		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload(), wantErr: protocol.ErrUnknownOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			metadata := protocol.NewServerMetadata()
 			got, err := protocol.NewData(tt.opcode, metadata, tt.payload)
-			if !errors.Is(err, protocol.ErrUnknownOpcode) || !reflect.DeepEqual(got, protocol.Data{}) {
-				t.Errorf("NewData(%d, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.opcode, metadata, tt.payload, got, err, protocol.ErrUnknownOpcode)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(%d, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.opcode, metadata, tt.payload, got, err, tt.wantErr)
 			}
 		})
 	}
@@ -195,6 +197,78 @@ func TestProduceMessagePayloadAccessors(t *testing.T) {
 			gotMessage := got.Message()
 			if got.Raw() != tt.raw || gotMessage.Key() != tt.key || gotMessage.Value() != tt.value || gotMessage.Offset() != 0 {
 				t.Errorf("Decode(%q) message payload = (%t, %q, %q, %d), want (%t, %q, %q, 0)", frame, got.Raw(), gotMessage.Key(), gotMessage.Value(), gotMessage.Offset(), tt.raw, tt.key, tt.value)
+			}
+		})
+	}
+}
+
+// TestErrorReplyRoundTrip checks public construction, wire encoding, and decoded accessors.
+func TestErrorReplyRoundTrip(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   protocol.ErrorKind
+		reason string
+		json   string
+	}{
+		{name: "empty reason", kind: protocol.InvalidRequest, json: `{"kind":0,"reason":""}`},
+		{name: "invalid request", kind: protocol.InvalidRequest, reason: "invalid request", json: `{"kind":0,"reason":"invalid request"}`},
+		{name: "topic not found", kind: protocol.TopicNotFound, reason: "topic not found", json: `{"kind":1,"reason":"topic not found"}`},
+		{name: "topic exists", kind: protocol.TopicExists, reason: "topic exists", json: `{"kind":2,"reason":"topic exists"}`},
+		{name: "client not found", kind: protocol.ClientNotFound, reason: "client not found", json: `{"kind":3,"reason":"client not found"}`},
+		{name: "client name taken", kind: protocol.ClientNameTaken, reason: "client name taken", json: `{"kind":4,"reason":"client name taken"}`},
+		{name: "escaped UTF-8 reason", kind: protocol.InvalidRequest, reason: "échec\n\"topic\"", json: `{"kind":0,"reason":"échec\n\"topic\""}`},
+		{name: "large reason", kind: protocol.InvalidRequest, reason: strings.Repeat("r", 4096), json: `{"kind":0,"reason":"` + strings.Repeat("r", 4096) + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewErrorReplyPayload(tt.kind, tt.reason)
+			data, err := protocol.NewData(protocol.ErrorReply, protocol.NewServerMetadata(), payload)
+			if err != nil {
+				t.Errorf("NewData(ErrorReply, server, %#v) error = %v, want nil", payload, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := `{"opcode":5,"emitter":1,"metadata":{},"payload":` + tt.json + `}`
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+			got, ok := decoded.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("Decode(%q).Payload() type = %T, want *ErrorReplyPayload", frame, decoded.Payload())
+				return
+			}
+			if got.Kind() != tt.kind || got.Reason() != tt.reason {
+				t.Errorf("Decode(%q) error reply = (%d, %q), want (%d, %q)", frame, got.Kind(), got.Reason(), tt.kind, tt.reason)
+			}
+		})
+	}
+}
+
+// TestNewDataRejectsInvalidErrorReply checks validation through the public constructor.
+func TestNewDataRejectsInvalidErrorReply(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata protocol.Metadata
+		payload  protocol.Payload
+		wantErr  error
+	}{
+		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
+		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.ErrorReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
+		{name: "negative kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(-1, "error"), wantErr: protocol.ErrInvalidPayload},
+		{name: "unknown kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(5, "error"), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid UTF-8 reason", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "\xff"), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "error"), wantErr: protocol.ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := protocol.NewData(protocol.ErrorReply, tt.metadata, tt.payload)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(ErrorReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
 			}
 		})
 	}

@@ -29,7 +29,22 @@ const (
 
 // Server opcodes identify operations emitted by the server.
 const (
-// TODO: add server opcodes starting at zero when server payloads are defined.
+	// ListTopicReply identifies a topic list response.
+	ListTopicReply Opcode = iota
+	// CreateTopicReply identifies a topic creation response.
+	CreateTopicReply
+	// ConsumerInfoReply identifies a consumer information response.
+	ConsumerInfoReply
+	// TopicSubscriptionReply identifies a subscription response.
+	TopicSubscriptionReply
+	// CheckTopicReply identifies a topic check response.
+	CheckTopicReply
+	// ErrorReply identifies a rejected request response.
+	ErrorReply
+	// MessageDelivery identifies a message sent to a consumer.
+	MessageDelivery
+	// ServerShutdown identifies the server shutdown sentinel.
+	ServerShutdown
 )
 
 func (o Opcode) validate(emitter Emitter) error {
@@ -41,7 +56,11 @@ func (o Opcode) validate(emitter Emitter) error {
 			return nil
 		}
 	case Server:
-		// No server opcodes are defined yet.
+		switch o {
+		case ListTopicReply, CreateTopicReply, ConsumerInfoReply, TopicSubscriptionReply,
+			CheckTopicReply, ErrorReply, MessageDelivery, ServerShutdown:
+			return nil
+		}
 	default:
 		return fmt.Errorf("%w: %d", ErrUnknownEmitter, emitter)
 	}

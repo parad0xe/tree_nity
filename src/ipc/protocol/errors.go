@@ -14,6 +14,10 @@ var (
 	ErrMissingMetadata = errors.New("missing metadata")
 	// ErrMissingPayload indicates that a frame has no payload.
 	ErrMissingPayload = errors.New("missing payload")
+	// ErrMissingErrorKind indicates that an error reply has no kind.
+	ErrMissingErrorKind = errors.New("missing error kind")
+	// ErrMissingErrorReason indicates that an error reply has no reason.
+	ErrMissingErrorReason = errors.New("missing error reason")
 	// ErrInvalidMetadata indicates metadata with an incompatible type or invalid content.
 	ErrInvalidMetadata = errors.New("invalid metadata")
 	// ErrInvalidPayload indicates a payload with an incompatible type or invalid content.

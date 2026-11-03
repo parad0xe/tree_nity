@@ -10,12 +10,12 @@ func NewListTopicPayload() *ListTopicPayload {
 	return &ListTopicPayload{}
 }
 
-func (p *ListTopicPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *ListTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != ListTopic {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != ListTopic {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &listTopicPayloadJSON{}, nil
 }
@@ -35,12 +35,12 @@ func NewCreateTopicPayload() *CreateTopicPayload {
 	return &CreateTopicPayload{}
 }
 
-func (p *CreateTopicPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *CreateTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != CreateTopic {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != CreateTopic {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &createTopicPayloadJSON{}, nil
 }
@@ -60,12 +60,12 @@ func NewConsumerInfoPayload() *ConsumerInfoPayload {
 	return &ConsumerInfoPayload{}
 }
 
-func (p *ConsumerInfoPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *ConsumerInfoPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != ConsumerInfo {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != ConsumerInfo {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &consumerInfoPayloadJSON{}, nil
 }
@@ -85,12 +85,12 @@ func NewTopicSubscriptionPayload() *TopicSubscriptionPayload {
 	return &TopicSubscriptionPayload{}
 }
 
-func (p *TopicSubscriptionPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *TopicSubscriptionPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != TopicSubscription {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != TopicSubscription {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &topicSubscriptionPayloadJSON{}, nil
 }
@@ -110,12 +110,12 @@ func NewAcknowledgementPayload() *AcknowledgementPayload {
 	return &AcknowledgementPayload{}
 }
 
-func (p *AcknowledgementPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *AcknowledgementPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != Acknowledgement {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != Acknowledgement {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &acknowledgementPayloadJSON{}, nil
 }
@@ -135,12 +135,12 @@ func NewCheckTopicPayload() *CheckTopicPayload {
 	return &CheckTopicPayload{}
 }
 
-func (p *CheckTopicPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *CheckTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != CheckTopic {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != CheckTopic {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &checkTopicPayloadJSON{}, nil
 }
@@ -173,12 +173,12 @@ func (p ProduceMessagePayload) Message() Message {
 	return p.message
 }
 
-func (p *ProduceMessagePayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *ProduceMessagePayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != ProduceMessage {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != ProduceMessage {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	message, err := p.message.toJSON()
 	if err != nil {
@@ -202,12 +202,12 @@ func NewConsumerDisconnectPayload() *ConsumerDisconnectPayload {
 	return &ConsumerDisconnectPayload{}
 }
 
-func (p *ConsumerDisconnectPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *ConsumerDisconnectPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != ConsumerDisconnect {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != ConsumerDisconnect {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &consumerDisconnectPayloadJSON{}, nil
 }
@@ -227,12 +227,12 @@ func NewConsumerHeartbeatPayload() *ConsumerHeartbeatPayload {
 	return &ConsumerHeartbeatPayload{}
 }
 
-func (p *ConsumerHeartbeatPayload) toJSON(opcode Opcode) (payloadJSON, error) {
+func (p *ConsumerHeartbeatPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	if opcode != ConsumerHeartbeat {
-		return nil, fmt.Errorf("%w for opcode %d: %T", ErrInvalidPayload, opcode, p)
+	if emitter != Client || opcode != ConsumerHeartbeat {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
 	return &consumerHeartbeatPayloadJSON{}, nil
 }

@@ -65,7 +65,7 @@ func (d Data) toJSON() (dataJSON, error) {
 	if err := d.opcode.validate(d.emitter); err != nil {
 		return dataJSON{}, err
 	}
-	tmpPayload, err := d.payload.toJSON(d.opcode)
+	tmpPayload, err := d.payload.toJSON(d.emitter, d.opcode)
 	if err != nil {
 		return dataJSON{}, err
 	}
