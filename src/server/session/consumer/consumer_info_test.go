@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"tree_nity/src/server/utils"
+	"tree_nity/src/ipc/id"
 )
 
 // TestInfoAccessors checks that construction preserves every metadata field.
