@@ -6,12 +6,18 @@ import (
 	"io"
 )
 
-// NewDataFromFrame decodes and validates a single JSON frame.
-// Unknown fields, missing required fields, and trailing JSON values are rejected.
-// Metadata is selected by emitter, and payload is selected by opcode.
-// Errors for missing fields, unknown opcodes or emitters, oversized messages,
-// and additional JSON values can be matched with errors.Is.
-func NewDataFromFrame(frame []byte) (Data, error) {
+// Encode returns the JSON encoding of data after validation.
+func Encode(data Data) ([]byte, error) {
+	tmpData, err := data.toJSON()
+	if err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(tmpData)
+}
+
+// Decode returns validated protocol data from a single JSON frame.
+func Decode(frame []byte) (Data, error) {
 	var tmpData dataJSON
 
 	decoder := json.NewDecoder(bytes.NewReader(frame))

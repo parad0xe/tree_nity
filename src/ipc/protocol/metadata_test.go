@@ -13,35 +13,35 @@ import (
 func TestNewMetadataJSON(t *testing.T) {
 	tests := []struct {
 		name    string
-		emitter emitter
+		emitter Emitter
 		input   string
 		want    Metadata
 	}{
 		{
 			name:    "client",
-			emitter: client,
+			emitter: Client,
 			input:   `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:    ClientMetadata{clientId: "client-1", clientIPC: "/client-1"},
+			want:    &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
 		},
 		{
-			name:    "empty client strings",
-			emitter: client,
-			input:   `{"clientId":"","clientIPC":""}`,
-			want:    ClientMetadata{},
+			name:    "empty client IPC",
+			emitter: Client,
+			input:   `{"clientId":"c","clientIPC":""}`,
+			want:    &ClientMetadata{clientID: "c"},
 		},
 		{
 			name:    "minimal client strings",
-			emitter: client,
+			emitter: Client,
 			input:   `{"clientId":"c","clientIPC":"q"}`,
-			want:    ClientMetadata{clientId: "c", clientIPC: "q"},
+			want:    &ClientMetadata{clientID: "c", clientIPC: "q"},
 		},
 		{
-			name:    "large client strings",
-			emitter: client,
-			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 4096), strings.Repeat("q", 4096)),
-			want:    ClientMetadata{clientId: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
+			name:    "maximum client ID and large IPC",
+			emitter: Client,
+			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 32), strings.Repeat("q", 4096)),
+			want:    &ClientMetadata{clientID: strings.Repeat("c", 32), clientIPC: strings.Repeat("q", 4096)},
 		},
-		{name: "server", emitter: server, input: `{}`, want: ServerMetadata{}},
+		{name: "server", emitter: Server, input: `{}`, want: &ServerMetadata{}},
 	}
 
 	for _, tt := range tests {
@@ -71,25 +71,25 @@ func TestNewMetadataJSON(t *testing.T) {
 func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
-		emitter emitter
+		emitter Emitter
 		input   string
 		wantErr error
 	}{
 		{name: "negative emitter", emitter: -1, input: `{}`, wantErr: ErrUnknownEmitter},
 		{name: "unknown emitter", emitter: 2, input: `{}`, wantErr: ErrUnknownEmitter},
-		{name: "empty input", emitter: client},
-		{name: "whitespace", emitter: server, input: " \n\t"},
-		{name: "malformed JSON", emitter: client, input: `{`},
-		{name: "client array", emitter: client, input: `[]`},
-		{name: "server array", emitter: server, input: `[]`},
-		{name: "string", emitter: server, input: `"metadata"`},
-		{name: "number", emitter: client, input: `1`},
-		{name: "boolean", emitter: server, input: `false`},
-		{name: "clientId has wrong type", emitter: client, input: `{"clientId":1,"clientIPC":"/client"}`},
-		{name: "clientIPC has wrong type", emitter: client, input: `{"clientId":"client","clientIPC":false}`},
-		{name: "unknown client field", emitter: client, input: `{"clientId":"client","clientIPC":"/client","extra":true}`},
-		{name: "unknown server field", emitter: server, input: `{"extra":true}`},
-		{name: "client metadata from server", emitter: server, input: `{"clientId":"client","clientIPC":"/client"}`},
+		{name: "empty input", emitter: Client},
+		{name: "whitespace", emitter: Server, input: " \n\t"},
+		{name: "malformed JSON", emitter: Client, input: `{`},
+		{name: "client array", emitter: Client, input: `[]`},
+		{name: "server array", emitter: Server, input: `[]`},
+		{name: "string", emitter: Server, input: `"metadata"`},
+		{name: "number", emitter: Client, input: `1`},
+		{name: "boolean", emitter: Server, input: `false`},
+		{name: "clientId has wrong type", emitter: Client, input: `{"clientId":1,"clientIPC":"/client"}`},
+		{name: "clientIPC has wrong type", emitter: Client, input: `{"clientId":"client","clientIPC":false}`},
+		{name: "unknown client field", emitter: Client, input: `{"clientId":"client","clientIPC":"/client","extra":true}`},
+		{name: "unknown server field", emitter: Server, input: `{"extra":true}`},
+		{name: "client metadata from server", emitter: Server, input: `{"clientId":"client","clientIPC":"/client"}`},
 	}
 
 	for _, tt := range tests {
@@ -105,8 +105,8 @@ func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestClientMetadataJSONToMetadata checks missing and null client fields.
-func TestClientMetadataJSONToMetadata(t *testing.T) {
+// TestClientMetadataJSONToMetadataRejectsMissingFields checks missing and null client fields.
+func TestClientMetadataJSONToMetadataRejectsMissingFields(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -117,6 +117,8 @@ func TestClientMetadataJSONToMetadata(t *testing.T) {
 		{name: "null clientId", input: `{"clientId":null,"clientIPC":"/client"}`, wantErr: ErrMissingClientID},
 		{name: "missing clientIPC", input: `{"clientId":"client"}`, wantErr: ErrMissingClientIPC},
 		{name: "null clientIPC", input: `{"clientId":"client","clientIPC":null}`, wantErr: ErrMissingClientIPC},
+		{name: "missing clientIPC with invalid clientId", input: `{"clientId":""}`, wantErr: ErrMissingClientIPC},
+		{name: "null clientIPC with invalid clientId", input: `{"clientId":"","clientIPC":null}`, wantErr: ErrMissingClientIPC},
 	}
 
 	for _, tt := range tests {
@@ -131,8 +133,8 @@ func TestClientMetadataJSONToMetadata(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("toMetadata(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
-			if !reflect.DeepEqual(got, ClientMetadata{}) {
-				t.Errorf("toMetadata(%s) = %#v, want %#v", tt.input, got, ClientMetadata{})
+			if got != nil {
+				t.Errorf("toMetadata(%s) = %#v, want nil on error", tt.input, got)
 			}
 		})
 	}

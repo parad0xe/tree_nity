@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// TestNewPayloadJSON checks opcode dispatch, conversion, and strict field decoding.
-func TestNewPayloadJSON(t *testing.T) {
+// TestClientPayloadDecoding checks client opcode dispatch and conversion.
+func TestClientPayloadDecoding(t *testing.T) {
 	tests := []struct {
 		name   string
 		opcode Opcode
@@ -41,34 +41,85 @@ func TestNewPayloadJSON(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decoded, err := newPayloadJSON(tt.opcode, json.RawMessage(tt.input))
-			if err != nil {
-				t.Errorf("newPayloadJSON(%d, %s) error = %v, want nil", tt.opcode, tt.input, err)
-				return
-			}
-			if decoded == nil {
-				t.Errorf("newPayloadJSON(%d, %s) = nil, want a payload decoder", tt.opcode, tt.input)
-				return
-			}
-
-			got, err := decoded.toPayload()
-			if err != nil {
-				t.Errorf("toPayload(opcode=%d, input=%s) error = %v, want nil", tt.opcode, tt.input, err)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("toPayload(opcode=%d, input=%s) = %#v, want %#v", tt.opcode, tt.input, got, tt.want)
-			}
-
-			unknownField := json.RawMessage(`{"unexpected":true}`)
-			if got, err := newPayloadJSON(tt.opcode, unknownField); err == nil || got != nil {
-				t.Errorf("newPayloadJSON(%d, %s) = %#v, error = %v, want nil and an error", tt.opcode, unknownField, got, err)
+			emitter := Client
+			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			payload := json.RawMessage(tt.input)
+			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
+			got, err := input.toData()
+			if err != nil || !reflect.DeepEqual(got.Payload(), tt.want) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) payload = %#v, error = %v, want %#v and nil", tt.opcode, emitter, payload, got.Payload(), err, tt.want)
 			}
 		})
 	}
 }
 
-// TestNewPayloadJSONRejectsInvalidInput checks unsupported opcodes and JSON shapes.
-func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
+// TestClientPayloadDecodingRejectsUnknownFields checks strict decoding for every client opcode.
+func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		opcode Opcode
+	}{
+		{name: "list topic", opcode: ListTopic},
+		{name: "create topic", opcode: CreateTopic},
+		{name: "consumer info", opcode: ConsumerInfo},
+		{name: "topic subscription", opcode: TopicSubscription},
+		{name: "acknowledgement", opcode: Acknowledgement},
+		{name: "check topic", opcode: CheckTopic},
+		{name: "produce message", opcode: ProduceMessage},
+		{name: "consumer disconnect", opcode: ConsumerDisconnect},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emitter := Client
+			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			payload := json.RawMessage(`{"unexpected":true}`)
+			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
+			got, err := input.toData()
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and an unknown field error", tt.opcode, emitter, payload, got, err)
+			}
+		})
+	}
+}
+
+// TestPayloadDecodingRejectsUnsupportedOperations checks emitter-specific opcode selection.
+func TestPayloadDecodingRejectsUnsupportedOperations(t *testing.T) {
+	tests := []struct {
+		name    string
+		emitter Emitter
+		opcode  Opcode
+		wantErr error
+	}{
+		{name: "negative emitter", emitter: -1, opcode: ListTopic, wantErr: ErrUnknownEmitter},
+		{name: "unknown emitter", emitter: 2, opcode: ListTopic, wantErr: ErrUnknownEmitter},
+		{name: "server list topic", emitter: Server, opcode: ListTopic, wantErr: ErrUnknownOpcode},
+		{name: "server create topic", emitter: Server, opcode: CreateTopic, wantErr: ErrUnknownOpcode},
+		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
+		{name: "server topic subscription", emitter: Server, opcode: TopicSubscription, wantErr: ErrUnknownOpcode},
+		{name: "server acknowledgement", emitter: Server, opcode: Acknowledgement, wantErr: ErrUnknownOpcode},
+		{name: "server check topic", emitter: Server, opcode: CheckTopic, wantErr: ErrUnknownOpcode},
+		{name: "server produce message", emitter: Server, opcode: ProduceMessage, wantErr: ErrUnknownOpcode},
+		{name: "server consumer disconnect", emitter: Server, opcode: ConsumerDisconnect, wantErr: ErrUnknownOpcode},
+		{name: "server consumer heartbeat", emitter: Server, opcode: ConsumerHeartbeat, wantErr: ErrUnknownOpcode},
+		{name: "negative server opcode", emitter: Server, opcode: -1, wantErr: ErrUnknownOpcode},
+		{name: "unknown server opcode", emitter: Server, opcode: 9, wantErr: ErrUnknownOpcode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := json.RawMessage(`{}`)
+			payload := json.RawMessage(`{}`)
+			input := dataJSON{Opcode: &tt.opcode, Emitter: &tt.emitter, Metadata: &metadata, Payload: &payload}
+			got, err := input.toData()
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and %v", tt.opcode, tt.emitter, payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestClientPayloadDecodingRejectsInvalidInput checks unsupported opcodes and JSON shapes.
+func TestClientPayloadDecodingRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
 		opcode  Opcode
@@ -84,6 +135,8 @@ func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 		{name: "string", opcode: ListTopic, input: `"payload"`},
 		{name: "number", opcode: ListTopic, input: `1`},
 		{name: "boolean", opcode: ListTopic, input: `false`},
+		{name: "unknown topic field", opcode: CreateTopic, input: `{"topic":1}`},
+		{name: "unknown create field", opcode: CreateTopic, input: `{"topic":"orders","extra":true}`},
 		{name: "raw has wrong type", opcode: ProduceMessage, input: `{"raw":"true","message":{"key":"k","value":"v"}}`},
 		{name: "message has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":[]}`},
 		{name: "key has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":{"key":1,"value":"v"}}`},
@@ -93,19 +146,48 @@ func TestNewPayloadJSONRejectsInvalidInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := newPayloadJSON(tt.opcode, json.RawMessage(tt.input))
-			if err == nil || got != nil {
-				t.Errorf("newPayloadJSON(%d, %q) = %#v, error = %v, want nil and an error", tt.opcode, tt.input, got, err)
+			emitter := Client
+			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			payload := json.RawMessage(tt.input)
+			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
+			got, err := input.toData()
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%q) = %#v, error = %v, want zero Data and an error", tt.opcode, emitter, payload, got, err)
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Errorf("newPayloadJSON(%d, %q) error = %v, want %v", tt.opcode, tt.input, err, tt.wantErr)
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%q) error = %v, want %v", tt.opcode, emitter, payload, err, tt.wantErr)
 			}
 		})
 	}
 }
 
-// TestProduceMessagePayloadJSONToPayload checks required fields and message errors.
-func TestProduceMessagePayloadJSONToPayload(t *testing.T) {
+// TestCreateTopicPayloadJSONRejectsFields keeps topic creation payloads empty.
+func TestCreateTopicPayloadJSONRejectsFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "empty topic", input: `{"topic":""}`},
+		{name: "named topic", input: `{"topic":"orders"}`},
+		{name: "null topic", input: `{"topic":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opcode := CreateTopic
+			emitter := Client
+			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			payload := json.RawMessage(tt.input)
+			input := dataJSON{Opcode: &opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
+			got, err := input.toData()
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and an unknown field error", opcode, emitter, payload, got, err)
+			}
+		})
+	}
+}
+
+// TestProduceMessagePayloadJSONToPayloadRejectsInvalidInput checks required fields and message errors.
+func TestProduceMessagePayloadJSONToPayloadRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -128,13 +210,9 @@ func TestProduceMessagePayloadJSONToPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decoded, err := newPayloadJSON(ProduceMessage, json.RawMessage(tt.input))
-			if err != nil {
-				t.Errorf("newPayloadJSON(%d, %s) error = %v, want nil", ProduceMessage, tt.input, err)
-				return
-			}
-			if decoded == nil {
-				t.Errorf("newPayloadJSON(%d, %s) = nil, want a payload decoder", ProduceMessage, tt.input)
+			var decoded produceMessagePayloadJSON
+			if err := json.Unmarshal([]byte(tt.input), &decoded); err != nil {
+				t.Errorf("Unmarshal(%q) error = %v, want nil", tt.input, err)
 				return
 			}
 

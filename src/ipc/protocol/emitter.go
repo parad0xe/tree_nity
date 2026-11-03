@@ -1,8 +1,11 @@
 package protocol
 
-type emitter int
+// Emitter identifies the sender of a protocol frame.
+type Emitter int
 
 const (
-	client = iota
-	server
+	// Client identifies a client frame.
+	Client Emitter = iota
+	// Server identifies a server frame.
+	Server
 )
