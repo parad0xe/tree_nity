@@ -1,6 +1,10 @@
 package protocol
 
-import "fmt"
+import (
+	"fmt"
+
+	"tree_nity/src/ipc/id"
+)
 
 // ListTopicPayload represents a list topic operation with no payload fields.
 type ListTopicPayload struct{}
@@ -27,12 +31,22 @@ func (p *ListTopicPayload) validate() error {
 	return nil
 }
 
-// CreateTopicPayload represents a topic creation operation with no payload fields.
-type CreateTopicPayload struct{}
+// CreateTopicPayload carries the name of the topic to create.
+// Its JSON representation is {"topic":"<name>"}.
+type CreateTopicPayload struct {
+	topic string
+}
 
-// NewCreateTopicPayload returns an empty topic creation payload.
-func NewCreateTopicPayload() *CreateTopicPayload {
-	return &CreateTopicPayload{}
+// NewCreateTopicPayload returns a payload for creating topic.
+// NewData and Encode reject names that do not contain 1 to 32 ASCII letters,
+// digits, underscores, dots, or hyphens.
+func NewCreateTopicPayload(topic string) *CreateTopicPayload {
+	return &CreateTopicPayload{topic: topic}
+}
+
+// Topic returns the name of the topic to create.
+func (p CreateTopicPayload) Topic() string {
+	return p.topic
 }
 
 func (p *CreateTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -42,12 +56,15 @@ func (p *CreateTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON
 	if emitter != Client || opcode != CreateTopic {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &createTopicPayloadJSON{}, nil
+	return &createTopicPayloadJSON{Topic: &p.topic}, nil
 }
 
 func (p *CreateTopicPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.topic).Validate(); err != nil {
+		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
 	}
 	return nil
 }

@@ -1,7 +1,21 @@
 package protocol
 
 var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
-	ErrorReply: func() payloadJSON { return &errorReplyPayloadJSON{} },
+	CreateTopicReply: func() payloadJSON { return &createTopicReplyPayloadJSON{} },
+	ErrorReply:       func() payloadJSON { return &errorReplyPayloadJSON{} },
+}
+
+type createTopicReplyPayloadJSON struct{}
+
+func (p createTopicReplyPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	return &CreateTopicReplyPayload{}, nil
+}
+
+func (p createTopicReplyPayloadJSON) validate() error {
+	return nil
 }
 
 type errorReplyPayloadJSON struct {

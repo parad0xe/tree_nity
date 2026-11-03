@@ -3,6 +3,7 @@ package protocol_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func TestNewData(t *testing.T) {
 		json    string
 	}{
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), json: `{}`},
-		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload(), json: `{}`},
+		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), json: `{"topic":"orders"}`},
 		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), json: `{}`},
 		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), json: `{}`},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), json: `{}`},
@@ -98,7 +99,7 @@ func TestNewDataRejectsInvalidInput(t *testing.T) {
 		{name: "nil payload pointer", opcode: protocol.CreateTopic, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: (*protocol.CreateTopicPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "negative opcode", opcode: -1, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrUnknownOpcode},
 		{name: "unknown opcode", opcode: 9, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrUnknownOpcode},
-		{name: "incompatible payload", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewCreateTopicPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "incompatible payload", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid client ID", metadata: protocol.NewClientMetadata("\xff", "/client"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
 		{name: "invalid client IPC", metadata: protocol.NewClientMetadata("client", "\xff"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
 		{
@@ -133,7 +134,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 		wantErr error
 	}{
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidPayload},
-		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), wantErr: protocol.ErrInvalidPayload},
@@ -271,5 +272,127 @@ func TestNewDataRejectsInvalidErrorReply(t *testing.T) {
 				t.Errorf("NewData(ErrorReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestCreateTopicPayloadRoundTrip checks topic names and the public accessor after decoding.
+func TestCreateTopicPayloadRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		topic string
+	}{
+		{name: "minimal name", topic: "t"},
+		{name: "topic name", topic: "orders"},
+		{name: "maximum length", topic: strings.Repeat("t", 32)},
+		{name: "mixed characters", topic: "User_09.events-1"},
+		{name: "punctuation", topic: "_.-"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewCreateTopicPayload(tt.topic)
+			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			data, err := protocol.NewData(protocol.CreateTopic, metadata, payload)
+			if err != nil {
+				t.Errorf("NewData(CreateTopic, %#v, topic=%q) error = %v, want nil", metadata, tt.topic, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := fmt.Sprintf(`{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":%q}}`, tt.topic)
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+			got, ok := decoded.Payload().(*protocol.CreateTopicPayload)
+			if !ok {
+				t.Errorf("Decode(%q).Payload() type = %T, want *CreateTopicPayload", frame, decoded.Payload())
+				return
+			}
+			if got.Topic() != tt.topic {
+				t.Errorf("Decode(%q).Payload().Topic() = %q, want %q", frame, got.Topic(), tt.topic)
+			}
+		})
+	}
+}
+
+// TestCreateTopicRejectsInvalidTopicNames checks name validation in both directions.
+func TestCreateTopicRejectsInvalidTopicNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		topic string
+	}{
+		{name: "empty name"},
+		{name: "33 characters", topic: strings.Repeat("t", 33)},
+		{name: "large name", topic: strings.Repeat("t", 4096)},
+		{name: "space", topic: "user events"},
+		{name: "slash", topic: "user/events"},
+		{name: "non-ASCII", topic: "événements"},
+		{name: "newline", topic: "orders\n"},
+		{name: "null byte", topic: "orders\x00"},
+		{name: "invalid UTF-8", topic: "\xff"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewCreateTopicPayload(tt.topic)
+			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			data, err := protocol.NewData(protocol.CreateTopic, metadata, payload)
+			if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(data, protocol.Data{}) {
+				t.Errorf("NewData(CreateTopic, %#v, topic=%q) = %#v, error = %v, want zero Data and %v", metadata, tt.topic, data, err, protocol.ErrInvalidPayload)
+			}
+			topicJSON, err := json.Marshal(tt.topic)
+			if err != nil {
+				t.Errorf("Marshal(%q) error = %v, want nil", tt.topic, err)
+				return
+			}
+			frame := `{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":` + string(topicJSON) + `}}`
+			decoded, err := protocol.Decode([]byte(frame))
+			if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(decoded, protocol.Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, decoded, err, protocol.ErrInvalidPayload)
+			}
+		})
+	}
+}
+
+// TestCreateTopicReplyRoundTrip checks constructed and zero-value success responses.
+func TestCreateTopicReplyRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload *protocol.CreateTopicReplyPayload
+	}{
+		{name: "constructor", payload: protocol.NewCreateTopicReplyPayload()},
+		{name: "zero value", payload: &protocol.CreateTopicReplyPayload{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := protocol.NewServerMetadata()
+			data, err := protocol.NewData(protocol.CreateTopicReply, metadata, tt.payload)
+			if err != nil {
+				t.Errorf("NewData(CreateTopicReply, %#v, %#v) error = %v, want nil", metadata, tt.payload, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := `{"opcode":1,"emitter":1,"metadata":{},"payload":{}}`
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+		})
+	}
+}
+
+// TestNewDataRejectsCreateTopicReplyFromClient checks the opcode shared with CreateTopic.
+func TestNewDataRejectsCreateTopicReplyFromClient(t *testing.T) {
+	metadata := protocol.NewClientMetadata("client-1", "/client-1")
+	payload := protocol.NewCreateTopicReplyPayload()
+	got, err := protocol.NewData(protocol.CreateTopicReply, metadata, payload)
+	if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(got, protocol.Data{}) {
+		t.Errorf("NewData(CreateTopicReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", metadata, payload, got, err, protocol.ErrInvalidPayload)
 	}
 }

@@ -5,6 +5,32 @@ import (
 	"unicode/utf8"
 )
 
+// CreateTopicReplyPayload confirms topic creation with an empty JSON object.
+// A duplicate topic is reported with ErrorReply and TopicExists instead.
+type CreateTopicReplyPayload struct{}
+
+// NewCreateTopicReplyPayload returns an empty topic creation response.
+func NewCreateTopicReplyPayload() *CreateTopicReplyPayload {
+	return &CreateTopicReplyPayload{}
+}
+
+func (p *CreateTopicReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != CreateTopicReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &createTopicReplyPayloadJSON{}, nil
+}
+
+func (p *CreateTopicReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	return nil
+}
+
 // ErrorReplyPayload carries a rejection kind and a reason for the client.
 type ErrorReplyPayload struct {
 	kind   ErrorKind

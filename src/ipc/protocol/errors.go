@@ -14,6 +14,8 @@ var (
 	ErrMissingMetadata = errors.New("missing metadata")
 	// ErrMissingPayload indicates that a frame has no payload.
 	ErrMissingPayload = errors.New("missing payload")
+	// ErrMissingTopic indicates that a topic creation payload has no topic field.
+	ErrMissingTopic = errors.New("missing topic")
 	// ErrMissingErrorKind indicates that an error reply has no kind.
 	ErrMissingErrorKind = errors.New("missing error kind")
 	// ErrMissingErrorReason indicates that an error reply has no reason.

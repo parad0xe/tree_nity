@@ -25,16 +25,26 @@ func (p listTopicPayloadJSON) validate() error {
 	return nil
 }
 
-type createTopicPayloadJSON struct{}
+type createTopicPayloadJSON struct {
+	// Topic is required and must match the topic name format.
+	Topic *string `json:"topic"`
+}
 
 func (p createTopicPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &CreateTopicPayload{}, nil
+	payload := &CreateTopicPayload{topic: *p.Topic}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p createTopicPayloadJSON) validate() error {
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
 	return nil
 }
 

@@ -18,7 +18,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 		want   Payload
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{}`, want: &ListTopicPayload{}},
-		{name: "create topic", opcode: CreateTopic, input: `{}`, want: &CreateTopicPayload{}},
+		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
 		{name: "consumer info", opcode: ConsumerInfo, input: `{}`, want: &ConsumerInfoPayload{}},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{}`, want: &TopicSubscriptionPayload{}},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{}`, want: &AcknowledgementPayload{}},
@@ -94,7 +94,6 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "negative emitter", emitter: -1, opcode: ListTopic, wantErr: ErrUnknownEmitter},
 		{name: "unknown emitter", emitter: 2, opcode: ListTopic, wantErr: ErrUnknownEmitter},
 		{name: "server list topic", emitter: Server, opcode: ListTopic, wantErr: ErrUnknownOpcode},
-		{name: "server create topic", emitter: Server, opcode: CreateTopic, wantErr: ErrUnknownOpcode},
 		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
 		{name: "server topic subscription", emitter: Server, opcode: TopicSubscription, wantErr: ErrUnknownOpcode},
 		{name: "server acknowledgement", emitter: Server, opcode: Acknowledgement, wantErr: ErrUnknownOpcode},
@@ -135,7 +134,7 @@ func TestClientPayloadDecodingRejectsInvalidInput(t *testing.T) {
 		{name: "string", opcode: ListTopic, input: `"payload"`},
 		{name: "number", opcode: ListTopic, input: `1`},
 		{name: "boolean", opcode: ListTopic, input: `false`},
-		{name: "unknown topic field", opcode: CreateTopic, input: `{"topic":1}`},
+		{name: "topic has wrong type", opcode: CreateTopic, input: `{"topic":1}`},
 		{name: "unknown create field", opcode: CreateTopic, input: `{"topic":"orders","extra":true}`},
 		{name: "raw has wrong type", opcode: ProduceMessage, input: `{"raw":"true","message":{"key":"k","value":"v"}}`},
 		{name: "message has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":[]}`},
@@ -161,15 +160,20 @@ func TestClientPayloadDecodingRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestCreateTopicPayloadJSONRejectsFields keeps topic creation payloads empty.
-func TestCreateTopicPayloadJSONRejectsFields(t *testing.T) {
+// TestCreateTopicPayloadJSONRejectsInvalidTopic checks required fields and name validation.
+func TestCreateTopicPayloadJSONRejectsInvalidTopic(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
+		name    string
+		input   string
+		wantErr error
 	}{
-		{name: "empty topic", input: `{"topic":""}`},
-		{name: "named topic", input: `{"topic":"orders"}`},
-		{name: "null topic", input: `{"topic":null}`},
+		{name: "missing topic", input: `{}`, wantErr: ErrMissingTopic},
+		{name: "empty topic", input: `{"topic":""}`, wantErr: ErrInvalidPayload},
+		{name: "null topic", input: `{"topic":null}`, wantErr: ErrMissingTopic},
+		{name: "oversized topic", input: `{"topic":"` + strings.Repeat("t", 33) + `"}`, wantErr: ErrInvalidPayload},
+		{name: "space in topic", input: `{"topic":"user events"}`, wantErr: ErrInvalidPayload},
+		{name: "slash in topic", input: `{"topic":"user/events"}`, wantErr: ErrInvalidPayload},
+		{name: "non-ASCII topic", input: `{"topic":"événements"}`, wantErr: ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -179,10 +183,24 @@ func TestCreateTopicPayloadJSONRejectsFields(t *testing.T) {
 			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
-			if err == nil || !reflect.DeepEqual(got, Data{}) {
-				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and an unknown field error", opcode, emitter, payload, got, err)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and %v", opcode, emitter, payload, got, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestCreateTopicReplyDecoding checks that an empty server response is now supported.
+func TestCreateTopicReplyDecoding(t *testing.T) {
+	emitter := Server
+	opcode := CreateTopicReply
+	metadata := json.RawMessage(`{}`)
+	payload := json.RawMessage(`{}`)
+	input := dataJSON{Opcode: &opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
+	want := Data{opcode: opcode, emitter: emitter, metadata: &ServerMetadata{}, payload: &CreateTopicReplyPayload{}}
+	got, err := input.toData()
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want %#v and nil", opcode, emitter, payload, got, err, want)
 	}
 }
 

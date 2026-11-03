@@ -56,7 +56,7 @@ func TestEncode(t *testing.T) {
 		json    string
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`},
-		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{}, json: `{}`},
+		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
 		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, json: `{}`},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{}`},
@@ -269,6 +269,8 @@ func TestEncodeRejectsInvalidInput(t *testing.T) {
 		{name: "missing payload", data: Data{emitter: Client, metadata: &ClientMetadata{clientID: "client"}}, wantErr: ErrMissingPayload},
 		{name: "payload conversion error", data: Data{emitter: Client, metadata: &ClientMetadata{clientID: "client"}, payload: &failingPayload{err: ErrInvalidPayload}}, wantErr: ErrInvalidPayload},
 		{name: "wrapped payload conversion error", data: Data{emitter: Client, metadata: &ClientMetadata{clientID: "client"}, payload: &failingPayload{err: fmt.Errorf("payload: %w", conversionErr)}}, wantErr: conversionErr},
+		{name: "empty topic", data: Data{opcode: CreateTopic, emitter: Client, metadata: &ClientMetadata{clientID: "client"}, payload: &CreateTopicPayload{}}, wantErr: ErrInvalidPayload},
+		{name: "invalid topic", data: Data{opcode: CreateTopic, emitter: Client, metadata: &ClientMetadata{clientID: "client"}, payload: &CreateTopicPayload{topic: "user/events"}}, wantErr: ErrInvalidPayload},
 		{
 			name:    "oversized key",
 			data:    Data{opcode: ProduceMessage, emitter: Client, metadata: &ClientMetadata{clientID: "client"}, payload: &ProduceMessagePayload{message: Message{key: strings.Repeat("k", MessageSize+1)}}},
@@ -322,7 +324,7 @@ func TestEncodeRejectsIncompatiblePayloads(t *testing.T) {
 		nilPtr  Payload
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, nilPtr: (*ListTopicPayload)(nil)},
-		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{}, nilPtr: (*CreateTopicPayload)(nil)},
+		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, nilPtr: (*CreateTopicPayload)(nil)},
 		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, nilPtr: (*ConsumerInfoPayload)(nil)},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, nilPtr: (*TopicSubscriptionPayload)(nil)},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, nilPtr: (*AcknowledgementPayload)(nil)},
@@ -363,7 +365,7 @@ func TestDecode(t *testing.T) {
 		want    Payload
 	}{
 		{name: "list topic", opcode: ListTopic, payload: `{}`, want: &ListTopicPayload{}},
-		{name: "create topic", opcode: CreateTopic, payload: `{}`, want: &CreateTopicPayload{}},
+		{name: "create topic", opcode: CreateTopic, payload: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
 		{name: "consumer info", opcode: ConsumerInfo, payload: `{}`, want: &ConsumerInfoPayload{}},
 		{name: "topic subscription", opcode: TopicSubscription, payload: `{}`, want: &TopicSubscriptionPayload{}},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: `{}`, want: &AcknowledgementPayload{}},
@@ -435,7 +437,7 @@ func TestCodecRejectsClientPayloadsFromServer(t *testing.T) {
 		wantDecodeErr error
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
-		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`, wantEncodeErr: ErrInvalidPayload},
 		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
@@ -459,8 +461,11 @@ func TestCodecRejectsClientPayloadsFromServer(t *testing.T) {
 
 			input := fmt.Sprintf(`{"opcode":%d,"emitter":1,"metadata":{},"payload":%s}`, tt.opcode, tt.json)
 			got, err := Decode([]byte(input))
-			if !errors.Is(err, tt.wantDecodeErr) || !reflect.DeepEqual(got, Data{}) {
-				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", input, got, err, tt.wantDecodeErr)
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", input, got, err)
+			}
+			if tt.wantDecodeErr != nil && !errors.Is(err, tt.wantDecodeErr) {
+				t.Errorf("Decode(%q) error = %v, want %v", input, err, tt.wantDecodeErr)
 			}
 		})
 	}
@@ -509,6 +514,7 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		{name: "null payload", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":null}`, wantErr: ErrMissingPayload},
 		{name: "array payload", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":[]}`},
 		{name: "unknown payload field", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"extra":true}}`},
+		{name: "missing topic", input: `{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`, wantErr: ErrMissingTopic},
 		{name: "missing raw", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"message":{"key":"k","value":"v"}}}`, wantErr: ErrMissingRaw},
 		{name: "missing message", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"raw":false}}`, wantErr: ErrMissingMessage},
 		{name: "missing message key", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"raw":true,"message":{"value":"v"}}}`, wantErr: ErrMissingMessageKey},
