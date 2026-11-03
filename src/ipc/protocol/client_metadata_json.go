@@ -1,7 +1,7 @@
 package protocol
 
 type clientMetadataJSON struct {
-	// ClientID is required, although an empty string is accepted.
+	// ClientID is required and validated by ClientMetadata.
 	ClientID *string `json:"clientId"`
 	// ClientIPC is required, although an empty string is accepted.
 	ClientIPC *string `json:"clientIPC"`
@@ -12,10 +12,14 @@ func (m clientMetadataJSON) toMetadata() (Metadata, error) {
 		return nil, err
 	}
 
-	return &ClientMetadata{
+	metadata := &ClientMetadata{
 		clientID:  *m.ClientID,
 		clientIPC: *m.ClientIPC,
-	}, nil
+	}
+	if err := metadata.validate(); err != nil {
+		return nil, err
+	}
+	return metadata, nil
 }
 
 func (m clientMetadataJSON) validate() error {

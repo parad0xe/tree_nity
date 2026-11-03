@@ -24,10 +24,10 @@ func TestNewMetadataJSON(t *testing.T) {
 			want:    &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
 		},
 		{
-			name:    "empty client strings",
+			name:    "empty client IPC",
 			emitter: Client,
-			input:   `{"clientId":"","clientIPC":""}`,
-			want:    &ClientMetadata{},
+			input:   `{"clientId":"c","clientIPC":""}`,
+			want:    &ClientMetadata{clientID: "c"},
 		},
 		{
 			name:    "minimal client strings",
@@ -36,10 +36,10 @@ func TestNewMetadataJSON(t *testing.T) {
 			want:    &ClientMetadata{clientID: "c", clientIPC: "q"},
 		},
 		{
-			name:    "large client strings",
+			name:    "maximum client ID and large IPC",
 			emitter: Client,
-			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 4096), strings.Repeat("q", 4096)),
-			want:    &ClientMetadata{clientID: strings.Repeat("c", 4096), clientIPC: strings.Repeat("q", 4096)},
+			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 32), strings.Repeat("q", 4096)),
+			want:    &ClientMetadata{clientID: strings.Repeat("c", 32), clientIPC: strings.Repeat("q", 4096)},
 		},
 		{name: "server", emitter: Server, input: `{}`, want: &ServerMetadata{}},
 	}
@@ -117,6 +117,8 @@ func TestClientMetadataJSONToMetadataRejectsMissingFields(t *testing.T) {
 		{name: "null clientId", input: `{"clientId":null,"clientIPC":"/client"}`, wantErr: ErrMissingClientID},
 		{name: "missing clientIPC", input: `{"clientId":"client"}`, wantErr: ErrMissingClientIPC},
 		{name: "null clientIPC", input: `{"clientId":"client","clientIPC":null}`, wantErr: ErrMissingClientIPC},
+		{name: "missing clientIPC with invalid clientId", input: `{"clientId":""}`, wantErr: ErrMissingClientIPC},
+		{name: "null clientIPC with invalid clientId", input: `{"clientId":"","clientIPC":null}`, wantErr: ErrMissingClientIPC},
 	}
 
 	for _, tt := range tests {

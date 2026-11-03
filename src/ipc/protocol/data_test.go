@@ -101,12 +101,12 @@ func TestDataJSONToData(t *testing.T) {
 			name:     "client list topic",
 			opcode:   ListTopic,
 			emitter:  Client,
-			metadata: `{"clientId":"","clientIPC":""}`,
+			metadata: `{"clientId":"client","clientIPC":""}`,
 			payload:  `{}`,
 			want: Data{
 				opcode:   ListTopic,
 				emitter:  Client,
-				metadata: &ClientMetadata{},
+				metadata: &ClientMetadata{clientID: "client"},
 				payload:  &ListTopicPayload{},
 			},
 		},
@@ -179,12 +179,12 @@ func TestDataJSONToDataRejectsInvalidInput(t *testing.T) {
 		{name: "unknown metadata field", emitter: Server, metadata: `{"extra":true}`, payload: `{}`},
 		{name: "missing clientId", emitter: Client, metadata: `{"clientIPC":"/client"}`, payload: `{}`, wantErr: ErrMissingClientID},
 		{name: "missing clientIPC", emitter: Client, metadata: `{"clientId":"client"}`, payload: `{}`, wantErr: ErrMissingClientIPC},
-		{name: "unknown opcode", opcode: 9, emitter: Client, metadata: `{"clientId":"","clientIPC":""}`, payload: `{}`, wantErr: ErrUnknownOpcode},
-		{name: "invalid payload JSON", emitter: Client, metadata: `{"clientId":"","clientIPC":""}`, payload: `{`},
-		{name: "unknown payload field", emitter: Client, metadata: `{"clientId":"","clientIPC":""}`, payload: `{"extra":true}`},
-		{name: "missing raw", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"","clientIPC":""}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
-		{name: "missing message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"","clientIPC":""}`, payload: `{"raw":true}`, wantErr: ErrMissingMessage},
-		{name: "invalid message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"","clientIPC":""}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
+		{name: "unknown opcode", opcode: 9, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{}`, wantErr: ErrUnknownOpcode},
+		{name: "invalid payload JSON", emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{`},
+		{name: "unknown payload field", emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"extra":true}`},
+		{name: "missing raw", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
+		{name: "missing message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"raw":true}`, wantErr: ErrMissingMessage},
+		{name: "invalid message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
 	}
 
 	for _, tt := range tests {

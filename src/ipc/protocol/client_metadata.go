@@ -3,6 +3,8 @@ package protocol
 import (
 	"fmt"
 	"unicode/utf8"
+
+	"tree_nity/src/ipc/id"
 )
 
 // ClientMetadata identifies a client and its IPC endpoint.
@@ -42,6 +44,9 @@ func (m *ClientMetadata) validate() error {
 	}
 	if !utf8.ValidString(m.clientID) || !utf8.ValidString(m.clientIPC) {
 		return fmt.Errorf("%w: client strings must contain valid UTF-8", ErrInvalidMetadata)
+	}
+	if err := id.ID(m.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidMetadata, err)
 	}
 	return nil
 }
