@@ -1,6 +1,6 @@
 package consumer
 
-import "tree_nity/src/server/utils"
+import "tree_nity/src/ipc/id"
 
 // Info stores consumer metadata independently of connection resources.
 type Info struct {
