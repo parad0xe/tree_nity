@@ -16,6 +16,8 @@ var (
 	ErrMissingPayload = errors.New("missing payload")
 	// ErrMissingTopic indicates that a topic creation payload has no topic field.
 	ErrMissingTopic = errors.New("missing topic")
+	// ErrMissingTopics indicates that a topic list response has no topics field.
+	ErrMissingTopics = errors.New("missing topics")
 	// ErrMissingErrorKind indicates that an error reply has no kind.
 	ErrMissingErrorKind = errors.New("missing error kind")
 	// ErrMissingErrorReason indicates that an error reply has no reason.

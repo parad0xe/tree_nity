@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -394,5 +395,120 @@ func TestNewDataRejectsCreateTopicReplyFromClient(t *testing.T) {
 	got, err := protocol.NewData(protocol.CreateTopicReply, metadata, payload)
 	if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(got, protocol.Data{}) {
 		t.Errorf("NewData(CreateTopicReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", metadata, payload, got, err, protocol.ErrInvalidPayload)
+	}
+}
+
+// TestListTopicReplyRoundTrip checks empty, minimal, and large lists without reordering.
+func TestListTopicReplyRoundTrip(t *testing.T) {
+	largeTopics := make([]string, 256)
+	largeJSON := make([]string, len(largeTopics))
+	for i := range largeTopics {
+		largeTopics[i] = fmt.Sprintf("topic-%d", i)
+		largeJSON[i] = fmt.Sprintf("%q", largeTopics[i])
+	}
+	tests := []struct {
+		name   string
+		topics []string
+		json   string
+	}{
+		{name: "nil list", json: `{"topics":[]}`},
+		{name: "empty list", topics: []string{}, json: `{"topics":[]}`},
+		{name: "minimal list", topics: []string{"t"}, json: `{"topics":["t"]}`},
+		{name: "maximum name length", topics: []string{strings.Repeat("t", 32)}, json: `{"topics":["` + strings.Repeat("t", 32) + `"]}`},
+		{name: "supplied order", topics: []string{"user_events", "orders", "User_09.events-1"}, json: `{"topics":["user_events","orders","User_09.events-1"]}`},
+		{name: "large list", topics: largeTopics, json: `{"topics":[` + strings.Join(largeJSON, ",") + `]}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewListTopicReplyPayload(tt.topics)
+			metadata := protocol.NewServerMetadata()
+			data, err := protocol.NewData(protocol.ListTopicReply, metadata, payload)
+			if err != nil {
+				t.Errorf("NewData(ListTopicReply, %#v, topics=%q) error = %v, want nil", metadata, tt.topics, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := `{"opcode":0,"emitter":1,"metadata":{},"payload":` + tt.json + `}`
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+			got, ok := decoded.Payload().(*protocol.ListTopicReplyPayload)
+			if !ok {
+				t.Errorf("Decode(%q).Payload() type = %T, want *ListTopicReplyPayload", frame, decoded.Payload())
+				return
+			}
+			if topics := got.Topics(); !slices.Equal(topics, tt.topics) {
+				t.Errorf("Decode(%q).Payload().Topics() = %q, want %q", frame, topics, tt.topics)
+			}
+		})
+	}
+}
+
+// TestListTopicReplyZeroValue checks the empty JSON array for an uninitialized response.
+func TestListTopicReplyZeroValue(t *testing.T) {
+	payload := &protocol.ListTopicReplyPayload{}
+	data, err := protocol.NewData(protocol.ListTopicReply, protocol.NewServerMetadata(), payload)
+	if err != nil {
+		t.Errorf("NewData(ListTopicReply, server, %#v) error = %v, want nil", payload, err)
+		return
+	}
+	frame, err := protocol.Encode(data)
+	wantFrame := `{"opcode":0,"emitter":1,"metadata":{},"payload":{"topics":[]}}`
+	if err != nil || string(frame) != wantFrame {
+		t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+	}
+}
+
+// TestListTopicReplyPayloadCopiesInput checks ownership of the supplied topic list.
+func TestListTopicReplyPayloadCopiesInput(t *testing.T) {
+	topics := []string{"orders"}
+	payload := protocol.NewListTopicReplyPayload(topics)
+	topics[0] = "changed"
+	want := []string{"orders"}
+	if got := payload.Topics(); !slices.Equal(got, want) {
+		t.Errorf("NewListTopicReplyPayload(%q).Topics() after input becomes %q = %q, want %q", want, topics, got, want)
+	}
+}
+
+// TestListTopicReplyPayloadTopicsReturnsCopy checks ownership of the accessor result.
+func TestListTopicReplyPayloadTopicsReturnsCopy(t *testing.T) {
+	want := []string{"orders"}
+	payload := protocol.NewListTopicReplyPayload(want)
+	topics := payload.Topics()
+	if len(topics) != len(want) {
+		t.Errorf("NewListTopicReplyPayload(%q).Topics() = %q, want %d names", want, topics, len(want))
+		return
+	}
+	topics[0] = "changed"
+	if got := payload.Topics(); !slices.Equal(got, want) {
+		t.Errorf("Topics() after returned list becomes %q = %q, want %q", topics, got, want)
+	}
+}
+
+// TestNewDataRejectsInvalidListTopicReply checks public construction and emitter inference.
+func TestNewDataRejectsInvalidListTopicReply(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata protocol.Metadata
+		payload  protocol.Payload
+		wantErr  error
+	}{
+		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
+		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.ListTopicReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
+		{name: "invalid topic", metadata: protocol.NewServerMetadata(), payload: protocol.NewListTopicReplyPayload([]string{"orders", "user/events"}), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewListTopicReplyPayload([]string{"orders"}), wantErr: protocol.ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := protocol.NewData(protocol.ListTopicReply, tt.metadata, tt.payload)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(ListTopicReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
+			}
+		})
 	}
 }

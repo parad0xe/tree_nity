@@ -436,7 +436,7 @@ func TestCodecRejectsClientPayloadsFromServer(t *testing.T) {
 		wantEncodeErr error
 		wantDecodeErr error
 	}{
-		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
+		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrMissingTopics},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`, wantEncodeErr: ErrInvalidPayload},
 		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, json: `{}`, wantEncodeErr: ErrInvalidPayload, wantDecodeErr: ErrUnknownOpcode},

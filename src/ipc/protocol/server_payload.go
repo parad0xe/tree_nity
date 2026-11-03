@@ -3,7 +3,53 @@ package protocol
 import (
 	"fmt"
 	"unicode/utf8"
+
+	"tree_nity/src/ipc/id"
 )
+
+// ListTopicReplyPayload carries topic names in their supplied order.
+// Its JSON representation is {"topics":["<name>"]}; an empty list is encoded as [].
+// Topic names follow the same format as CreateTopicPayload.
+type ListTopicReplyPayload struct {
+	topics []string
+}
+
+// NewListTopicReplyPayload returns a response containing a copy of topics.
+// Nil and empty slices both represent an empty topic list.
+func NewListTopicReplyPayload(topics []string) *ListTopicReplyPayload {
+	return &ListTopicReplyPayload{topics: append([]string(nil), topics...)}
+}
+
+// Topics returns a copy of the topic names in their supplied order.
+func (p ListTopicReplyPayload) Topics() []string {
+	return append([]string(nil), p.topics...)
+}
+
+func (p *ListTopicReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ListTopicReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	topics := p.topics
+	if topics == nil {
+		topics = []string{}
+	}
+	return &listTopicReplyPayloadJSON{Topics: &topics}, nil
+}
+
+func (p *ListTopicReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	for i, topic := range p.topics {
+		if err := id.ID(topic).Validate(); err != nil {
+			return fmt.Errorf("%w: invalid topic at index %d: %q", ErrInvalidPayload, i, topic)
+		}
+	}
+	return nil
+}
 
 // CreateTopicReplyPayload confirms topic creation with an empty JSON object.
 // A duplicate topic is reported with ErrorReply and TopicExists instead.
