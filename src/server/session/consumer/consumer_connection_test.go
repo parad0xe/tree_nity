@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/mqueue"
@@ -95,6 +97,72 @@ func TestNewConnection(t *testing.T) {
 	}
 	if first.HeartbeatChan == second.HeartbeatChan {
 		t.Errorf("newConnection(%q) twice shared HeartbeatChan %v, want distinct channels", ipcPath, first.HeartbeatChan)
+	}
+}
+
+// TestNewConnectionSendsProtocolData checks encoding through a real queue.
+func TestNewConnectionSendsProtocolData(t *testing.T) {
+	ipcPath := fmt.Sprintf("/consumer.%s.%d", t.Name(), os.Getpid())
+	inbound, err := ipc.NewInbound(ipcPath, protocol.Decode)
+	if err != nil {
+		t.Errorf("NewInbound(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	t.Cleanup(func() {
+		if err := inbound.Drop(); err != nil {
+			t.Errorf("Drop() for inbound %q error = %v, want nil", ipcPath, err)
+		}
+	})
+	connection, err := newConnection(ipcPath)
+	if err != nil {
+		t.Errorf("newConnection(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, connection)
+	metadata := protocol.NewClientMetadata("consumer-1", ipcPath)
+	payload := protocol.NewConsumerHeartbeatPayload()
+	want, err := protocol.NewData(protocol.ConsumerHeartbeat, metadata, payload)
+	if err != nil {
+		t.Errorf("NewData(%v, %+v, %+v) error = %v, want nil", protocol.ConsumerHeartbeat, metadata, payload, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	if err := connection.Outbound.Send(ctx, want); err != nil {
+		t.Errorf("Send(%+v) to %q error = %v, want nil", want, ipcPath, err)
+		return
+	}
+	got, err := inbound.Recv(ctx)
+	if err != nil {
+		t.Errorf("Recv() from %q after Send(%+v) error = %v, want nil", ipcPath, want, err)
+		return
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Recv() from %q after Send(%+v) = %+v, want %+v", ipcPath, want, got, want)
+	}
+}
+
+// TestNewConnectionRejectsInvalidData checks propagation of protocol validation errors.
+func TestNewConnectionRejectsInvalidData(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	connection, err := newConnection(ipcPath)
+	if err != nil {
+		t.Errorf("newConnection(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, connection)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	data := protocol.Data{}
+	err = connection.Outbound.Send(ctx, data)
+	if !errors.Is(err, ipc.ErrInvalidData) {
+		t.Errorf("Send(%+v) to %q error = %v, want %v", data, ipcPath, err, ipc.ErrInvalidData)
+	}
+	if !errors.Is(err, protocol.ErrMissingMetadata) {
+		t.Errorf("Send(%+v) to %q error = %v, want %v", data, ipcPath, err, protocol.ErrMissingMetadata)
 	}
 }
 
