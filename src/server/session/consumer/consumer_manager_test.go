@@ -92,6 +92,12 @@ func TestManagerUninitialized(t *testing.T) {
 			if c, err := tt.manager.GetConsumer(consumerID); c != nil || !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("GetConsumer(%q) on %s = %+v, error = %v, want nil and %v", consumerID, tt.name, c, err, ErrManagerUninitialized)
 			}
+			if err := tt.manager.UpdateOffset(consumerID, 8); !errors.Is(err, ErrManagerUninitialized) {
+				t.Errorf("UpdateOffset(%q, 8) on %s error = %v, want %v", consumerID, tt.name, err, ErrManagerUninitialized)
+			}
+			if err := tt.manager.UpdateTopic(consumerID, "other-topic"); !errors.Is(err, ErrManagerUninitialized) {
+				t.Errorf("UpdateTopic(%q, %q) on %s error = %v, want %v", consumerID, "other-topic", tt.name, err, ErrManagerUninitialized)
+			}
 			if err := tt.manager.RemoveConsumer(consumerID); !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("RemoveConsumer(%q) on %s error = %v, want %v", consumerID, tt.name, err, ErrManagerUninitialized)
 			}
@@ -212,6 +218,12 @@ func TestManagerNotFound(t *testing.T) {
 			if c, err := manager.GetConsumer(consumerID); c != nil || !errors.Is(err, ErrNotFound) {
 				t.Errorf("GetConsumer(%q) with %d stored consumers = %+v, error = %v, want nil and %v", consumerID, len(tt.infos), c, err, ErrNotFound)
 			}
+			if err := manager.UpdateOffset(consumerID, 8); !errors.Is(err, ErrNotFound) {
+				t.Errorf("UpdateOffset(%q, 8) with %d stored consumers error = %v, want %v", consumerID, len(tt.infos), err, ErrNotFound)
+			}
+			if err := manager.UpdateTopic(consumerID, "other-topic"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("UpdateTopic(%q, %q) with %d stored consumers error = %v, want %v", consumerID, "other-topic", len(tt.infos), err, ErrNotFound)
+			}
 			if err := manager.RemoveConsumer(consumerID); !errors.Is(err, ErrNotFound) {
 				t.Errorf("RemoveConsumer(%q) with %d stored consumers error = %v, want %v", consumerID, len(tt.infos), err, ErrNotFound)
 			}
@@ -219,6 +231,156 @@ func TestManagerNotFound(t *testing.T) {
 				t.Errorf("Len() after missing lookup and removal of %q = %d, want %d", consumerID, got, len(tt.infos))
 			}
 		})
+	}
+}
+
+// TestManagerUpdateOffset checks exact offset storage and metadata isolation.
+func TestManagerUpdateOffset(t *testing.T) {
+	tests := []struct {
+		name   string
+		offset uint32
+	}{
+		{name: "acknowledgement", offset: 8},
+		{name: "same offset", offset: 7},
+		{name: "rewind", offset: 3},
+		{name: "reset"},
+		{name: "maximum offset", offset: ^uint32(0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: ipcPath}
+			other := Info{id: "consumer-2", topic: "other-topic", offset: 11, ipcPath: ipcPath}
+			manager := newTestManager(t, original, other)
+			if manager == nil {
+				return
+			}
+			previous := getTestConsumer(t, manager, original.id)
+			if previous == nil {
+				return
+			}
+			if err := manager.UpdateOffset(original.id, tt.offset); err != nil {
+				t.Errorf("UpdateOffset(%q, %d) error = %v, want nil", original.id, tt.offset, err)
+				return
+			}
+			want := original
+			want.offset = tt.offset
+			if got := getTestConsumer(t, manager, original.id); got != nil && got.Info != want {
+				t.Errorf("GetConsumer(%q).Info after UpdateOffset(%d) = %+v, want %+v", original.id, tt.offset, got.Info, want)
+			}
+			if previous.Info != original {
+				t.Errorf("previous GetConsumer(%q).Info after UpdateOffset(%d) = %+v, want %+v", original.id, tt.offset, previous.Info, original)
+			}
+			if got := getTestConsumer(t, manager, other.id); got != nil && got.Info != other {
+				t.Errorf("GetConsumer(%q).Info after UpdateOffset(%q, %d) = %+v, want %+v", other.id, original.id, tt.offset, got.Info, other)
+			}
+		})
+	}
+}
+
+// TestManagerUpdateTopic checks topic replacement and metadata isolation.
+func TestManagerUpdateTopic(t *testing.T) {
+	tests := []struct {
+		name  string
+		topic string
+	}{
+		{name: "different topic", topic: "new-topic"},
+		{name: "same topic", topic: "events"},
+		{name: "minimum topic", topic: "t"},
+		{name: "maximum topic", topic: strings.Repeat("t", 32)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: ipcPath}
+			other := Info{id: "consumer-2", topic: "other-topic", offset: 11, ipcPath: ipcPath}
+			manager := newTestManager(t, original, other)
+			if manager == nil {
+				return
+			}
+			previous := getTestConsumer(t, manager, original.id)
+			if previous == nil {
+				return
+			}
+			if err := manager.UpdateTopic(original.id, tt.topic); err != nil {
+				t.Errorf("UpdateTopic(%q, %q) error = %v, want nil", original.id, tt.topic, err)
+				return
+			}
+			want := original
+			want.topic = tt.topic
+			if got := getTestConsumer(t, manager, original.id); got != nil && got.Info != want {
+				t.Errorf("GetConsumer(%q).Info after UpdateTopic(%q) = %+v, want %+v", original.id, tt.topic, got.Info, want)
+			}
+			if previous.Info != original {
+				t.Errorf("previous GetConsumer(%q).Info after UpdateTopic(%q) = %+v, want %+v", original.id, tt.topic, previous.Info, original)
+			}
+			if got := getTestConsumer(t, manager, other.id); got != nil && got.Info != other {
+				t.Errorf("GetConsumer(%q).Info after UpdateTopic(%q, %q) = %+v, want %+v", other.id, original.id, tt.topic, got.Info, other)
+			}
+		})
+	}
+}
+
+// TestManagerConcurrentUpdates checks simultaneous writes and metadata reads for one consumer.
+func TestManagerConcurrentUpdates(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: ipcPath}
+	manager := newTestManager(t, original)
+	if manager == nil {
+		return
+	}
+	const iterations = 64
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	group.Add(3)
+	go func() {
+		defer group.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			if err := manager.UpdateOffset(original.id, uint32(i)); err != nil {
+				t.Errorf("concurrent UpdateOffset(%q, %d) error = %v, want nil", original.id, i, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer group.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			topic := fmt.Sprintf("topic-%d", i)
+			if err := manager.UpdateTopic(original.id, topic); err != nil {
+				t.Errorf("concurrent UpdateTopic(%q, %q) error = %v, want nil", original.id, topic, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer group.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			if c := getTestConsumer(t, manager, original.id); c == nil {
+				return
+			} else if c.Info.id != original.id || c.Info.prefix != original.prefix || c.Info.ipcPath != original.ipcPath {
+				t.Errorf("concurrent GetConsumer(%q).Info = %+v, want ID %q, prefix %q and IPC path %q", original.id, c.Info, original.id, original.prefix, original.ipcPath)
+			}
+		}
+	}()
+	close(start)
+	group.Wait()
+	want := original
+	want.offset = iterations - 1
+	want.topic = fmt.Sprintf("topic-%d", iterations-1)
+	if got := getTestConsumer(t, manager, original.id); got != nil && got.Info != want {
+		t.Errorf("GetConsumer(%q).Info after %d concurrent updates per field = %+v, want %+v", original.id, iterations, got.Info, want)
 	}
 }
 
