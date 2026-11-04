@@ -77,6 +77,83 @@ func (p *CreateTopicReplyPayload) validate() error {
 	return nil
 }
 
+// ConsumerInfoReplyPayload describes a consumer's subscription.
+// JSON fields appear in the order client, topic, offset, prefix, ipc. All fields
+// are required; prefix and ipc may be empty. An unknown consumer is reported with
+// ErrorReply and ClientNotFound instead.
+type ConsumerInfoReplyPayload struct {
+	client string
+	topic  string
+	offset int32
+	prefix string
+	ipc    string
+}
+
+// NewConsumerInfoReplyPayload returns information about the named consumer.
+// Client names follow ClientMetadata.ClientID's format, and topic names follow
+// CreateTopicPayload's format. NewData and Encode reject negative offsets and
+// invalid UTF-8 in prefix or ipc.
+func NewConsumerInfoReplyPayload(client, topic string, offset int32, prefix, ipc string) *ConsumerInfoReplyPayload {
+	return &ConsumerInfoReplyPayload{client: client, topic: topic, offset: offset, prefix: prefix, ipc: ipc}
+}
+
+// Client returns the name of the queried consumer.
+func (p ConsumerInfoReplyPayload) Client() string {
+	return p.client
+}
+
+// Topic returns the topic to which the consumer is subscribed.
+func (p ConsumerInfoReplyPayload) Topic() string {
+	return p.topic
+}
+
+// Offset returns the consumer's next queue offset to consume.
+func (p ConsumerInfoReplyPayload) Offset() int32 {
+	return p.offset
+}
+
+// Prefix returns the consumer's key filter, or an empty string for all messages.
+func (p ConsumerInfoReplyPayload) Prefix() string {
+	return p.prefix
+}
+
+// IPC returns the consumer's IPC endpoint.
+func (p ConsumerInfoReplyPayload) IPC() string {
+	return p.ipc
+}
+
+func (p *ConsumerInfoReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ConsumerInfoReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &consumerInfoReplyPayloadJSON{Client: &p.client, Topic: &p.topic, Offset: &p.offset, Prefix: &p.prefix, IPC: &p.ipc}, nil
+}
+
+func (p *ConsumerInfoReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	if err := id.ID(p.client).Validate(); err != nil {
+		return fmt.Errorf("%w: invalid client %q", ErrInvalidPayload, p.client)
+	}
+	if err := id.ID(p.topic).Validate(); err != nil {
+		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
+	}
+	if p.offset < 0 {
+		return fmt.Errorf("%w: negative offset %d", ErrInvalidPayload, p.offset)
+	}
+	if !utf8.ValidString(p.prefix) {
+		return fmt.Errorf("%w: prefix must contain valid UTF-8", ErrInvalidPayload)
+	}
+	if !utf8.ValidString(p.ipc) {
+		return fmt.Errorf("%w: ipc must contain valid UTF-8", ErrInvalidPayload)
+	}
+	return nil
+}
+
 // TopicSubscriptionReplyPayload confirms a subscription with an empty JSON object.
 // Rejections are reported with ErrorReply instead.
 type TopicSubscriptionReplyPayload struct{}

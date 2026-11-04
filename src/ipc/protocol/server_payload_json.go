@@ -3,6 +3,7 @@ package protocol
 var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
 	ListTopicReply:         func() payloadJSON { return &listTopicReplyPayloadJSON{} },
 	CreateTopicReply:       func() payloadJSON { return &createTopicReplyPayloadJSON{} },
+	ConsumerInfoReply:      func() payloadJSON { return &consumerInfoReplyPayloadJSON{} },
 	TopicSubscriptionReply: func() payloadJSON { return &topicSubscriptionReplyPayloadJSON{} },
 	CheckTopicReply:        func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
 	ErrorReply:             func() payloadJSON { return &errorReplyPayloadJSON{} },
@@ -43,6 +44,48 @@ func (p createTopicReplyPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p createTopicReplyPayloadJSON) validate() error {
+	return nil
+}
+
+// Field order matches the consumer info command's output order.
+type consumerInfoReplyPayloadJSON struct {
+	Client *string `json:"client"`
+	Topic  *string `json:"topic"`
+	// Offset is required even when zero.
+	Offset *int32 `json:"offset"`
+	// Prefix is required even when empty.
+	Prefix *string `json:"prefix"`
+	// IPC is required even when empty.
+	IPC *string `json:"ipc"`
+}
+
+func (p consumerInfoReplyPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	payload := NewConsumerInfoReplyPayload(*p.Client, *p.Topic, *p.Offset, *p.Prefix, *p.IPC)
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (p consumerInfoReplyPayloadJSON) validate() error {
+	if p.Client == nil {
+		return ErrMissingClient
+	}
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
+	if p.Offset == nil {
+		return ErrMissingOffset
+	}
+	if p.Prefix == nil {
+		return ErrMissingPrefix
+	}
+	if p.IPC == nil {
+		return ErrMissingIPC
+	}
 	return nil
 }
 

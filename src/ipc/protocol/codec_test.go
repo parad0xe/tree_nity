@@ -58,7 +58,7 @@ func TestEncode(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, json: `{"subscriber":"consumer-1"}`},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders"}, json: `{"topic":"orders","prefix":""}`},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{"offset":0}`},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
@@ -322,7 +322,7 @@ func TestEncodeRejectsIncompatiblePayloads(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, nilPtr: (*ListTopicPayload)(nil)},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, nilPtr: (*CreateTopicPayload)(nil)},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, nilPtr: (*ConsumerInfoPayload)(nil)},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, nilPtr: (*ConsumerInfoPayload)(nil)},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders"}, nilPtr: (*TopicSubscriptionPayload)(nil)},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, nilPtr: (*AcknowledgementPayload)(nil)},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, nilPtr: (*CheckTopicPayload)(nil)},
@@ -363,7 +363,7 @@ func TestDecode(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, payload: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
-		{name: "consumer info", opcode: ConsumerInfo, payload: `{}`, want: &ConsumerInfoPayload{}},
+		{name: "consumer info", opcode: ConsumerInfo, payload: `{"subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{subscriber: "consumer-1"}},
 		{name: "topic subscription", opcode: TopicSubscription, payload: `{"topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{topic: "orders"}},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: `{"offset":0}`, want: &AcknowledgementPayload{}},
 		{name: "check topic", opcode: CheckTopic, payload: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
@@ -433,7 +433,7 @@ func TestEncodeRejectsClientPayloadsFromServer(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, wantErr: ErrInvalidPayload},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, wantErr: ErrInvalidPayload},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, wantErr: ErrInvalidPayload},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, wantErr: ErrInvalidPayload},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
@@ -466,7 +466,7 @@ func TestDecodeRejectsInvalidServerPayloads(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, json: `{}`, wantErr: ErrMissingTopics},
 		{name: "create topic", opcode: CreateTopic, json: `{"topic":"orders"}`},
-		{name: "consumer info", opcode: ConsumerInfo, json: `{}`, wantErr: ErrUnknownOpcode},
+		{name: "consumer info", opcode: ConsumerInfo, json: `{"subscriber":"consumer-1"}`},
 		{name: "topic subscription", opcode: TopicSubscription, json: `{"topic":"orders","prefix":""}`},
 		{name: "acknowledgement", opcode: Acknowledgement, json: `{"offset":42}`},
 		{name: "check topic", opcode: CheckTopic, json: `{"topic":"orders"}`},

@@ -20,7 +20,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{}`, want: &ConsumerInfoPayload{}},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{subscriber: "consumer-1"}},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{"topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{topic: "orders"}},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{"offset":0}`, want: &AcknowledgementPayload{}},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
@@ -95,7 +95,7 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "negative emitter", emitter: -1, opcode: ListTopic, wantErr: ErrUnknownEmitter},
 		{name: "unknown emitter", emitter: 2, opcode: ListTopic, wantErr: ErrUnknownEmitter},
 		{name: "missing topics", emitter: Server, opcode: ListTopicReply, wantErr: ErrMissingTopics},
-		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
+		{name: "missing consumer client", emitter: Server, opcode: ConsumerInfoReply, wantErr: ErrMissingClient},
 		{name: "missing subscription topic", emitter: Client, opcode: TopicSubscription, wantErr: ErrMissingTopic},
 		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
 		{name: "missing delivery message", emitter: Server, opcode: MessageDelivery, wantErr: ErrMissingMessage},

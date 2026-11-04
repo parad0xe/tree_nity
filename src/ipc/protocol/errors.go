@@ -14,9 +14,15 @@ var (
 	ErrMissingMetadata = errors.New("missing metadata")
 	// ErrMissingPayload indicates that a frame has no payload.
 	ErrMissingPayload = errors.New("missing payload")
-	// ErrMissingTopic indicates that a request payload has no topic field.
+	// ErrMissingTopic indicates that a payload has no required topic field.
 	ErrMissingTopic = errors.New("missing topic")
-	// ErrMissingPrefix indicates that a subscription request has no prefix field.
+	// ErrMissingSubscriber indicates that a consumer information request has no subscriber.
+	ErrMissingSubscriber = errors.New("missing subscriber")
+	// ErrMissingClient indicates that a consumer information reply has no client field.
+	ErrMissingClient = errors.New("missing client")
+	// ErrMissingIPC indicates that a consumer information reply has no ipc field.
+	ErrMissingIPC = errors.New("missing ipc")
+	// ErrMissingPrefix indicates that a payload has no required prefix field.
 	ErrMissingPrefix = errors.New("missing prefix")
 	// ErrMissingOffset indicates that a payload has no required offset field.
 	ErrMissingOffset = errors.New("missing offset")

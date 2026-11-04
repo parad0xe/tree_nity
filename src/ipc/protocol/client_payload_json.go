@@ -48,16 +48,26 @@ func (p createTopicPayloadJSON) validate() error {
 	return nil
 }
 
-type consumerInfoPayloadJSON struct{}
+type consumerInfoPayloadJSON struct {
+	// Subscriber is required and identifies the queried consumer, not the caller.
+	Subscriber *string `json:"subscriber"`
+}
 
 func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &ConsumerInfoPayload{}, nil
+	payload := &ConsumerInfoPayload{subscriber: *p.Subscriber}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p consumerInfoPayloadJSON) validate() error {
+	if p.Subscriber == nil {
+		return ErrMissingSubscriber
+	}
 	return nil
 }
 
