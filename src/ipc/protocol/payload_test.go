@@ -59,25 +59,26 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 	tests := []struct {
 		name   string
 		opcode Opcode
+		input  string
 	}{
-		{name: "list topic", opcode: ListTopic},
-		{name: "create topic", opcode: CreateTopic},
-		{name: "consumer info", opcode: ConsumerInfo},
-		{name: "topic subscription", opcode: TopicSubscription},
-		{name: "acknowledgement", opcode: Acknowledgement},
-		{name: "check topic", opcode: CheckTopic},
-		{name: "produce message", opcode: ProduceMessage},
-		{name: "consumer disconnect", opcode: ConsumerDisconnect},
-		{name: "consumer heartbeat", opcode: ConsumerHeartbeat},
+		{name: "list topic", opcode: ListTopic, input: `{"unexpected":true}`},
+		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders","unexpected":true}`},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1","unexpected":true}`},
+		{name: "topic subscription", opcode: TopicSubscription, input: `{"topic":"orders","prefix":"","unexpected":true}`},
+		{name: "acknowledgement", opcode: Acknowledgement, input: `{"offset":0,"unexpected":true}`},
+		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders","unexpected":true}`},
+		{name: "produce message", opcode: ProduceMessage, input: `{"topic":"orders","message":{"key":"aw==","value":"dg=="},"unexpected":true}`},
+		{name: "consumer disconnect", opcode: ConsumerDisconnect, input: `{"unexpected":true}`},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, input: `{"unexpected":true}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			emitter := Client
 			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
-			payload := json.RawMessage(`{"unexpected":true}`)
+			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
-			if err == nil || !reflect.DeepEqual(got, Data{}) {
+			if err == nil || !strings.Contains(err.Error(), `json: unknown field "unexpected"`) || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and an unknown field error", tt.opcode, emitter, payload, got, err)
 			}
 		})
