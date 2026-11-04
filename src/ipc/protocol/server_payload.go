@@ -172,3 +172,49 @@ func (p *ErrorReplyPayload) validate() error {
 	}
 	return nil
 }
+
+// MessageDeliveryPayload carries a message and its server-assigned queue offset.
+// Its JSON message contains base64 key and value strings and a required offset,
+// including when the offset is zero. The decoded key and value share MessageSize.
+type MessageDeliveryPayload struct {
+	message Message
+}
+
+// NewMessageDeliveryPayload returns a delivery containing message at offset.
+// The supplied message is unchanged. NewData and Encode reject negative offsets
+// and messages exceeding MessageSize bytes.
+func NewMessageDeliveryPayload(offset int32, message Message) *MessageDeliveryPayload {
+	message.offset = offset
+	return &MessageDeliveryPayload{message: message}
+}
+
+// Message returns the delivered message, including its queue offset.
+func (p MessageDeliveryPayload) Message() Message {
+	return p.message
+}
+
+func (p *MessageDeliveryPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != MessageDelivery {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	message, err := p.message.toJSON()
+	if err != nil {
+		return nil, err
+	}
+	return &messageDeliveryPayloadJSON{
+		Message: &deliveredMessageJSON{messageJSON: message, Offset: &p.message.offset},
+	}, nil
+}
+
+func (p *MessageDeliveryPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	if p.message.offset < 0 {
+		return fmt.Errorf("%w: negative message offset %d", ErrInvalidPayload, p.message.offset)
+	}
+	return p.message.validate()
+}

@@ -98,7 +98,7 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
 		{name: "missing subscription topic", emitter: Client, opcode: TopicSubscription, wantErr: ErrMissingTopic},
 		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
-		{name: "server produce message", emitter: Server, opcode: ProduceMessage, wantErr: ErrUnknownOpcode},
+		{name: "missing delivery message", emitter: Server, opcode: MessageDelivery, wantErr: ErrMissingMessage},
 		{name: "server consumer disconnect", emitter: Server, opcode: ConsumerDisconnect, wantErr: ErrUnknownOpcode},
 		{name: "server consumer heartbeat", emitter: Server, opcode: ConsumerHeartbeat, wantErr: ErrUnknownOpcode},
 		{name: "negative server opcode", emitter: Server, opcode: -1, wantErr: ErrUnknownOpcode},

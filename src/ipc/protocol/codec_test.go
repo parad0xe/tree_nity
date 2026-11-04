@@ -469,7 +469,7 @@ func TestDecodeRejectsInvalidServerPayloads(t *testing.T) {
 		{name: "consumer info", opcode: ConsumerInfo, json: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "topic subscription", opcode: TopicSubscription, json: `{"topic":"orders","prefix":""}`},
 		{name: "check topic", opcode: CheckTopic, json: `{"topic":"orders"}`},
-		{name: "produce message", opcode: ProduceMessage, json: `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`, wantErr: ErrUnknownOpcode},
+		{name: "produce message", opcode: ProduceMessage, json: `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`},
 		{name: "consumer disconnect", opcode: ConsumerDisconnect, json: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, json: `{}`, wantErr: ErrUnknownOpcode},
 	}

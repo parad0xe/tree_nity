@@ -6,6 +6,7 @@ var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
 	TopicSubscriptionReply: func() payloadJSON { return &topicSubscriptionReplyPayloadJSON{} },
 	CheckTopicReply:        func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
 	ErrorReply:             func() payloadJSON { return &errorReplyPayloadJSON{} },
+	MessageDelivery:        func() payloadJSON { return &messageDeliveryPayloadJSON{} },
 }
 
 type listTopicReplyPayloadJSON struct {
@@ -94,6 +95,42 @@ func (p errorReplyPayloadJSON) validate() error {
 	}
 	if p.Reason == nil {
 		return ErrMissingErrorReason
+	}
+	return nil
+}
+
+type deliveredMessageJSON struct {
+	messageJSON
+	// Offset is required even when zero; production messages use messageJSON alone.
+	Offset *int32 `json:"offset"`
+}
+
+type messageDeliveryPayloadJSON struct {
+	// Message must be present and include a queue offset.
+	Message *deliveredMessageJSON `json:"message"`
+}
+
+func (p messageDeliveryPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	message, err := p.Message.messageJSON.toMessage()
+	if err != nil {
+		return nil, err
+	}
+	payload := NewMessageDeliveryPayload(*p.Message.Offset, message)
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (p messageDeliveryPayloadJSON) validate() error {
+	if p.Message == nil {
+		return ErrMissingMessage
+	}
+	if p.Message.Offset == nil {
+		return ErrMissingMessageOffset
 	}
 	return nil
 }

@@ -26,7 +26,8 @@ func (m Message) Value() []byte {
 	return append([]byte(nil), m.value...)
 }
 
-// Offset returns the message's internal queue offset, which is not encoded.
+// Offset returns the queue offset assigned by the server.
+// MessageDelivery includes it in JSON; ProduceMessage omits it.
 func (m Message) Offset() int32 {
 	return m.offset
 }

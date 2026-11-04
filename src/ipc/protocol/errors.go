@@ -36,12 +36,14 @@ var (
 	ErrMissingClientID = errors.New("missing clientId")
 	// ErrMissingClientIPC indicates that client metadata has no IPC endpoint.
 	ErrMissingClientIPC = errors.New("missing clientIPC")
-	// ErrMissingMessage indicates that a produce payload has no message.
+	// ErrMissingMessage indicates that a payload has no message field.
 	ErrMissingMessage = errors.New("missing message")
 	// ErrMissingMessageKey indicates that a message has no key.
 	ErrMissingMessageKey = errors.New("missing message key")
 	// ErrMissingMessageValue indicates that a message has no value.
 	ErrMissingMessageValue = errors.New("missing message value")
+	// ErrMissingMessageOffset indicates that a delivered message has no offset.
+	ErrMissingMessageOffset = errors.New("missing message offset")
 	// ErrMessageTooLarge indicates that a message exceeds MessageSize bytes.
 	ErrMessageTooLarge = fmt.Errorf("message exceeds %d bytes", MessageSize)
 	// ErrAdditionalJSONValue indicates that a frame contains another JSON value.
