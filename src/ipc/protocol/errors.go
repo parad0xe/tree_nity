@@ -34,8 +34,6 @@ var (
 	ErrMissingClientID = errors.New("missing clientId")
 	// ErrMissingClientIPC indicates that client metadata has no IPC endpoint.
 	ErrMissingClientIPC = errors.New("missing clientIPC")
-	// ErrMissingRaw indicates that a produce payload has no raw flag.
-	ErrMissingRaw = errors.New("missing raw")
 	// ErrMissingMessage indicates that a produce payload has no message.
 	ErrMissingMessage = errors.New("missing message")
 	// ErrMissingMessageKey indicates that a message has no key.

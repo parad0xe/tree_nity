@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,14 +27,14 @@ func TestClientPayloadDecoding(t *testing.T) {
 		{
 			name:   "produce message",
 			opcode: ProduceMessage,
-			input:  `{"raw":true,"message":{"key":"key","value":"value"}}`,
-			want:   &ProduceMessagePayload{raw: true, message: Message{key: "key", value: "value"}},
+			input:  `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`,
+			want:   &ProduceMessagePayload{topic: "orders", message: Message{key: []byte("key"), value: []byte("value")}},
 		},
 		{
-			name:   "produce non-raw message",
+			name:   "produce empty message",
 			opcode: ProduceMessage,
-			input:  `{"raw":false,"message":{"key":"","value":""}}`,
-			want:   &ProduceMessagePayload{raw: false, message: Message{}},
+			input:  `{"topic":"orders","message":{"key":"","value":""}}`,
+			want:   &ProduceMessagePayload{topic: "orders", message: Message{}},
 		},
 		{name: "consumer disconnect", opcode: ConsumerDisconnect, input: `{}`, want: &ConsumerDisconnectPayload{}},
 		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, input: `{}`, want: &ConsumerHeartbeatPayload{}},
@@ -135,11 +136,14 @@ func TestClientPayloadDecodingRejectsInvalidInput(t *testing.T) {
 		{name: "boolean", opcode: ListTopic, input: `false`},
 		{name: "topic has wrong type", opcode: CreateTopic, input: `{"topic":1}`},
 		{name: "unknown create field", opcode: CreateTopic, input: `{"topic":"orders","extra":true}`},
-		{name: "raw has wrong type", opcode: ProduceMessage, input: `{"raw":"true","message":{"key":"k","value":"v"}}`},
-		{name: "message has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":[]}`},
-		{name: "key has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":{"key":1,"value":"v"}}`},
-		{name: "value has wrong type", opcode: ProduceMessage, input: `{"raw":true,"message":{"key":"k","value":false}}`},
-		{name: "unknown message field", opcode: ProduceMessage, input: `{"raw":true,"message":{"key":"k","value":"v","offset":1}}`},
+		{name: "legacy string raw flag", opcode: ProduceMessage, input: `{"topic":"orders","raw":"true","message":{"key":"aw==","value":"dg=="}}`},
+		{name: "legacy true raw flag", opcode: ProduceMessage, input: `{"topic":"orders","raw":true,"message":{"key":"aw==","value":"dg=="}}`},
+		{name: "legacy false raw flag", opcode: ProduceMessage, input: `{"topic":"orders","raw":false,"message":{"key":"aw==","value":"dg=="}}`},
+		{name: "legacy null raw flag", opcode: ProduceMessage, input: `{"topic":"orders","raw":null,"message":{"key":"aw==","value":"dg=="}}`},
+		{name: "message has wrong type", opcode: ProduceMessage, input: `{"topic":"orders","message":[]}`},
+		{name: "key has wrong type", opcode: ProduceMessage, input: `{"topic":"orders","message":{"key":1,"value":"dg=="}}`},
+		{name: "value has wrong type", opcode: ProduceMessage, input: `{"topic":"orders","message":{"key":"aw==","value":false}}`},
+		{name: "unknown message field", opcode: ProduceMessage, input: `{"topic":"orders","message":{"key":"aw==","value":"dg==","offset":1}}`},
 	}
 
 	for _, tt := range tests {
@@ -242,17 +246,22 @@ func TestProduceMessagePayloadJSONToPayloadRejectsInvalidInput(t *testing.T) {
 		input   string
 		wantErr error
 	}{
-		{name: "missing fields", input: `{}`, wantErr: ErrMissingRaw},
-		{name: "missing raw", input: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
-		{name: "null raw", input: `{"raw":null,"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
-		{name: "missing message", input: `{"raw":false}`, wantErr: ErrMissingMessage},
-		{name: "null message", input: `{"raw":true,"message":null}`, wantErr: ErrMissingMessage},
-		{name: "empty message", input: `{"raw":true,"message":{}}`, wantErr: ErrMissingMessageKey},
-		{name: "missing message key", input: `{"raw":true,"message":{"value":"v"}}`, wantErr: ErrMissingMessageKey},
-		{name: "missing message value", input: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
+		{name: "missing fields", input: `{}`, wantErr: ErrMissingTopic},
+		{name: "missing topic", input: `{"message":{"key":"aw==","value":"dg=="}}`, wantErr: ErrMissingTopic},
+		{name: "null topic", input: `{"topic":null,"message":{"key":"aw==","value":"dg=="}}`, wantErr: ErrMissingTopic},
+		{name: "empty topic", input: `{"topic":"","message":{"key":"aw==","value":"dg=="}}`, wantErr: ErrInvalidPayload},
+		{name: "long topic", input: `{"topic":"` + strings.Repeat("t", 33) + `","message":{"key":"aw==","value":"dg=="}}`, wantErr: ErrInvalidPayload},
+		{name: "invalid topic", input: `{"topic":"user/events","message":{"key":"aw==","value":"dg=="}}`, wantErr: ErrInvalidPayload},
+		{name: "missing message", input: `{"topic":"orders"}`, wantErr: ErrMissingMessage},
+		{name: "null message", input: `{"topic":"orders","message":null}`, wantErr: ErrMissingMessage},
+		{name: "empty message", input: `{"topic":"orders","message":{}}`, wantErr: ErrMissingMessageKey},
+		{name: "missing message key", input: `{"topic":"orders","message":{"value":"dg=="}}`, wantErr: ErrMissingMessageKey},
+		{name: "missing message value", input: `{"topic":"orders","message":{"key":"aw=="}}`, wantErr: ErrMissingMessageValue},
+		{name: "invalid base64 key", input: `{"topic":"orders","message":{"key":"?","value":""}}`, wantErr: ErrInvalidPayload},
+		{name: "invalid base64 value", input: `{"topic":"orders","message":{"key":"","value":"?"}}`, wantErr: ErrInvalidPayload},
 		{
 			name:    "oversized message",
-			input:   fmt.Sprintf(`{"raw":true,"message":{"key":"k","value":%q}}`, strings.Repeat("v", 1024)),
+			input:   fmt.Sprintf(`{"topic":"orders","message":{"key":"aw==","value":%q}}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("v", 1024)))),
 			wantErr: ErrMessageTooLarge,
 		},
 	}

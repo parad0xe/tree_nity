@@ -1,9 +1,14 @@
 package protocol
 
+import (
+	"encoding/base64"
+	"fmt"
+)
+
 type messageJSON struct {
-	// Key is required and shares the MessageSize byte limit with Value.
+	// Key is required and contains base64-encoded bytes.
 	Key *string `json:"key"`
-	// Value is required, but an empty string is accepted.
+	// Value is required and contains base64-encoded bytes; an empty string is accepted.
 	Value *string `json:"value"`
 }
 
@@ -12,10 +17,19 @@ func (m messageJSON) toMessage() (Message, error) {
 		return Message{}, err
 	}
 
-	return Message{
-		key:   *m.Key,
-		value: *m.Value,
-	}, nil
+	key, err := base64.StdEncoding.DecodeString(*m.Key)
+	if err != nil {
+		return Message{}, fmt.Errorf("%w: message key: %v", ErrInvalidPayload, err)
+	}
+	value, err := base64.StdEncoding.DecodeString(*m.Value)
+	if err != nil {
+		return Message{}, fmt.Errorf("%w: message value: %v", ErrInvalidPayload, err)
+	}
+	message := NewMessage(key, value)
+	if err := message.validate(); err != nil {
+		return Message{}, err
+	}
+	return message, nil
 }
 
 func (m messageJSON) validate() error {
@@ -24,9 +38,6 @@ func (m messageJSON) validate() error {
 	}
 	if m.Value == nil {
 		return ErrMissingMessageValue
-	}
-	if len(*m.Key)+len(*m.Value) > MessageSize {
-		return ErrMessageTooLarge
 	}
 	return nil
 }

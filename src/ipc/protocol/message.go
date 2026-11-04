@@ -1,30 +1,29 @@
 package protocol
 
-import (
-	"fmt"
-	"unicode/utf8"
-)
+import "encoding/base64"
 
-// Message holds a message key, value, and queue offset.
+// Message holds a binary key, value, and queue offset.
+// JSON represents the key and value as base64 strings. Their combined decoded
+// size must not exceed MessageSize bytes; both fields may be empty.
 type Message struct {
 	offset int32
-	key    string
-	value  string
+	key    []byte
+	value  []byte
 }
 
-// NewMessage returns a message with a zero queue offset.
-func NewMessage(key, value string) Message {
-	return Message{key: key, value: value}
+// NewMessage returns a message with copies of key and value and a zero queue offset.
+func NewMessage(key, value []byte) Message {
+	return Message{key: append([]byte(nil), key...), value: append([]byte(nil), value...)}
 }
 
-// Key returns the message's key.
-func (m Message) Key() string {
-	return m.key
+// Key returns a copy of the message's key.
+func (m Message) Key() []byte {
+	return append([]byte(nil), m.key...)
 }
 
-// Value returns the message's value.
-func (m Message) Value() string {
-	return m.value
+// Value returns a copy of the message's value.
+func (m Message) Value() []byte {
+	return append([]byte(nil), m.value...)
 }
 
 // Offset returns the message's internal queue offset, which is not encoded.
@@ -36,7 +35,9 @@ func (m *Message) toJSON() (messageJSON, error) {
 	if err := m.validate(); err != nil {
 		return messageJSON{}, err
 	}
-	return messageJSON{Key: &m.key, Value: &m.value}, nil
+	key := base64.StdEncoding.EncodeToString(m.key)
+	value := base64.StdEncoding.EncodeToString(m.value)
+	return messageJSON{Key: &key, Value: &value}, nil
 }
 
 func (m *Message) validate() error {
@@ -45,9 +46,6 @@ func (m *Message) validate() error {
 	}
 	if len(m.key)+len(m.value) > MessageSize {
 		return ErrMessageTooLarge
-	}
-	if !utf8.ValidString(m.key) || !utf8.ValidString(m.value) {
-		return fmt.Errorf("%w: message strings must contain valid UTF-8", ErrInvalidPayload)
 	}
 	return nil
 }

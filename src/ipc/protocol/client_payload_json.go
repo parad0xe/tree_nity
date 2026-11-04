@@ -111,8 +111,8 @@ func (p checkTopicPayloadJSON) validate() error {
 }
 
 type produceMessagePayloadJSON struct {
-	// Raw must be present even when its value is false.
-	Raw *bool `json:"raw"`
+	// Topic is required and must match the topic name format.
+	Topic *string `json:"topic"`
 	// Message must be present and pass key, value, and size validation.
 	Message *messageJSON `json:"message"`
 }
@@ -127,15 +127,16 @@ func (p produceMessagePayloadJSON) toPayload() (Payload, error) {
 		return nil, err
 	}
 
-	return &ProduceMessagePayload{
-		raw:     *p.Raw,
-		message: message,
-	}, nil
+	payload := &ProduceMessagePayload{topic: *p.Topic, message: message}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p produceMessagePayloadJSON) validate() error {
-	if p.Raw == nil {
-		return ErrMissingRaw
+	if p.Topic == nil {
+		return ErrMissingTopic
 	}
 	if p.Message == nil {
 		return ErrMissingMessage

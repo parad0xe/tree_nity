@@ -89,12 +89,12 @@ func TestDataJSONToData(t *testing.T) {
 			opcode:   ProduceMessage,
 			emitter:  Client,
 			metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			payload:  `{"raw":false,"message":{"key":"key","value":"value"}}`,
+			payload:  `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`,
 			want: Data{
 				opcode:   ProduceMessage,
 				emitter:  Client,
 				metadata: &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
-				payload:  &ProduceMessagePayload{raw: false, message: Message{key: "key", value: "value"}},
+				payload:  &ProduceMessagePayload{topic: "orders", message: Message{key: []byte("key"), value: []byte("value")}},
 			},
 		},
 		{
@@ -129,7 +129,7 @@ func TestDataJSONToData(t *testing.T) {
 
 // TestDecodeRejectsInheritedJSONFields checks that fields cannot leak between decoded frames.
 func TestDecodeRejectsInheritedJSONFields(t *testing.T) {
-	previousFrame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"previous","clientIPC":"/previous"},"payload":{"raw":true,"message":{"key":"previous","value":"previous"}}}`
+	previousFrame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"previous","clientIPC":"/previous"},"payload":{"topic":"orders","message":{"key":"cHJldmlvdXM=","value":"cHJldmlvdXM="}}}`
 	tests := []struct {
 		name     string
 		metadata string
@@ -138,15 +138,15 @@ func TestDecodeRejectsInheritedJSONFields(t *testing.T) {
 	}{
 		{
 			name: "missing client ID", metadata: `{"clientIPC":"/next"}`,
-			payload: `{"raw":false,"message":{"key":"next","value":"next"}}`, wantErr: ErrMissingClientID,
+			payload: `{"topic":"orders","message":{"key":"bmV4dA==","value":"bmV4dA=="}}`, wantErr: ErrMissingClientID,
 		},
 		{
-			name: "missing raw", metadata: `{"clientId":"next","clientIPC":"/next"}`,
-			payload: `{"message":{"key":"next","value":"next"}}`, wantErr: ErrMissingRaw,
+			name: "missing topic", metadata: `{"clientId":"next","clientIPC":"/next"}`,
+			payload: `{"message":{"key":"bmV4dA==","value":"bmV4dA=="}}`, wantErr: ErrMissingTopic,
 		},
 		{
 			name: "missing message value", metadata: `{"clientId":"next","clientIPC":"/next"}`,
-			payload: `{"raw":false,"message":{"key":"next"}}`, wantErr: ErrMissingMessageValue,
+			payload: `{"topic":"orders","message":{"key":"bmV4dA=="}}`, wantErr: ErrMissingMessageValue,
 		},
 	}
 	for _, tt := range tests {
@@ -182,9 +182,9 @@ func TestDataJSONToDataRejectsInvalidInput(t *testing.T) {
 		{name: "unknown opcode", opcode: 9, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "invalid payload JSON", emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{`},
 		{name: "unknown payload field", emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"extra":true}`},
-		{name: "missing raw", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"message":{"key":"k","value":"v"}}`, wantErr: ErrMissingRaw},
-		{name: "missing message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"raw":true}`, wantErr: ErrMissingMessage},
-		{name: "invalid message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"raw":true,"message":{"key":"k"}}`, wantErr: ErrMissingMessageValue},
+		{name: "missing topic", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"message":{"key":"aw==","value":"dg=="}}`, wantErr: ErrMissingTopic},
+		{name: "missing message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"topic":"orders"}`, wantErr: ErrMissingMessage},
+		{name: "invalid message", opcode: ProduceMessage, emitter: Client, metadata: `{"clientId":"client","clientIPC":""}`, payload: `{"topic":"orders","message":{"key":"aw=="}}`, wantErr: ErrMissingMessageValue},
 	}
 
 	for _, tt := range tests {

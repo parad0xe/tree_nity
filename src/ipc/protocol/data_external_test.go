@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,8 +29,8 @@ func TestNewData(t *testing.T) {
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), json: `{"topic":"orders"}`},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
-			payload: protocol.NewProduceMessagePayload(true, protocol.NewMessage("key", "value")),
-			json:    `{"raw":true,"message":{"key":"key","value":"value"}}`,
+			payload: protocol.NewProduceMessagePayload("orders", protocol.NewMessage([]byte("key"), []byte("value"))),
+			json:    `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`,
 		},
 		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload(), json: `{}`},
 		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload(), json: `{}`},
@@ -104,16 +105,16 @@ func TestNewDataRejectsInvalidInput(t *testing.T) {
 		{name: "invalid client ID", metadata: protocol.NewClientMetadata("\xff", "/client"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
 		{name: "invalid client IPC", metadata: protocol.NewClientMetadata("client", "\xff"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
 		{
-			name: "invalid message key", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
-			payload: protocol.NewProduceMessagePayload(false, protocol.NewMessage("\xff", "value")), wantErr: protocol.ErrInvalidPayload,
+			name: "empty produce topic", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
+			payload: protocol.NewProduceMessagePayload("", protocol.NewMessage([]byte("key"), []byte("value"))), wantErr: protocol.ErrInvalidPayload,
 		},
 		{
-			name: "invalid message value", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
-			payload: protocol.NewProduceMessagePayload(false, protocol.NewMessage("key", "\xff")), wantErr: protocol.ErrInvalidPayload,
+			name: "invalid produce topic", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
+			payload: protocol.NewProduceMessagePayload("user/events", protocol.NewMessage([]byte("key"), []byte("value"))), wantErr: protocol.ErrInvalidPayload,
 		},
 		{
 			name: "oversized message", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
-			payload: protocol.NewProduceMessagePayload(false, protocol.NewMessage("k", strings.Repeat("v", protocol.MessageSize))), wantErr: protocol.ErrMessageTooLarge,
+			payload: protocol.NewProduceMessagePayload("orders", protocol.NewMessage([]byte("k"), []byte(strings.Repeat("v", protocol.MessageSize)))), wantErr: protocol.ErrMessageTooLarge,
 		},
 	}
 	for _, tt := range tests {
@@ -142,7 +143,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
-			payload: protocol.NewProduceMessagePayload(true, protocol.NewMessage("key", "value")),
+			payload: protocol.NewProduceMessagePayload("orders", protocol.NewMessage([]byte("key"), []byte("value"))),
 			wantErr: protocol.ErrInvalidPayload,
 		},
 		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload(), wantErr: protocol.ErrInvalidPayload},
@@ -161,21 +162,30 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 
 // TestProduceMessagePayloadAccessors checks payload and message accessors after a round trip.
 func TestProduceMessagePayloadAccessors(t *testing.T) {
+	allBytes := make([]byte, 256)
+	for i := range allBytes {
+		allBytes[i] = byte(i)
+	}
 	tests := []struct {
 		name  string
-		raw   bool
-		key   string
-		value string
+		topic string
+		key   []byte
+		value []byte
 	}{
-		{name: "empty"},
-		{name: "minimal", key: "k", value: "v"},
-		{name: "raw", raw: true, key: "key", value: "value"},
-		{name: "byte limit", value: strings.Repeat("v", protocol.MessageSize)},
+		{name: "empty", topic: "orders"},
+		{name: "empty slices", topic: "orders", key: []byte{}, value: []byte{}},
+		{name: "minimal", topic: "t", key: []byte("k"), value: []byte("v")},
+		{name: "text", topic: "User_09.events-1", key: []byte("key"), value: []byte("value")},
+		{name: "maximum topic length", topic: strings.Repeat("t", 32)},
+		{name: "non-UTF-8 key", topic: "orders", key: []byte("\xff"), value: []byte("value")},
+		{name: "non-UTF-8 value", topic: "orders", key: []byte("key"), value: []byte("\xff")},
+		{name: "arbitrary bytes", topic: "orders", key: allBytes, value: allBytes},
+		{name: "byte limit", topic: "orders", value: []byte(strings.Repeat("v", protocol.MessageSize))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			message := protocol.NewMessage(tt.key, tt.value)
-			payload := protocol.NewProduceMessagePayload(tt.raw, message)
+			payload := protocol.NewProduceMessagePayload(tt.topic, message)
 			data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata("client-1", "/client-1"), payload)
 			if err != nil {
 				t.Errorf("NewData(ProduceMessage, client, %#v) error = %v, want nil", payload, err)
@@ -197,10 +207,58 @@ func TestProduceMessagePayloadAccessors(t *testing.T) {
 				return
 			}
 			gotMessage := got.Message()
-			if got.Raw() != tt.raw || gotMessage.Key() != tt.key || gotMessage.Value() != tt.value || gotMessage.Offset() != 0 {
-				t.Errorf("Decode(%q) message payload = (%t, %q, %q, %d), want (%t, %q, %q, 0)", frame, got.Raw(), gotMessage.Key(), gotMessage.Value(), gotMessage.Offset(), tt.raw, tt.key, tt.value)
+			if got.Topic() != tt.topic || !bytes.Equal(gotMessage.Key(), tt.key) || !bytes.Equal(gotMessage.Value(), tt.value) || gotMessage.Offset() != 0 {
+				t.Errorf("Decode(%q) message payload = (%q, %q, %q, %d), want (%q, %q, %q, 0)", frame, got.Topic(), gotMessage.Key(), gotMessage.Value(), gotMessage.Offset(), tt.topic, tt.key, tt.value)
 			}
 		})
+	}
+}
+
+// TestProduceMessageBinaryFrame fixes the JSON representation of arbitrary message bytes.
+func TestProduceMessageBinaryFrame(t *testing.T) {
+	message := protocol.NewMessage([]byte("user"), []byte{0x00, 0xff, 0x10})
+	payload := protocol.NewProduceMessagePayload("user_events", message)
+	metadata := protocol.NewClientMetadata("client-1", "/client-1")
+	data, err := protocol.NewData(protocol.ProduceMessage, metadata, payload)
+	if err != nil {
+		t.Errorf("NewData(ProduceMessage, %#v, %#v) error = %v, want nil", metadata, payload, err)
+		return
+	}
+	frame, err := protocol.Encode(data)
+	wantFrame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"user_events","message":{"key":"dXNlcg==","value":"AP8Q"}}}`
+	if err != nil || string(frame) != wantFrame {
+		t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+	}
+}
+
+// TestNewMessageCopiesInput checks ownership of the supplied binary buffers.
+func TestNewMessageCopiesInput(t *testing.T) {
+	key, value := []byte("key"), []byte("value")
+	message := protocol.NewMessage(key, value)
+	key[0], value[0] = 0xff, 0x00
+	if got := message.Key(); !bytes.Equal(got, []byte("key")) {
+		t.Errorf("NewMessage(key, value).Key() after key becomes %q = %q, want %q", key, got, "key")
+	}
+	if got := message.Value(); !bytes.Equal(got, []byte("value")) {
+		t.Errorf("NewMessage(key, value).Value() after value becomes %q = %q, want %q", value, got, "value")
+	}
+}
+
+// TestMessageAccessorsReturnCopies checks that returned buffers cannot modify the message.
+func TestMessageAccessorsReturnCopies(t *testing.T) {
+	wantKey, wantValue := []byte("key"), []byte("value")
+	message := protocol.NewMessage(wantKey, wantValue)
+	key, value := message.Key(), message.Value()
+	if !bytes.Equal(key, wantKey) || !bytes.Equal(value, wantValue) {
+		t.Errorf("NewMessage(%q, %q) accessors = (%q, %q), want (%q, %q)", wantKey, wantValue, key, value, wantKey, wantValue)
+		return
+	}
+	key[0], value[0] = 0xff, 0x00
+	if got := message.Key(); !bytes.Equal(got, wantKey) {
+		t.Errorf("Key() after returned key becomes %q = %q, want %q", key, got, wantKey)
+	}
+	if got := message.Value(); !bytes.Equal(got, wantValue) {
+		t.Errorf("Value() after returned value becomes %q = %q, want %q", value, got, wantValue)
 	}
 }
 

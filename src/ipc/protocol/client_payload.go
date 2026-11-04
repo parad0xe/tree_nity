@@ -181,20 +181,23 @@ func (p *CheckTopicPayload) validate() error {
 	return nil
 }
 
-// ProduceMessagePayload carries a message and its raw flag.
+// ProduceMessagePayload carries a topic name and a message to produce.
+// Its JSON representation contains topic and message; the input format is local
+// to the client, and the server assigns the message offset.
 type ProduceMessagePayload struct {
-	raw     bool
+	topic   string
 	message Message
 }
 
-// NewProduceMessagePayload returns a payload containing a message and its raw flag.
-func NewProduceMessagePayload(raw bool, message Message) *ProduceMessagePayload {
-	return &ProduceMessagePayload{raw: raw, message: message}
+// NewProduceMessagePayload returns a payload for producing message on topic.
+// Topic names follow the same format as CreateTopicPayload.
+func NewProduceMessagePayload(topic string, message Message) *ProduceMessagePayload {
+	return &ProduceMessagePayload{topic: topic, message: message}
 }
 
-// Raw reports whether the message should be produced in raw mode.
-func (p ProduceMessagePayload) Raw() bool {
-	return p.raw
+// Topic returns the name of the topic on which to produce the message.
+func (p ProduceMessagePayload) Topic() string {
+	return p.topic
 }
 
 // Message returns the message to produce.
@@ -213,12 +216,15 @@ func (p *ProduceMessagePayload) toJSON(emitter Emitter, opcode Opcode) (payloadJ
 	if err != nil {
 		return nil, err
 	}
-	return &produceMessagePayloadJSON{Raw: &p.raw, Message: &message}, nil
+	return &produceMessagePayloadJSON{Topic: &p.topic, Message: &message}, nil
 }
 
 func (p *ProduceMessagePayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.topic).Validate(); err != nil {
+		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
 	}
 	return nil
 }
