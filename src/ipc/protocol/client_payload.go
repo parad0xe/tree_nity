@@ -33,14 +33,11 @@ func (p *ListTopicPayload) validate() error {
 }
 
 // CreateTopicPayload carries the name of the topic to create.
-// Its JSON representation is {"topic":"<name>"}.
 type CreateTopicPayload struct {
 	topic string
 }
 
-// NewCreateTopicPayload returns a payload for creating topic.
-// NewData and Encode reject names that do not contain 1 to 32 ASCII letters,
-// digits, underscores, dots, or hyphens.
+// NewCreateTopicPayload returns a topic creation request.
 func NewCreateTopicPayload(topic string) *CreateTopicPayload {
 	return &CreateTopicPayload{topic: topic}
 }
@@ -70,20 +67,17 @@ func (p *CreateTopicPayload) validate() error {
 	return nil
 }
 
-// ConsumerInfoPayload carries the subscriber whose information is requested.
-// The subscriber can differ from the caller identified by ClientMetadata.ClientID.
-// Its JSON representation is {"subscriber":"<name>"}.
+// ConsumerInfoPayload identifies the subscriber to query.
 type ConsumerInfoPayload struct {
 	subscriber string
 }
 
-// NewConsumerInfoPayload returns a request for subscriber's information.
-// Subscriber names follow the same format as ClientMetadata.ClientID.
+// NewConsumerInfoPayload returns an info request for subscriber.
 func NewConsumerInfoPayload(subscriber string) *ConsumerInfoPayload {
 	return &ConsumerInfoPayload{subscriber: subscriber}
 }
 
-// Subscriber returns the name of the consumer being queried.
+// Subscriber returns the queried consumer's name.
 func (p ConsumerInfoPayload) Subscriber() string {
 	return p.subscriber
 }
@@ -108,10 +102,7 @@ func (p *ConsumerInfoPayload) validate() error {
 	return nil
 }
 
-// TopicSubscriptionPayload carries a topic, key prefix, and optional starting offset.
-// The subscriber is identified by ClientMetadata.ClientID. An empty prefix matches
-// all messages. An absent or null JSON offset resumes the stored offset, or starts
-// at zero for a new subscriber; an explicit zero requests replay from the beginning.
+// TopicSubscriptionPayload carries a topic, key prefix, and optional offset.
 type TopicSubscriptionPayload struct {
 	topic  string
 	prefix string
@@ -119,8 +110,6 @@ type TopicSubscriptionPayload struct {
 }
 
 // NewTopicSubscriptionPayload returns a subscription request with a copy of offset.
-// Topic names follow the same format as CreateTopicPayload. NewData and Encode
-// reject invalid UTF-8 prefixes and negative offsets. A nil offset requests resume.
 func NewTopicSubscriptionPayload(topic, prefix string, offset *int32) *TopicSubscriptionPayload {
 	payload := &TopicSubscriptionPayload{topic: topic, prefix: prefix}
 	if offset != nil {
@@ -135,12 +124,12 @@ func (p TopicSubscriptionPayload) Topic() string {
 	return p.topic
 }
 
-// Prefix returns the key prefix to match, or an empty string for all messages.
+// Prefix returns the key prefix; empty matches all messages.
 func (p TopicSubscriptionPayload) Prefix() string {
 	return p.prefix
 }
 
-// Offset returns a copy of the requested offset, or nil for resume.
+// Offset returns an offset copy; nil resumes, zero replays.
 func (p TopicSubscriptionPayload) Offset() *int32 {
 	if p.offset == nil {
 		return nil
@@ -175,20 +164,17 @@ func (p *TopicSubscriptionPayload) validate() error {
 	return nil
 }
 
-// AcknowledgementPayload carries the next queue offset to consume.
-// After receiving offset N, the consumer supplies N+1. Its JSON representation
-// always includes offset, including zero. No success reply is expected.
+// AcknowledgementPayload carries the next offset to consume (received offset + 1).
 type AcknowledgementPayload struct {
 	offset int32
 }
 
-// NewAcknowledgementPayload returns a payload carrying the next offset to consume.
-// NewData and Encode reject negative offsets.
+// NewAcknowledgementPayload returns an acknowledgement for the next offset.
 func NewAcknowledgementPayload(offset int32) *AcknowledgementPayload {
 	return &AcknowledgementPayload{offset: offset}
 }
 
-// Offset returns the next queue offset to consume.
+// Offset returns the next offset to consume.
 func (p AcknowledgementPayload) Offset() int32 {
 	return p.offset
 }
@@ -213,14 +199,12 @@ func (p *AcknowledgementPayload) validate() error {
 	return nil
 }
 
-// CheckTopicPayload carries the name of the topic to check before producing messages.
-// Its JSON representation is {"topic":"<name>"}.
+// CheckTopicPayload carries the topic name to check.
 type CheckTopicPayload struct {
 	topic string
 }
 
-// NewCheckTopicPayload returns a payload for checking topic.
-// Topic names follow the same format as CreateTopicPayload.
+// NewCheckTopicPayload returns a topic check request.
 func NewCheckTopicPayload(topic string) *CheckTopicPayload {
 	return &CheckTopicPayload{topic: topic}
 }
@@ -250,21 +234,18 @@ func (p *CheckTopicPayload) validate() error {
 	return nil
 }
 
-// ProduceMessagePayload carries a topic name and a message to produce.
-// Its JSON representation contains topic and message; the input format is local
-// to the client, and the server assigns the message offset.
+// ProduceMessagePayload carries a topic and message; JSON omits the offset.
 type ProduceMessagePayload struct {
 	topic   string
 	message Message
 }
 
-// NewProduceMessagePayload returns a payload for producing message on topic.
-// Topic names follow the same format as CreateTopicPayload.
+// NewProduceMessagePayload returns a message production request.
 func NewProduceMessagePayload(topic string, message Message) *ProduceMessagePayload {
 	return &ProduceMessagePayload{topic: topic, message: message}
 }
 
-// Topic returns the name of the topic on which to produce the message.
+// Topic returns the message's destination topic.
 func (p ProduceMessagePayload) Topic() string {
 	return p.topic
 }
@@ -298,11 +279,10 @@ func (p *ProduceMessagePayload) validate() error {
 	return nil
 }
 
-// ConsumerDisconnectPayload ends a consumer subscription with an empty JSON object.
-// ClientMetadata.ClientID identifies the subscriber. No success reply is expected.
+// ConsumerDisconnectPayload signals the end of a subscription.
 type ConsumerDisconnectPayload struct{}
 
-// NewConsumerDisconnectPayload returns an empty consumer disconnection payload.
+// NewConsumerDisconnectPayload returns a disconnection request.
 func NewConsumerDisconnectPayload() *ConsumerDisconnectPayload {
 	return &ConsumerDisconnectPayload{}
 }
@@ -324,11 +304,10 @@ func (p *ConsumerDisconnectPayload) validate() error {
 	return nil
 }
 
-// ConsumerHeartbeatPayload signals a live consumer with an empty JSON object.
-// ClientMetadata.ClientID identifies the subscriber. No success reply is expected.
+// ConsumerHeartbeatPayload signals that a consumer is alive.
 type ConsumerHeartbeatPayload struct{}
 
-// NewConsumerHeartbeatPayload returns an empty consumer heartbeat payload.
+// NewConsumerHeartbeatPayload returns a heartbeat.
 func NewConsumerHeartbeatPayload() *ConsumerHeartbeatPayload {
 	return &ConsumerHeartbeatPayload{}
 }

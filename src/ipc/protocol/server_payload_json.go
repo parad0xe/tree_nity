@@ -12,7 +12,7 @@ var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
 }
 
 type listTopicReplyPayloadJSON struct {
-	// Topics is required and cannot be null; an empty array is accepted.
+	// Topics is required; empty lists encode as [].
 	Topics *[]string `json:"topics"`
 }
 
@@ -47,15 +47,15 @@ func (p createTopicReplyPayloadJSON) validate() error {
 	return nil
 }
 
-// Field order matches the consumer info command's output order.
+// Fields follow the info command's output order.
 type consumerInfoReplyPayloadJSON struct {
 	Client *string `json:"client"`
 	Topic  *string `json:"topic"`
-	// Offset is required even when zero.
+	// Offset is required, including zero.
 	Offset *int32 `json:"offset"`
-	// Prefix is required even when empty.
+	// Prefix is required, including empty.
 	Prefix *string `json:"prefix"`
-	// IPC is required even when empty.
+	// IPC is required, including empty.
 	IPC *string `json:"ipc"`
 }
 
@@ -116,9 +116,9 @@ func (p checkTopicReplyPayloadJSON) validate() error {
 }
 
 type errorReplyPayloadJSON struct {
-	// Kind must be present even when its value is InvalidRequest (zero).
+	// Kind is required, including InvalidRequest.
 	Kind *ErrorKind `json:"kind"`
-	// Reason must be present, but an empty string is accepted.
+	// Reason is required; empty is valid.
 	Reason *string `json:"reason"`
 }
 
@@ -145,12 +145,12 @@ func (p errorReplyPayloadJSON) validate() error {
 
 type deliveredMessageJSON struct {
 	messageJSON
-	// Offset is required even when zero; production messages use messageJSON alone.
+	// Offset is required, including zero.
 	Offset *int32 `json:"offset"`
 }
 
 type messageDeliveryPayloadJSON struct {
-	// Message must be present and include a queue offset.
+	// Message and its offset are required.
 	Message *deliveredMessageJSON `json:"message"`
 }
 

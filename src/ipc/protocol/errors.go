@@ -14,23 +14,23 @@ var (
 	ErrMissingMetadata = errors.New("missing metadata")
 	// ErrMissingPayload indicates that a frame has no payload.
 	ErrMissingPayload = errors.New("missing payload")
-	// ErrMissingTopic indicates that a payload has no required topic field.
+	// ErrMissingTopic indicates a missing topic field.
 	ErrMissingTopic = errors.New("missing topic")
-	// ErrMissingSubscriber indicates that a consumer information request has no subscriber.
+	// ErrMissingSubscriber indicates a missing subscriber field.
 	ErrMissingSubscriber = errors.New("missing subscriber")
-	// ErrMissingClient indicates that a consumer information reply has no client field.
+	// ErrMissingClient indicates a missing client field.
 	ErrMissingClient = errors.New("missing client")
-	// ErrMissingIPC indicates that a consumer information reply has no ipc field.
+	// ErrMissingIPC indicates a missing ipc field.
 	ErrMissingIPC = errors.New("missing ipc")
-	// ErrMissingPrefix indicates that a payload has no required prefix field.
+	// ErrMissingPrefix indicates a missing prefix field.
 	ErrMissingPrefix = errors.New("missing prefix")
-	// ErrMissingOffset indicates that a payload has no required offset field.
+	// ErrMissingOffset indicates a missing offset field.
 	ErrMissingOffset = errors.New("missing offset")
-	// ErrMissingTopics indicates that a topic list response has no topics field.
+	// ErrMissingTopics indicates a missing topics field.
 	ErrMissingTopics = errors.New("missing topics")
-	// ErrMissingErrorKind indicates that an error reply has no kind.
+	// ErrMissingErrorKind indicates a missing error kind.
 	ErrMissingErrorKind = errors.New("missing error kind")
-	// ErrMissingErrorReason indicates that an error reply has no reason.
+	// ErrMissingErrorReason indicates a missing error reason.
 	ErrMissingErrorReason = errors.New("missing error reason")
 	// ErrInvalidMetadata indicates metadata with an incompatible type or invalid content.
 	ErrInvalidMetadata = errors.New("invalid metadata")
@@ -44,13 +44,13 @@ var (
 	ErrMissingClientID = errors.New("missing clientId")
 	// ErrMissingClientIPC indicates that client metadata has no IPC endpoint.
 	ErrMissingClientIPC = errors.New("missing clientIPC")
-	// ErrMissingMessage indicates that a payload has no message field.
+	// ErrMissingMessage indicates a missing message field.
 	ErrMissingMessage = errors.New("missing message")
 	// ErrMissingMessageKey indicates that a message has no key.
 	ErrMissingMessageKey = errors.New("missing message key")
 	// ErrMissingMessageValue indicates that a message has no value.
 	ErrMissingMessageValue = errors.New("missing message value")
-	// ErrMissingMessageOffset indicates that a delivered message has no offset.
+	// ErrMissingMessageOffset indicates a missing delivery offset.
 	ErrMissingMessageOffset = errors.New("missing message offset")
 	// ErrMessageTooLarge indicates that a message exceeds MessageSize bytes.
 	ErrMessageTooLarge = fmt.Errorf("message exceeds %d bytes", MessageSize)

@@ -26,7 +26,7 @@ func (p listTopicPayloadJSON) validate() error {
 }
 
 type createTopicPayloadJSON struct {
-	// Topic is required and must match the topic name format.
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
 	Topic *string `json:"topic"`
 }
 
@@ -49,7 +49,7 @@ func (p createTopicPayloadJSON) validate() error {
 }
 
 type consumerInfoPayloadJSON struct {
-	// Subscriber is required and identifies the queried consumer, not the caller.
+	// Subscriber is the required consumer name to query.
 	Subscriber *string `json:"subscriber"`
 }
 
@@ -72,11 +72,11 @@ func (p consumerInfoPayloadJSON) validate() error {
 }
 
 type topicSubscriptionPayloadJSON struct {
-	// Topic is required and must match the topic name format.
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
 	Topic *string `json:"topic"`
-	// Prefix is required, but an empty string matches all messages.
+	// Prefix is required; empty matches all messages.
 	Prefix *string `json:"prefix"`
-	// Offset is optional; nil requests resume, while explicit zero requests replay.
+	// Offset is optional; absent or null resumes, zero replays.
 	Offset *int32 `json:"offset,omitempty"`
 }
 
@@ -102,7 +102,7 @@ func (p topicSubscriptionPayloadJSON) validate() error {
 }
 
 type acknowledgementPayloadJSON struct {
-	// Offset is required even when its value is zero.
+	// Offset is required, including zero.
 	Offset *int32 `json:"offset"`
 }
 
@@ -125,7 +125,7 @@ func (p acknowledgementPayloadJSON) validate() error {
 }
 
 type checkTopicPayloadJSON struct {
-	// Topic is required and must match the topic name format.
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
 	Topic *string `json:"topic"`
 }
 
@@ -148,9 +148,9 @@ func (p checkTopicPayloadJSON) validate() error {
 }
 
 type produceMessagePayloadJSON struct {
-	// Topic is required and must match the topic name format.
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
 	Topic *string `json:"topic"`
-	// Message must be present and pass key, value, and size validation.
+	// Message is required and limited to MessageSize bytes.
 	Message *messageJSON `json:"message"`
 }
 

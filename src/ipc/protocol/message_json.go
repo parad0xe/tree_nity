@@ -6,9 +6,9 @@ import (
 )
 
 type messageJSON struct {
-	// Key is required and contains base64-encoded bytes.
+	// Key is required and base64-encoded.
 	Key *string `json:"key"`
-	// Value is required and contains base64-encoded bytes; an empty string is accepted.
+	// Value is required and base64-encoded; empty is valid.
 	Value *string `json:"value"`
 }
 

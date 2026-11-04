@@ -8,14 +8,11 @@ import (
 )
 
 // ListTopicReplyPayload carries topic names in their supplied order.
-// Its JSON representation is {"topics":["<name>"]}; an empty list is encoded as [].
-// Topic names follow the same format as CreateTopicPayload.
 type ListTopicReplyPayload struct {
 	topics []string
 }
 
 // NewListTopicReplyPayload returns a response containing a copy of topics.
-// Nil and empty slices both represent an empty topic list.
 func NewListTopicReplyPayload(topics []string) *ListTopicReplyPayload {
 	return &ListTopicReplyPayload{topics: append([]string(nil), topics...)}
 }
@@ -51,11 +48,10 @@ func (p *ListTopicReplyPayload) validate() error {
 	return nil
 }
 
-// CreateTopicReplyPayload confirms topic creation with an empty JSON object.
-// A duplicate topic is reported with ErrorReply and TopicExists instead.
+// CreateTopicReplyPayload confirms topic creation.
 type CreateTopicReplyPayload struct{}
 
-// NewCreateTopicReplyPayload returns an empty topic creation response.
+// NewCreateTopicReplyPayload returns a topic creation response.
 func NewCreateTopicReplyPayload() *CreateTopicReplyPayload {
 	return &CreateTopicReplyPayload{}
 }
@@ -78,9 +74,6 @@ func (p *CreateTopicReplyPayload) validate() error {
 }
 
 // ConsumerInfoReplyPayload describes a consumer's subscription.
-// JSON fields appear in the order client, topic, offset, prefix, ipc. All fields
-// are required; prefix and ipc may be empty. An unknown consumer is reported with
-// ErrorReply and ClientNotFound instead.
 type ConsumerInfoReplyPayload struct {
 	client string
 	topic  string
@@ -89,30 +82,27 @@ type ConsumerInfoReplyPayload struct {
 	ipc    string
 }
 
-// NewConsumerInfoReplyPayload returns information about the named consumer.
-// Client names follow ClientMetadata.ClientID's format, and topic names follow
-// CreateTopicPayload's format. NewData and Encode reject negative offsets and
-// invalid UTF-8 in prefix or ipc.
+// NewConsumerInfoReplyPayload returns a consumer information response.
 func NewConsumerInfoReplyPayload(client, topic string, offset int32, prefix, ipc string) *ConsumerInfoReplyPayload {
 	return &ConsumerInfoReplyPayload{client: client, topic: topic, offset: offset, prefix: prefix, ipc: ipc}
 }
 
-// Client returns the name of the queried consumer.
+// Client returns the consumer's name.
 func (p ConsumerInfoReplyPayload) Client() string {
 	return p.client
 }
 
-// Topic returns the topic to which the consumer is subscribed.
+// Topic returns the subscribed topic.
 func (p ConsumerInfoReplyPayload) Topic() string {
 	return p.topic
 }
 
-// Offset returns the consumer's next queue offset to consume.
+// Offset returns the next offset to consume.
 func (p ConsumerInfoReplyPayload) Offset() int32 {
 	return p.offset
 }
 
-// Prefix returns the consumer's key filter, or an empty string for all messages.
+// Prefix returns the key prefix; empty matches all messages.
 func (p ConsumerInfoReplyPayload) Prefix() string {
 	return p.prefix
 }
@@ -154,11 +144,10 @@ func (p *ConsumerInfoReplyPayload) validate() error {
 	return nil
 }
 
-// TopicSubscriptionReplyPayload confirms a subscription with an empty JSON object.
-// Rejections are reported with ErrorReply instead.
+// TopicSubscriptionReplyPayload confirms a subscription.
 type TopicSubscriptionReplyPayload struct{}
 
-// NewTopicSubscriptionReplyPayload returns an empty subscription response.
+// NewTopicSubscriptionReplyPayload returns a subscription response.
 func NewTopicSubscriptionReplyPayload() *TopicSubscriptionReplyPayload {
 	return &TopicSubscriptionReplyPayload{}
 }
@@ -180,11 +169,10 @@ func (p *TopicSubscriptionReplyPayload) validate() error {
 	return nil
 }
 
-// CheckTopicReplyPayload confirms that a topic exists with an empty JSON object.
-// A missing topic is reported with ErrorReply and TopicNotFound instead.
+// CheckTopicReplyPayload confirms that a topic exists.
 type CheckTopicReplyPayload struct{}
 
-// NewCheckTopicReplyPayload returns an empty topic check response.
+// NewCheckTopicReplyPayload returns a topic check response.
 func NewCheckTopicReplyPayload() *CheckTopicReplyPayload {
 	return &CheckTopicReplyPayload{}
 }
@@ -212,17 +200,17 @@ type ErrorReplyPayload struct {
 	reason string
 }
 
-// NewErrorReplyPayload returns a payload describing a rejected request.
+// NewErrorReplyPayload returns an error response.
 func NewErrorReplyPayload(kind ErrorKind, reason string) *ErrorReplyPayload {
 	return &ErrorReplyPayload{kind: kind, reason: reason}
 }
 
-// Kind returns the reason's machine-readable category.
+// Kind returns the rejection category.
 func (p ErrorReplyPayload) Kind() ErrorKind {
 	return p.kind
 }
 
-// Reason returns the diagnostic for the client to display.
+// Reason returns the diagnostic reason.
 func (p ErrorReplyPayload) Reason() string {
 	return p.reason
 }
@@ -250,16 +238,12 @@ func (p *ErrorReplyPayload) validate() error {
 	return nil
 }
 
-// MessageDeliveryPayload carries a message and its server-assigned queue offset.
-// Its JSON message contains base64 key and value strings and a required offset,
-// including when the offset is zero. The decoded key and value share MessageSize.
+// MessageDeliveryPayload carries a message and its queue offset.
 type MessageDeliveryPayload struct {
 	message Message
 }
 
-// NewMessageDeliveryPayload returns a delivery containing message at offset.
-// The supplied message is unchanged. NewData and Encode reject negative offsets
-// and messages exceeding MessageSize bytes.
+// NewMessageDeliveryPayload returns a delivery at offset.
 func NewMessageDeliveryPayload(offset int32, message Message) *MessageDeliveryPayload {
 	message.offset = offset
 	return &MessageDeliveryPayload{message: message}
@@ -296,11 +280,10 @@ func (p *MessageDeliveryPayload) validate() error {
 	return p.message.validate()
 }
 
-// ServerShutdownPayload signals server shutdown with an empty JSON object.
-// Consumers interpret this sentinel as a successful end of their subscription.
+// ServerShutdownPayload signals server shutdown.
 type ServerShutdownPayload struct{}
 
-// NewServerShutdownPayload returns an empty server shutdown sentinel.
+// NewServerShutdownPayload returns a shutdown sentinel.
 func NewServerShutdownPayload() *ServerShutdownPayload {
 	return &ServerShutdownPayload{}
 }

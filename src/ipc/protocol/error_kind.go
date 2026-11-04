@@ -2,19 +2,19 @@ package protocol
 
 import "fmt"
 
-// ErrorKind identifies why the server rejected a request.
+// ErrorKind identifies a request rejection.
 type ErrorKind int
 
 const (
-	// InvalidRequest identifies an invalid field or an unexpected operation.
+	// InvalidRequest marks an invalid request.
 	InvalidRequest ErrorKind = iota
-	// TopicNotFound identifies a request for a topic that does not exist.
+	// TopicNotFound marks a missing topic.
 	TopicNotFound
-	// TopicExists identifies a request to create a topic that already exists.
+	// TopicExists marks a duplicate topic.
 	TopicExists
-	// ClientNotFound identifies a request for an unknown consumer.
+	// ClientNotFound marks an unknown consumer.
 	ClientNotFound
-	// ClientNameTaken identifies a subscription using an active consumer's name.
+	// ClientNameTaken marks an active consumer name.
 	ClientNameTaken
 )
 
