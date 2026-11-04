@@ -7,7 +7,7 @@ import (
 
 var validPattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,32}$`)
 
-// ID is a client identifier shared by the client and server.
+// ID is an identifier shared by the client and server.
 type ID string
 
 // Hash returns a deterministic 64-bit FNV-1a hash of the identifier.
