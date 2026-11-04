@@ -68,6 +68,45 @@ func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	return newConsumer(&consumerInfo, connection), nil
 }
 
+// UpdateOffset stores the next topic offset the consumer wants to consume.
+// The caller supplies the committed offset, without an additional increment.
+// It returns ErrNotFound when the consumer ID is absent, or
+// ErrManagerUninitialized when the manager is nil or uninitialized.
+func (m *Manager) UpdateOffset(id id.ID, offset uint32) error {
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, exists := m.consumerTable.Get(id)
+	if !exists {
+		return ErrNotFound
+	}
+
+	info.offset = offset
+	return nil
+}
+
+// UpdateTopic changes the stored subscription topic, preserving other metadata.
+// It returns ErrNotFound when the consumer ID is absent, or
+// ErrManagerUninitialized when the manager is nil or uninitialized.
+func (m *Manager) UpdateTopic(id id.ID, topic string) error {
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, exists := m.consumerTable.Get(id)
+	if !exists {
+		return ErrNotFound
+	}
+
+	info.topic = topic
+	return nil
+}
+
 // RemoveConsumer deletes stored metadata; active connections belong to their topics.
 // It returns ErrNotFound when the consumer ID is absent, or
 // ErrManagerUninitialized when the manager is nil or uninitialized.

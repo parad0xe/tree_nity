@@ -31,7 +31,7 @@ func (i *Info) Topic() string {
 	return i.topic
 }
 
-// Offset returns the stored message offset.
+// Offset returns the next topic offset the consumer wants to consume.
 func (i *Info) Offset() uint32 {
 	return i.offset
 }
