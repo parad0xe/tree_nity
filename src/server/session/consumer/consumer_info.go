@@ -5,14 +5,16 @@ import "tree_nity/src/ipc/id"
 // Info stores consumer metadata independently of connection resources.
 type Info struct {
 	id      id.ID
+	topic   string
 	offset  uint32
 	prefix  string
 	ipcPath string
 }
 
-func newInfo(id id.ID, offset uint32, prefix string, ipcPath string) *Info {
+func newInfo(id id.ID, topic string, offset uint32, prefix string, ipcPath string) *Info {
 	return &Info{
 		id:      id,
+		topic:   topic,
 		offset:  offset,
 		prefix:  prefix,
 		ipcPath: ipcPath,
@@ -22,6 +24,11 @@ func newInfo(id id.ID, offset uint32, prefix string, ipcPath string) *Info {
 // ID returns the consumer identifier.
 func (i *Info) ID() id.ID {
 	return i.id
+}
+
+// Topic returns the name of the consumer's subscribed topic.
+func (i *Info) Topic() string {
+	return i.topic
 }
 
 // Offset returns the stored message offset.
