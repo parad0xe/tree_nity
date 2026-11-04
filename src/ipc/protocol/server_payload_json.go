@@ -7,6 +7,7 @@ var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
 	CheckTopicReply:        func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
 	ErrorReply:             func() payloadJSON { return &errorReplyPayloadJSON{} },
 	MessageDelivery:        func() payloadJSON { return &messageDeliveryPayloadJSON{} },
+	ServerShutdown:         func() payloadJSON { return &serverShutdownPayloadJSON{} },
 }
 
 type listTopicReplyPayloadJSON struct {
@@ -132,5 +133,18 @@ func (p messageDeliveryPayloadJSON) validate() error {
 	if p.Message.Offset == nil {
 		return ErrMissingMessageOffset
 	}
+	return nil
+}
+
+type serverShutdownPayloadJSON struct{}
+
+func (p serverShutdownPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	return &ServerShutdownPayload{}, nil
+}
+
+func (p serverShutdownPayloadJSON) validate() error {
 	return nil
 }

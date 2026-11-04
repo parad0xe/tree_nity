@@ -218,3 +218,29 @@ func (p *MessageDeliveryPayload) validate() error {
 	}
 	return p.message.validate()
 }
+
+// ServerShutdownPayload signals server shutdown with an empty JSON object.
+// Consumers interpret this sentinel as a successful end of their subscription.
+type ServerShutdownPayload struct{}
+
+// NewServerShutdownPayload returns an empty server shutdown sentinel.
+func NewServerShutdownPayload() *ServerShutdownPayload {
+	return &ServerShutdownPayload{}
+}
+
+func (p *ServerShutdownPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ServerShutdown {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &serverShutdownPayloadJSON{}, nil
+}
+
+func (p *ServerShutdownPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	return nil
+}

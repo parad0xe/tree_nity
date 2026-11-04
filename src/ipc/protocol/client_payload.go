@@ -285,7 +285,8 @@ func (p *ProduceMessagePayload) validate() error {
 	return nil
 }
 
-// ConsumerDisconnectPayload represents a disconnection with no payload fields.
+// ConsumerDisconnectPayload ends a consumer subscription with an empty JSON object.
+// ClientMetadata.ClientID identifies the subscriber. No success reply is expected.
 type ConsumerDisconnectPayload struct{}
 
 // NewConsumerDisconnectPayload returns an empty consumer disconnection payload.
@@ -310,7 +311,8 @@ func (p *ConsumerDisconnectPayload) validate() error {
 	return nil
 }
 
-// ConsumerHeartbeatPayload represents a heartbeat with no payload fields.
+// ConsumerHeartbeatPayload signals a live consumer with an empty JSON object.
+// ClientMetadata.ClientID identifies the subscriber. No success reply is expected.
 type ConsumerHeartbeatPayload struct{}
 
 // NewConsumerHeartbeatPayload returns an empty consumer heartbeat payload.

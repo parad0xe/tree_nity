@@ -471,7 +471,6 @@ func TestDecodeRejectsInvalidServerPayloads(t *testing.T) {
 		{name: "acknowledgement", opcode: Acknowledgement, json: `{"offset":42}`},
 		{name: "check topic", opcode: CheckTopic, json: `{"topic":"orders"}`},
 		{name: "produce message", opcode: ProduceMessage, json: `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`},
-		{name: "consumer disconnect", opcode: ConsumerDisconnect, json: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, json: `{}`, wantErr: ErrUnknownOpcode},
 	}
 	for _, tt := range tests {
