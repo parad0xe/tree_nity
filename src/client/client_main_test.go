@@ -101,6 +101,35 @@ func TestParseRejectsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestParseReturnsProduceCommand(t *testing.T) {
+	args := []string{"/server", "produce", "orders"}
+
+	serverIPCPath, command, err := parse(args)
+
+	if err != nil {
+		t.Fatalf("parse(%q) error = %v, want nil", args, err)
+	}
+	if serverIPCPath != args[0] {
+		t.Errorf("parse(%q) server IPC path = %q, want %q", args, serverIPCPath, args[0])
+	}
+	if command == nil {
+		t.Errorf("parse(%q) command = nil, want a command", args)
+	}
+}
+
+func TestParseReturnsNothingForInvalidCommandArguments(t *testing.T) {
+	args := []string{"/server", "produce"}
+
+	serverIPCPath, command, err := parse(args)
+
+	if err == nil {
+		t.Errorf("parse(%q) error = nil, want an error", args)
+	}
+	if serverIPCPath != "" || command != nil {
+		t.Errorf("parse(%q) = %q, %v, want an empty path and no command", args, serverIPCPath, command)
+	}
+}
+
 func TestRunRejectsInvalidArguments(t *testing.T) {
 	setArgs(t, "client")
 	stderr := captureStderr(t)
