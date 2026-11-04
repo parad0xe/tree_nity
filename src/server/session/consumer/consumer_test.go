@@ -7,7 +7,7 @@ import (
 
 // TestNewConsumer checks metadata ownership and the supplied connection.
 func TestNewConsumer(t *testing.T) {
-	info := newInfo("consumer-1", 7, "events/", "/consumer-1")
+	info := newInfo("consumer-1", "events", 7, "events/", "/consumer-1")
 	wantInfo := *info
 	connection := &Connection{}
 	c := newConsumer(info, connection)
@@ -22,7 +22,7 @@ func TestNewConsumer(t *testing.T) {
 		t.Errorf("newConsumer(%+v, %p).Connection = %p, want %p", wantInfo, connection, c.Connection, connection)
 	}
 
-	*info = *newInfo("other", 99, "other/", "/other")
+	*info = *newInfo("other", "other-topic", 99, "other/", "/other")
 	if c.Info != wantInfo {
 		t.Errorf("consumer.Info after changing constructor input to %+v = %+v, want %+v", *info, c.Info, wantInfo)
 	}
@@ -30,7 +30,7 @@ func TestNewConsumer(t *testing.T) {
 
 // TestConsumerValidate checks receiver, metadata, and connection validation.
 func TestConsumerValidate(t *testing.T) {
-	validInfo := *newInfo("consumer-1", 7, "events/", "/consumer-1")
+	validInfo := *newInfo("consumer-1", "events", 7, "events/", "/consumer-1")
 	tests := []struct {
 		name        string
 		consumer    *Consumer

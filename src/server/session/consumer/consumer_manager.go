@@ -22,15 +22,16 @@ func NewManager() *Manager {
 	}
 }
 
-// AddConsumer stores metadata after validating the consumer ID, without opening a connection.
+// AddConsumer stores consumer metadata, including its topic, after validating
+// the consumer ID, without opening a connection.
 // It returns hashmap.ErrKeyExists when the ID is already registered, or
 // ErrManagerUninitialized when the manager is nil or uninitialized.
-func (m *Manager) AddConsumer(id id.ID, offset uint32, prefix string, ipcPath string) error {
+func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix string, ipcPath string) error {
 	if err := m.validate(); err != nil {
 		return err
 	}
 
-	info := newInfo(id, offset, prefix, ipcPath)
+	info := newInfo(id, topic, offset, prefix, ipcPath)
 	if err := info.validate(); err != nil {
 		return err
 	}

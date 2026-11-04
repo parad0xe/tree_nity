@@ -22,8 +22,8 @@ func newTestManager(t *testing.T, infos ...Info) *Manager {
 		return nil
 	}
 	for _, info := range infos {
-		if err := manager.AddConsumer(info.id, info.offset, info.prefix, info.ipcPath); err != nil {
-			t.Errorf("AddConsumer(%q, %d, %q, %q) during setup error = %v, want nil", info.id, info.offset, info.prefix, info.ipcPath, err)
+		if err := manager.AddConsumer(info.id, info.topic, info.offset, info.prefix, info.ipcPath); err != nil {
+			t.Errorf("AddConsumer(%q, %q, %d, %q, %q) during setup error = %v, want nil", info.id, info.topic, info.offset, info.prefix, info.ipcPath, err)
 			return nil
 		}
 	}
@@ -53,7 +53,7 @@ func TestManagerGetConsumerPropagatesConnectionError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: tt.ipcPath}
+			original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: tt.ipcPath}
 			manager := newTestManager(t, original)
 			if manager == nil {
 				return
@@ -86,8 +86,8 @@ func TestManagerUninitialized(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			consumerID := id.ID("consumer-1")
-			if err := tt.manager.AddConsumer(consumerID, 7, "events/", "/consumer-1"); !errors.Is(err, ErrManagerUninitialized) {
-				t.Errorf("AddConsumer(%q, 7, %q, %q) on %s error = %v, want %v", consumerID, "events/", "/consumer-1", tt.name, err, ErrManagerUninitialized)
+			if err := tt.manager.AddConsumer(consumerID, "events", 7, "events/", "/consumer-1"); !errors.Is(err, ErrManagerUninitialized) {
+				t.Errorf("AddConsumer(%q, %q, 7, %q, %q) on %s error = %v, want %v", consumerID, "events", "events/", "/consumer-1", tt.name, err, ErrManagerUninitialized)
 			}
 			if c, err := tt.manager.GetConsumer(consumerID); c != nil || !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("GetConsumer(%q) on %s = %+v, error = %v, want nil and %v", consumerID, tt.name, c, err, ErrManagerUninitialized)
@@ -123,8 +123,8 @@ func TestManagerLifecycle(t *testing.T) {
 			}
 			for i := 0; i < tt.count; i++ {
 				consumerID := id.ID(fmt.Sprintf("consumer-%d", i))
-				if err := manager.AddConsumer(consumerID, uint32(i), "events/", "/consumer-tests"); err != nil {
-					t.Errorf("AddConsumer(%q, %d, %q, %q) of %d consumers error = %v, want nil", consumerID, i, "events/", "/consumer-tests", tt.count, err)
+				if err := manager.AddConsumer(consumerID, "events", uint32(i), "events/", "/consumer-tests"); err != nil {
+					t.Errorf("AddConsumer(%q, %q, %d, %q, %q) of %d consumers error = %v, want nil", consumerID, "events", i, "events/", "/consumer-tests", tt.count, err)
 					return
 				}
 			}
@@ -147,7 +147,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 // TestManagerRejectsAdd checks that rejected additions preserve stored metadata.
 func TestManagerRejectsAdd(t *testing.T) {
-	original := Info{id: "consumer-1", offset: 7, prefix: "old/", ipcPath: "/consumer-1"}
+	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "old/", ipcPath: "/consumer-1"}
 	tests := []struct {
 		name        string
 		info        Info
@@ -156,7 +156,7 @@ func TestManagerRejectsAdd(t *testing.T) {
 	}{
 		{
 			name:    "duplicate ID",
-			info:    Info{id: original.id, offset: 99, prefix: "new/", ipcPath: "/other"},
+			info:    Info{id: original.id, topic: "other-topic", offset: 99, prefix: "new/", ipcPath: "/other"},
 			wantErr: hashmap.ErrKeyExists,
 		},
 		{name: "empty ID", info: Info{}, wantMessage: "invalid consumer ID"},
@@ -174,7 +174,7 @@ func TestManagerRejectsAdd(t *testing.T) {
 			if manager == nil {
 				return
 			}
-			err := manager.AddConsumer(tt.info.id, tt.info.offset, tt.info.prefix, tt.info.ipcPath)
+			err := manager.AddConsumer(tt.info.id, tt.info.topic, tt.info.offset, tt.info.prefix, tt.info.ipcPath)
 			if tt.wantMessage != "" {
 				if err == nil || err.Error() != tt.wantMessage {
 					t.Errorf("AddConsumer(%+v) error = %v, want %q", tt.info, err, tt.wantMessage)
@@ -200,7 +200,7 @@ func TestManagerNotFound(t *testing.T) {
 		infos []Info
 	}{
 		{name: "empty"},
-		{name: "populated", infos: []Info{{id: "existing", ipcPath: "/existing"}}},
+		{name: "populated", infos: []Info{{id: "existing", topic: "events", ipcPath: "/existing"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -228,7 +228,7 @@ func TestManagerGetConsumerCopies(t *testing.T) {
 	if ipcPath == "" {
 		return
 	}
-	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: ipcPath}
+	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: ipcPath}
 	manager := newTestManager(t, original)
 	if manager == nil {
 		return
@@ -257,7 +257,7 @@ func TestManagerGetConsumerCopies(t *testing.T) {
 		t.Errorf("GetConsumer(%q).Info = %+v, want %+v", original.id, first.Info, original)
 	}
 
-	first.Info = Info{id: "changed", offset: 99, prefix: "other/", ipcPath: "/other"}
+	first.Info = Info{id: "changed", topic: "other-topic", offset: 99, prefix: "other/", ipcPath: "/other"}
 	if second.Info != original {
 		t.Errorf("second GetConsumer(%q).Info after changing the first copy = %+v, want %+v", original.id, second.Info, original)
 	}
@@ -273,7 +273,7 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if ipcPath == "" {
 		return
 	}
-	original := Info{id: "consumer-1", offset: 7, prefix: "events/", ipcPath: ipcPath}
+	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: ipcPath}
 	manager := newTestManager(t, original)
 	if manager == nil {
 		return
@@ -305,15 +305,15 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if replacementIPCPath == "" {
 		return
 	}
-	if err := manager.AddConsumer(original.id, 11, "new/", replacementIPCPath); err != nil {
-		t.Errorf("AddConsumer(%q, 11, %q, %q) after removal error = %v, want nil", original.id, "new/", replacementIPCPath, err)
+	if err := manager.AddConsumer(original.id, "other-topic", 11, "new/", replacementIPCPath); err != nil {
+		t.Errorf("AddConsumer(%q, %q, 11, %q, %q) after removal error = %v, want nil", original.id, "other-topic", "new/", replacementIPCPath, err)
 		return
 	}
 	replacement := getTestConsumer(t, manager, original.id)
 	if replacement == nil {
 		return
 	}
-	want := Info{id: original.id, offset: 11, prefix: "new/", ipcPath: replacementIPCPath}
+	want := Info{id: original.id, topic: "other-topic", offset: 11, prefix: "new/", ipcPath: replacementIPCPath}
 	if replacement.Info != want {
 		t.Errorf("GetConsumer(%q).Info after adding the ID again = %+v, want %+v", original.id, replacement.Info, want)
 	}
@@ -342,8 +342,8 @@ func TestManagerConcurrent(t *testing.T) {
 			<-start
 			for i := 0; i < iterations; i++ {
 				consumerID := id.ID(fmt.Sprintf("consumer-%d-%d", worker, i))
-				want := Info{id: consumerID, offset: uint32(i), prefix: "events/", ipcPath: ipcPath}
-				if err := manager.AddConsumer(want.id, want.offset, want.prefix, want.ipcPath); err != nil {
+				want := Info{id: consumerID, topic: fmt.Sprintf("topic-%d", worker), offset: uint32(i), prefix: "events/", ipcPath: ipcPath}
+				if err := manager.AddConsumer(want.id, want.topic, want.offset, want.prefix, want.ipcPath); err != nil {
 					t.Errorf("concurrent AddConsumer(%+v) error = %v, want nil", want, err)
 					return
 				}
