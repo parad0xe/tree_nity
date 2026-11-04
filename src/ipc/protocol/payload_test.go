@@ -22,7 +22,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
 		{name: "consumer info", opcode: ConsumerInfo, input: `{}`, want: &ConsumerInfoPayload{}},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{"topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{topic: "orders"}},
-		{name: "acknowledgement", opcode: Acknowledgement, input: `{}`, want: &AcknowledgementPayload{}},
+		{name: "acknowledgement", opcode: Acknowledgement, input: `{"offset":0}`, want: &AcknowledgementPayload{}},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
 		{
 			name:   "produce message",

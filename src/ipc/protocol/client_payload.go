@@ -162,12 +162,22 @@ func (p *TopicSubscriptionPayload) validate() error {
 	return nil
 }
 
-// AcknowledgementPayload represents an acknowledgement with no payload fields.
-type AcknowledgementPayload struct{}
+// AcknowledgementPayload carries the next queue offset to consume.
+// After receiving offset N, the consumer supplies N+1. Its JSON representation
+// always includes offset, including zero. No success reply is expected.
+type AcknowledgementPayload struct {
+	offset int32
+}
 
-// NewAcknowledgementPayload returns an empty acknowledgement payload.
-func NewAcknowledgementPayload() *AcknowledgementPayload {
-	return &AcknowledgementPayload{}
+// NewAcknowledgementPayload returns a payload carrying the next offset to consume.
+// NewData and Encode reject negative offsets.
+func NewAcknowledgementPayload(offset int32) *AcknowledgementPayload {
+	return &AcknowledgementPayload{offset: offset}
+}
+
+// Offset returns the next queue offset to consume.
+func (p AcknowledgementPayload) Offset() int32 {
+	return p.offset
 }
 
 func (p *AcknowledgementPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -177,12 +187,15 @@ func (p *AcknowledgementPayload) toJSON(emitter Emitter, opcode Opcode) (payload
 	if emitter != Client || opcode != Acknowledgement {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &acknowledgementPayloadJSON{}, nil
+	return &acknowledgementPayloadJSON{Offset: &p.offset}, nil
 }
 
 func (p *AcknowledgementPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if p.offset < 0 {
+		return fmt.Errorf("%w: negative offset %d", ErrInvalidPayload, p.offset)
 	}
 	return nil
 }

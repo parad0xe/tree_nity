@@ -18,6 +18,8 @@ var (
 	ErrMissingTopic = errors.New("missing topic")
 	// ErrMissingPrefix indicates that a subscription request has no prefix field.
 	ErrMissingPrefix = errors.New("missing prefix")
+	// ErrMissingOffset indicates that a payload has no required offset field.
+	ErrMissingOffset = errors.New("missing offset")
 	// ErrMissingTopics indicates that a topic list response has no topics field.
 	ErrMissingTopics = errors.New("missing topics")
 	// ErrMissingErrorKind indicates that an error reply has no kind.

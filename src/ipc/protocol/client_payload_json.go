@@ -91,16 +91,26 @@ func (p topicSubscriptionPayloadJSON) validate() error {
 	return nil
 }
 
-type acknowledgementPayloadJSON struct{}
+type acknowledgementPayloadJSON struct {
+	// Offset is required even when its value is zero.
+	Offset *int32 `json:"offset"`
+}
 
 func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &AcknowledgementPayload{}, nil
+	payload := &AcknowledgementPayload{offset: *p.Offset}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p acknowledgementPayloadJSON) validate() error {
+	if p.Offset == nil {
+		return ErrMissingOffset
+	}
 	return nil
 }
 

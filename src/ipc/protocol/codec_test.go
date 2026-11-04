@@ -60,7 +60,7 @@ func TestEncode(t *testing.T) {
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
 		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, json: `{}`},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders"}, json: `{"topic":"orders","prefix":""}`},
-		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{}`},
+		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{}, json: `{"offset":0}`},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
 		{
 			name:    "produce message",
@@ -365,7 +365,7 @@ func TestDecode(t *testing.T) {
 		{name: "create topic", opcode: CreateTopic, payload: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
 		{name: "consumer info", opcode: ConsumerInfo, payload: `{}`, want: &ConsumerInfoPayload{}},
 		{name: "topic subscription", opcode: TopicSubscription, payload: `{"topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{topic: "orders"}},
-		{name: "acknowledgement", opcode: Acknowledgement, payload: `{}`, want: &AcknowledgementPayload{}},
+		{name: "acknowledgement", opcode: Acknowledgement, payload: `{"offset":0}`, want: &AcknowledgementPayload{}},
 		{name: "check topic", opcode: CheckTopic, payload: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
 		{
 			name:    "produce message",
@@ -468,6 +468,7 @@ func TestDecodeRejectsInvalidServerPayloads(t *testing.T) {
 		{name: "create topic", opcode: CreateTopic, json: `{"topic":"orders"}`},
 		{name: "consumer info", opcode: ConsumerInfo, json: `{}`, wantErr: ErrUnknownOpcode},
 		{name: "topic subscription", opcode: TopicSubscription, json: `{"topic":"orders","prefix":""}`},
+		{name: "acknowledgement", opcode: Acknowledgement, json: `{"offset":42}`},
 		{name: "check topic", opcode: CheckTopic, json: `{"topic":"orders"}`},
 		{name: "produce message", opcode: ProduceMessage, json: `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`},
 		{name: "consumer disconnect", opcode: ConsumerDisconnect, json: `{}`, wantErr: ErrUnknownOpcode},
@@ -493,22 +494,25 @@ func TestDecodeSelectsPayloadByEmitter(t *testing.T) {
 		name     string
 		emitter  Emitter
 		metadata string
+		payload  string
 		want     Data
 	}{
 		{
 			name: "client acknowledgement", emitter: Client,
 			metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:     Data{opcode: Acknowledgement, emitter: Client, metadata: &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"}, payload: &AcknowledgementPayload{}},
+			payload:  `{"offset":42}`,
+			want:     Data{opcode: Acknowledgement, emitter: Client, metadata: &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"}, payload: &AcknowledgementPayload{offset: 42}},
 		},
 		{
 			name: "server topic check reply", emitter: Server,
 			metadata: `{}`,
+			payload:  `{}`,
 			want:     Data{opcode: CheckTopicReply, emitter: Server, metadata: &ServerMetadata{}, payload: &CheckTopicReplyPayload{}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame := fmt.Sprintf(`{"opcode":4,"emitter":%d,"metadata":%s,"payload":{}}`, tt.emitter, tt.metadata)
+			frame := fmt.Sprintf(`{"opcode":4,"emitter":%d,"metadata":%s,"payload":%s}`, tt.emitter, tt.metadata, tt.payload)
 			got, err := Decode([]byte(frame))
 			if err != nil || !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, got, err, tt.want)
