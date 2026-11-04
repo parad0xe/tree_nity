@@ -258,3 +258,55 @@ func TestDecodeRejectsListTopicReplyFromClient(t *testing.T) {
 		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an unknown field error", frame, got, err)
 	}
 }
+
+// TestCheckTopicReplyPayloadToJSONRejectsInvalidInput checks routing and nil pointers.
+func TestCheckTopicReplyPayloadToJSONRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		emitter Emitter
+		opcode  Opcode
+		payload *CheckTopicReplyPayload
+		wantErr error
+	}{
+		{name: "nil payload", emitter: Server, opcode: CheckTopicReply, wantErr: ErrMissingPayload},
+		{name: "wrong opcode", emitter: Server, opcode: CreateTopicReply, payload: &CheckTopicReplyPayload{}, wantErr: ErrInvalidPayload},
+		{name: "client emitter", emitter: Client, opcode: Acknowledgement, payload: &CheckTopicReplyPayload{}, wantErr: ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.payload.toJSON(tt.emitter, tt.opcode)
+			if !errors.Is(err, tt.wantErr) || got != nil {
+				t.Errorf("toJSON(emitter=%d, opcode=%d, payload=%#v) = %#v, error = %v, want nil and %v", tt.emitter, tt.opcode, tt.payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestDecodeRejectsInvalidCheckTopicReply checks that the success response is an empty object.
+func TestDecodeRejectsInvalidCheckTopicReply(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr error
+	}{
+		{name: "topic field", payload: `{"topic":"orders"}`},
+		{name: "unknown field", payload: `{"extra":true}`},
+		{name: "array", payload: `[]`},
+		{name: "string", payload: `"exists"`},
+		{name: "number", payload: `1`},
+		{name: "boolean", payload: `false`},
+		{name: "null", payload: `null`, wantErr: ErrMissingPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := `{"opcode":4,"emitter":1,"metadata":{},"payload":` + tt.payload + `}`
+			got, err := Decode([]byte(frame))
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+		})
+	}
+}

@@ -25,7 +25,7 @@ func TestNewData(t *testing.T) {
 		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), json: `{}`},
 		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), json: `{}`},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), json: `{}`},
-		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload(), json: `{}`},
+		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), json: `{"topic":"orders"}`},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
 			payload: protocol.NewProduceMessagePayload(true, protocol.NewMessage("key", "value")),
@@ -139,7 +139,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), wantErr: protocol.ErrInvalidPayload},
-		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
 			payload: protocol.NewProduceMessagePayload(true, protocol.NewMessage("key", "value")),
@@ -508,6 +508,130 @@ func TestNewDataRejectsInvalidListTopicReply(t *testing.T) {
 			got, err := protocol.NewData(protocol.ListTopicReply, tt.metadata, tt.payload)
 			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
 				t.Errorf("NewData(ListTopicReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestCheckTopicPayloadRoundTrip checks the wire name and its public accessor.
+func TestCheckTopicPayloadRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		topic string
+	}{
+		{name: "minimal name", topic: "t"},
+		{name: "topic name", topic: "orders"},
+		{name: "maximum length", topic: strings.Repeat("t", 32)},
+		{name: "mixed characters", topic: "User_09.events-1"},
+		{name: "punctuation", topic: "_.-"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewCheckTopicPayload(tt.topic)
+			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			data, err := protocol.NewData(protocol.CheckTopic, metadata, payload)
+			if err != nil {
+				t.Errorf("NewData(CheckTopic, %#v, topic=%q) error = %v, want nil", metadata, tt.topic, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := fmt.Sprintf(`{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":%q}}`, tt.topic)
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+			got, ok := decoded.Payload().(*protocol.CheckTopicPayload)
+			if !ok {
+				t.Errorf("Decode(%q).Payload() type = %T, want *CheckTopicPayload", frame, decoded.Payload())
+				return
+			}
+			if got.Topic() != tt.topic {
+				t.Errorf("Decode(%q).Payload().Topic() = %q, want %q", frame, got.Topic(), tt.topic)
+			}
+		})
+	}
+}
+
+// TestNewDataRejectsInvalidCheckTopicNames checks validation through the public constructor.
+func TestNewDataRejectsInvalidCheckTopicNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		topic string
+	}{
+		{name: "empty name"},
+		{name: "33 characters", topic: strings.Repeat("t", 33)},
+		{name: "large name", topic: strings.Repeat("t", 4096)},
+		{name: "space", topic: "user events"},
+		{name: "slash", topic: "user/events"},
+		{name: "non-ASCII", topic: "événements"},
+		{name: "newline", topic: "orders\n"},
+		{name: "null byte", topic: "orders\x00"},
+		{name: "invalid UTF-8", topic: "\xff"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewCheckTopicPayload(tt.topic)
+			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			got, err := protocol.NewData(protocol.CheckTopic, metadata, payload)
+			if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(CheckTopic, %#v, topic=%q) = %#v, error = %v, want zero Data and %v", metadata, tt.topic, got, err, protocol.ErrInvalidPayload)
+			}
+		})
+	}
+}
+
+// TestCheckTopicReplyRoundTrip checks constructed and zero-value success responses.
+func TestCheckTopicReplyRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload *protocol.CheckTopicReplyPayload
+	}{
+		{name: "constructor", payload: protocol.NewCheckTopicReplyPayload()},
+		{name: "zero value", payload: &protocol.CheckTopicReplyPayload{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := protocol.NewServerMetadata()
+			data, err := protocol.NewData(protocol.CheckTopicReply, metadata, tt.payload)
+			if err != nil {
+				t.Errorf("NewData(CheckTopicReply, %#v, %#v) error = %v, want nil", metadata, tt.payload, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := `{"opcode":4,"emitter":1,"metadata":{},"payload":{}}`
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+		})
+	}
+}
+
+// TestNewDataRejectsInvalidCheckTopicReply checks nil payloads and emitter inference.
+func TestNewDataRejectsInvalidCheckTopicReply(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata protocol.Metadata
+		payload  protocol.Payload
+		wantErr  error
+	}{
+		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
+		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.CheckTopicReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewCheckTopicReplyPayload(), wantErr: protocol.ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := protocol.NewData(protocol.CheckTopicReply, tt.metadata, tt.payload)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(CheckTopicReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
 			}
 		})
 	}

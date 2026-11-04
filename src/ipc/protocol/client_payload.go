@@ -144,12 +144,21 @@ func (p *AcknowledgementPayload) validate() error {
 	return nil
 }
 
-// CheckTopicPayload represents a topic check operation with no payload fields.
-type CheckTopicPayload struct{}
+// CheckTopicPayload carries the name of the topic to check before producing messages.
+// Its JSON representation is {"topic":"<name>"}.
+type CheckTopicPayload struct {
+	topic string
+}
 
-// NewCheckTopicPayload returns an empty topic check payload.
-func NewCheckTopicPayload() *CheckTopicPayload {
-	return &CheckTopicPayload{}
+// NewCheckTopicPayload returns a payload for checking topic.
+// Topic names follow the same format as CreateTopicPayload.
+func NewCheckTopicPayload(topic string) *CheckTopicPayload {
+	return &CheckTopicPayload{topic: topic}
+}
+
+// Topic returns the name of the topic to check.
+func (p CheckTopicPayload) Topic() string {
+	return p.topic
 }
 
 func (p *CheckTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -159,12 +168,15 @@ func (p *CheckTopicPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON,
 	if emitter != Client || opcode != CheckTopic {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &checkTopicPayloadJSON{}, nil
+	return &checkTopicPayloadJSON{Topic: &p.topic}, nil
 }
 
 func (p *CheckTopicPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.topic).Validate(); err != nil {
+		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
 	}
 	return nil
 }

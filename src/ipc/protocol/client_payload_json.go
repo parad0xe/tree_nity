@@ -87,16 +87,26 @@ func (p acknowledgementPayloadJSON) validate() error {
 	return nil
 }
 
-type checkTopicPayloadJSON struct{}
+type checkTopicPayloadJSON struct {
+	// Topic is required and must match the topic name format.
+	Topic *string `json:"topic"`
+}
 
 func (p checkTopicPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &CheckTopicPayload{}, nil
+	payload := &CheckTopicPayload{topic: *p.Topic}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p checkTopicPayloadJSON) validate() error {
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
 	return nil
 }
 

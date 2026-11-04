@@ -22,7 +22,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 		{name: "consumer info", opcode: ConsumerInfo, input: `{}`, want: &ConsumerInfoPayload{}},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{}`, want: &TopicSubscriptionPayload{}},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{}`, want: &AcknowledgementPayload{}},
-		{name: "check topic", opcode: CheckTopic, input: `{}`, want: &CheckTopicPayload{}},
+		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
 		{
 			name:   "produce message",
 			opcode: ProduceMessage,
@@ -96,7 +96,6 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "missing topics", emitter: Server, opcode: ListTopicReply, wantErr: ErrMissingTopics},
 		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
 		{name: "server topic subscription", emitter: Server, opcode: TopicSubscription, wantErr: ErrUnknownOpcode},
-		{name: "server acknowledgement", emitter: Server, opcode: Acknowledgement, wantErr: ErrUnknownOpcode},
 		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
 		{name: "server produce message", emitter: Server, opcode: ProduceMessage, wantErr: ErrUnknownOpcode},
 		{name: "server consumer disconnect", emitter: Server, opcode: ConsumerDisconnect, wantErr: ErrUnknownOpcode},
@@ -201,6 +200,38 @@ func TestCreateTopicReplyDecoding(t *testing.T) {
 	got, err := input.toData()
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want %#v and nil", opcode, emitter, payload, got, err, want)
+	}
+}
+
+// TestCheckTopicPayloadJSONRejectsInvalidInput checks the required name and strict JSON fields.
+func TestCheckTopicPayloadJSONRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr error
+	}{
+		{name: "missing topic", payload: `{}`, wantErr: ErrMissingTopic},
+		{name: "null topic", payload: `{"topic":null}`, wantErr: ErrMissingTopic},
+		{name: "empty topic", payload: `{"topic":""}`, wantErr: ErrInvalidPayload},
+		{name: "long topic", payload: `{"topic":"` + strings.Repeat("t", 33) + `"}`, wantErr: ErrInvalidPayload},
+		{name: "invalid characters", payload: `{"topic":"user/events"}`, wantErr: ErrInvalidPayload},
+		{name: "non-ASCII topic", payload: `{"topic":"événements"}`, wantErr: ErrInvalidPayload},
+		{name: "numeric topic", payload: `{"topic":1}`},
+		{name: "boolean topic", payload: `{"topic":false}`},
+		{name: "array topic", payload: `{"topic":[]}`},
+		{name: "unknown field", payload: `{"topic":"orders","extra":true}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := `{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.payload + `}`
+			got, err := Decode([]byte(frame))
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+		})
 	}
 }
 
