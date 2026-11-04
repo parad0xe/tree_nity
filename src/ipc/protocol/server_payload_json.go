@@ -1,10 +1,11 @@
 package protocol
 
 var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
-	ListTopicReply:   func() payloadJSON { return &listTopicReplyPayloadJSON{} },
-	CreateTopicReply: func() payloadJSON { return &createTopicReplyPayloadJSON{} },
-	CheckTopicReply:  func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
-	ErrorReply:       func() payloadJSON { return &errorReplyPayloadJSON{} },
+	ListTopicReply:         func() payloadJSON { return &listTopicReplyPayloadJSON{} },
+	CreateTopicReply:       func() payloadJSON { return &createTopicReplyPayloadJSON{} },
+	TopicSubscriptionReply: func() payloadJSON { return &topicSubscriptionReplyPayloadJSON{} },
+	CheckTopicReply:        func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
+	ErrorReply:             func() payloadJSON { return &errorReplyPayloadJSON{} },
 }
 
 type listTopicReplyPayloadJSON struct {
@@ -40,6 +41,19 @@ func (p createTopicReplyPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p createTopicReplyPayloadJSON) validate() error {
+	return nil
+}
+
+type topicSubscriptionReplyPayloadJSON struct{}
+
+func (p topicSubscriptionReplyPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	return &TopicSubscriptionReplyPayload{}, nil
+}
+
+func (p topicSubscriptionReplyPayloadJSON) validate() error {
 	return nil
 }
 

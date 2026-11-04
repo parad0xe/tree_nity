@@ -24,7 +24,7 @@ func TestNewData(t *testing.T) {
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), json: `{}`},
 		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), json: `{"topic":"orders"}`},
 		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), json: `{}`},
-		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), json: `{}`},
+		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("orders", "", nil), json: `{"topic":"orders","prefix":""}`},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), json: `{}`},
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), json: `{"topic":"orders"}`},
 		{
@@ -138,7 +138,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(), wantErr: protocol.ErrInvalidPayload},
-		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("orders", "", nil), wantErr: protocol.ErrInvalidPayload},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{
@@ -661,6 +661,170 @@ func TestCheckTopicReplyRoundTrip(t *testing.T) {
 			}
 			frame, err := protocol.Encode(data)
 			wantFrame := `{"opcode":4,"emitter":1,"metadata":{},"payload":{}}`
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+		})
+	}
+}
+
+// TestTopicSubscriptionPayloadRoundTrip checks prefixes and optional offsets through the public API.
+func TestTopicSubscriptionPayloadRoundTrip(t *testing.T) {
+	zero, one, maximum := int32(0), int32(1), int32(2147483647)
+	tests := []struct {
+		name   string
+		topic  string
+		prefix string
+		offset *int32
+		json   string
+	}{
+		{name: "resume with all messages", topic: "orders", json: `{"topic":"orders","prefix":""}`},
+		{name: "replay from zero", topic: "orders", offset: &zero, json: `{"topic":"orders","prefix":"","offset":0}`},
+		{name: "minimal", topic: "t", prefix: "k", offset: &one, json: `{"topic":"t","prefix":"k","offset":1}`},
+		{name: "maximum offset", topic: "orders", offset: &maximum, json: `{"topic":"orders","prefix":"","offset":2147483647}`},
+		{name: "maximum topic length", topic: strings.Repeat("t", 32), json: `{"topic":"` + strings.Repeat("t", 32) + `","prefix":""}`},
+		{name: "mixed topic characters", topic: "User_09.events-1", json: `{"topic":"User_09.events-1","prefix":""}`},
+		{name: "unicode prefix", topic: "orders", prefix: "événement/", json: `{"topic":"orders","prefix":"événement/"}`},
+		{name: "escaped prefix", topic: "orders", prefix: "\"\\\n\x00", json: `{"topic":"orders","prefix":"\"\\\n\u0000"}`},
+		{name: "large prefix", topic: "orders", prefix: strings.Repeat("p", 4096), json: `{"topic":"orders","prefix":"` + strings.Repeat("p", 4096) + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := protocol.NewTopicSubscriptionPayload(tt.topic, tt.prefix, tt.offset)
+			data, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata("client-1", "/client-1"), payload)
+			if err != nil {
+				t.Errorf("NewData(TopicSubscription, client, %#v) error = %v, want nil", payload, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.json + `}`
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+			got, ok := decoded.Payload().(*protocol.TopicSubscriptionPayload)
+			if !ok {
+				t.Errorf("Decode(%q).Payload() type = %T, want *TopicSubscriptionPayload", frame, decoded.Payload())
+				return
+			}
+			if got.Topic() != tt.topic || got.Prefix() != tt.prefix {
+				t.Errorf("Decode(%q) subscription = (%q, %q), want (%q, %q)", frame, got.Topic(), got.Prefix(), tt.topic, tt.prefix)
+			}
+			offset := got.Offset()
+			if (offset == nil) != (tt.offset == nil) {
+				t.Errorf("Decode(%q).Offset() is nil = %t, want %t", frame, offset == nil, tt.offset == nil)
+			} else if offset != nil && *offset != *tt.offset {
+				t.Errorf("Decode(%q).Offset() value = %d, want %d", frame, *offset, *tt.offset)
+			}
+		})
+	}
+}
+
+// TestTopicSubscriptionNullOffsetResumes checks that null and absence have the same meaning.
+func TestTopicSubscriptionNullOffsetResumes(t *testing.T) {
+	frame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","prefix":"","offset":null}}`
+	data, err := protocol.Decode([]byte(frame))
+	if err != nil {
+		t.Errorf("Decode(%q) error = %v, want nil", frame, err)
+		return
+	}
+	payload, ok := data.Payload().(*protocol.TopicSubscriptionPayload)
+	if !ok {
+		t.Errorf("Decode(%q).Payload() type = %T, want *TopicSubscriptionPayload", frame, data.Payload())
+		return
+	}
+	if offset := payload.Offset(); offset != nil {
+		t.Errorf("Decode(%q).Offset() value = %d, want nil", frame, *offset)
+	}
+	encoded, err := protocol.Encode(data)
+	wantFrame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","prefix":""}}`
+	if err != nil || string(encoded) != wantFrame {
+		t.Errorf("Encode(Decode(%q)) = %q, error = %v, want %q and nil", frame, encoded, err, wantFrame)
+	}
+}
+
+// TestTopicSubscriptionPayloadCopiesOffset checks ownership of the constructor argument.
+func TestTopicSubscriptionPayloadCopiesOffset(t *testing.T) {
+	offset := int32(42)
+	payload := protocol.NewTopicSubscriptionPayload("orders", "", &offset)
+	offset = -1
+	got := payload.Offset()
+	if got == nil {
+		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() after input becomes -1 = nil, want 42")
+	} else if *got != 42 {
+		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() after input becomes -1 = %d, want 42", *got)
+	}
+}
+
+// TestTopicSubscriptionPayloadOffsetReturnsCopy checks ownership of the accessor result.
+func TestTopicSubscriptionPayloadOffsetReturnsCopy(t *testing.T) {
+	offset := int32(42)
+	payload := protocol.NewTopicSubscriptionPayload("orders", "", &offset)
+	returned := payload.Offset()
+	if returned == nil {
+		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() = nil, want 42")
+		return
+	}
+	*returned = -1
+	got := payload.Offset()
+	if got == nil {
+		t.Errorf("Offset() after returned value becomes -1 = nil, want 42")
+	} else if *got != 42 {
+		t.Errorf("Offset() after returned value becomes -1 = %d, want 42", *got)
+	}
+}
+
+// TestNewDataRejectsInvalidTopicSubscription checks validation at the public construction boundary.
+func TestNewDataRejectsInvalidTopicSubscription(t *testing.T) {
+	negative := int32(-1)
+	tests := []struct {
+		name    string
+		payload *protocol.TopicSubscriptionPayload
+		wantErr error
+	}{
+		{name: "nil payload", wantErr: protocol.ErrMissingPayload},
+		{name: "zero value", payload: &protocol.TopicSubscriptionPayload{}, wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid topic", payload: protocol.NewTopicSubscriptionPayload("user/events", "", nil), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid UTF-8 prefix", payload: protocol.NewTopicSubscriptionPayload("orders", "\xff", nil), wantErr: protocol.ErrInvalidPayload},
+		{name: "negative offset", payload: protocol.NewTopicSubscriptionPayload("orders", "", &negative), wantErr: protocol.ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata("client-1", "/client-1"), tt.payload)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(TopicSubscription, client, %#v) = %#v, error = %v, want zero Data and %v", tt.payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestTopicSubscriptionReplyRoundTrip checks constructed and zero-value success responses.
+func TestTopicSubscriptionReplyRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload *protocol.TopicSubscriptionReplyPayload
+	}{
+		{name: "constructor", payload: protocol.NewTopicSubscriptionReplyPayload()},
+		{name: "zero value", payload: &protocol.TopicSubscriptionReplyPayload{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := protocol.NewData(protocol.TopicSubscriptionReply, protocol.NewServerMetadata(), tt.payload)
+			if err != nil {
+				t.Errorf("NewData(TopicSubscriptionReply, server, %#v) error = %v, want nil", tt.payload, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := `{"opcode":3,"emitter":1,"metadata":{},"payload":{}}`
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return

@@ -21,7 +21,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 		{name: "list topic", opcode: ListTopic, input: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
 		{name: "consumer info", opcode: ConsumerInfo, input: `{}`, want: &ConsumerInfoPayload{}},
-		{name: "topic subscription", opcode: TopicSubscription, input: `{}`, want: &TopicSubscriptionPayload{}},
+		{name: "topic subscription", opcode: TopicSubscription, input: `{"topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{topic: "orders"}},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{}`, want: &AcknowledgementPayload{}},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
 		{
@@ -96,7 +96,7 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "unknown emitter", emitter: 2, opcode: ListTopic, wantErr: ErrUnknownEmitter},
 		{name: "missing topics", emitter: Server, opcode: ListTopicReply, wantErr: ErrMissingTopics},
 		{name: "server consumer info", emitter: Server, opcode: ConsumerInfo, wantErr: ErrUnknownOpcode},
-		{name: "server topic subscription", emitter: Server, opcode: TopicSubscription, wantErr: ErrUnknownOpcode},
+		{name: "missing subscription topic", emitter: Client, opcode: TopicSubscription, wantErr: ErrMissingTopic},
 		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
 		{name: "server produce message", emitter: Server, opcode: ProduceMessage, wantErr: ErrUnknownOpcode},
 		{name: "server consumer disconnect", emitter: Server, opcode: ConsumerDisconnect, wantErr: ErrUnknownOpcode},
@@ -107,6 +107,9 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			metadata := json.RawMessage(`{}`)
+			if tt.emitter == Client {
+				metadata = json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			}
 			payload := json.RawMessage(`{}`)
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &tt.emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
@@ -228,6 +231,83 @@ func TestCheckTopicPayloadJSONRejectsInvalidInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			frame := `{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.payload + `}`
+			got, err := Decode([]byte(frame))
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestTopicSubscriptionPayloadToJSONRejectsInvalidInput checks content and routing validation.
+func TestTopicSubscriptionPayloadToJSONRejectsInvalidInput(t *testing.T) {
+	negative := int32(-1)
+	tests := []struct {
+		name    string
+		emitter Emitter
+		opcode  Opcode
+		payload *TopicSubscriptionPayload
+		wantErr error
+	}{
+		{name: "nil payload", emitter: Client, opcode: TopicSubscription, wantErr: ErrMissingPayload},
+		{name: "zero value", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, wantErr: ErrInvalidPayload},
+		{name: "long topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: strings.Repeat("t", 33)}, wantErr: ErrInvalidPayload},
+		{name: "invalid topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "user/events"}, wantErr: ErrInvalidPayload},
+		{name: "invalid UTF-8 prefix", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders", prefix: "\xff"}, wantErr: ErrInvalidPayload},
+		{name: "negative offset", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders", offset: &negative}, wantErr: ErrInvalidPayload},
+		{name: "wrong opcode", emitter: Client, opcode: CreateTopic, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
+		{name: "server emitter", emitter: Server, opcode: TopicSubscriptionReply, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.payload.toJSON(tt.emitter, tt.opcode)
+			if !errors.Is(err, tt.wantErr) || got != nil {
+				t.Errorf("toJSON(emitter=%d, opcode=%d, payload=%#v) = %#v, error = %v, want nil and %v", tt.emitter, tt.opcode, tt.payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestDecodeRejectsInvalidTopicSubscription checks required fields, types, and int32 bounds.
+func TestDecodeRejectsInvalidTopicSubscription(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr error
+	}{
+		{name: "empty object", payload: `{}`, wantErr: ErrMissingTopic},
+		{name: "missing topic", payload: `{"prefix":""}`, wantErr: ErrMissingTopic},
+		{name: "null topic", payload: `{"topic":null,"prefix":""}`, wantErr: ErrMissingTopic},
+		{name: "empty topic", payload: `{"topic":"","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "long topic", payload: `{"topic":"` + strings.Repeat("t", 33) + `","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "invalid topic", payload: `{"topic":"user/events","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "non-ASCII topic", payload: `{"topic":"événements","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "numeric topic", payload: `{"topic":1,"prefix":""}`},
+		{name: "missing prefix", payload: `{"topic":"orders"}`, wantErr: ErrMissingPrefix},
+		{name: "null prefix", payload: `{"topic":"orders","prefix":null}`, wantErr: ErrMissingPrefix},
+		{name: "numeric prefix", payload: `{"topic":"orders","prefix":1}`},
+		{name: "boolean prefix", payload: `{"topic":"orders","prefix":false}`},
+		{name: "array prefix", payload: `{"topic":"orders","prefix":[]}`},
+		{name: "object prefix", payload: `{"topic":"orders","prefix":{}}`},
+		{name: "negative offset", payload: `{"topic":"orders","prefix":"","offset":-1}`, wantErr: ErrInvalidPayload},
+		{name: "minimum int32 offset", payload: `{"topic":"orders","prefix":"","offset":-2147483648}`, wantErr: ErrInvalidPayload},
+		{name: "overflow offset", payload: `{"topic":"orders","prefix":"","offset":2147483648}`},
+		{name: "underflow offset", payload: `{"topic":"orders","prefix":"","offset":-2147483649}`},
+		{name: "fractional offset", payload: `{"topic":"orders","prefix":"","offset":0.5}`},
+		{name: "string offset", payload: `{"topic":"orders","prefix":"","offset":"0"}`},
+		{name: "boolean offset", payload: `{"topic":"orders","prefix":"","offset":false}`},
+		{name: "array offset", payload: `{"topic":"orders","prefix":"","offset":[]}`},
+		{name: "object offset", payload: `{"topic":"orders","prefix":"","offset":{}}`},
+		{name: "unknown field", payload: `{"topic":"orders","prefix":"","extra":true}`},
+		{name: "null payload", payload: `null`, wantErr: ErrMissingPayload},
+		{name: "array payload", payload: `[]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.payload + `}`
 			got, err := Decode([]byte(frame))
 			if err == nil || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)

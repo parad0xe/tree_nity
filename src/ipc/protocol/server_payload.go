@@ -77,6 +77,32 @@ func (p *CreateTopicReplyPayload) validate() error {
 	return nil
 }
 
+// TopicSubscriptionReplyPayload confirms a subscription with an empty JSON object.
+// Rejections are reported with ErrorReply instead.
+type TopicSubscriptionReplyPayload struct{}
+
+// NewTopicSubscriptionReplyPayload returns an empty subscription response.
+func NewTopicSubscriptionReplyPayload() *TopicSubscriptionReplyPayload {
+	return &TopicSubscriptionReplyPayload{}
+}
+
+func (p *TopicSubscriptionReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != TopicSubscriptionReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &topicSubscriptionReplyPayloadJSON{}, nil
+}
+
+func (p *TopicSubscriptionReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	return nil
+}
+
 // CheckTopicReplyPayload confirms that a topic exists with an empty JSON object.
 // A missing topic is reported with ErrorReply and TopicNotFound instead.
 type CheckTopicReplyPayload struct{}

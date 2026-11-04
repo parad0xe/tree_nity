@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	"tree_nity/src/ipc/id"
 )
@@ -94,12 +95,45 @@ func (p *ConsumerInfoPayload) validate() error {
 	return nil
 }
 
-// TopicSubscriptionPayload represents a subscription operation with no payload fields.
-type TopicSubscriptionPayload struct{}
+// TopicSubscriptionPayload carries a topic, key prefix, and optional starting offset.
+// The subscriber is identified by ClientMetadata.ClientID. An empty prefix matches
+// all messages. An absent or null JSON offset resumes the stored offset, or starts
+// at zero for a new subscriber; an explicit zero requests replay from the beginning.
+type TopicSubscriptionPayload struct {
+	topic  string
+	prefix string
+	offset *int32
+}
 
-// NewTopicSubscriptionPayload returns an empty topic subscription payload.
-func NewTopicSubscriptionPayload() *TopicSubscriptionPayload {
-	return &TopicSubscriptionPayload{}
+// NewTopicSubscriptionPayload returns a subscription request with a copy of offset.
+// Topic names follow the same format as CreateTopicPayload. NewData and Encode
+// reject invalid UTF-8 prefixes and negative offsets. A nil offset requests resume.
+func NewTopicSubscriptionPayload(topic, prefix string, offset *int32) *TopicSubscriptionPayload {
+	payload := &TopicSubscriptionPayload{topic: topic, prefix: prefix}
+	if offset != nil {
+		start := *offset
+		payload.offset = &start
+	}
+	return payload
+}
+
+// Topic returns the topic to subscribe to.
+func (p TopicSubscriptionPayload) Topic() string {
+	return p.topic
+}
+
+// Prefix returns the key prefix to match, or an empty string for all messages.
+func (p TopicSubscriptionPayload) Prefix() string {
+	return p.prefix
+}
+
+// Offset returns a copy of the requested offset, or nil for resume.
+func (p TopicSubscriptionPayload) Offset() *int32 {
+	if p.offset == nil {
+		return nil
+	}
+	start := *p.offset
+	return &start
 }
 
 func (p *TopicSubscriptionPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -109,12 +143,21 @@ func (p *TopicSubscriptionPayload) toJSON(emitter Emitter, opcode Opcode) (paylo
 	if emitter != Client || opcode != TopicSubscription {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &topicSubscriptionPayloadJSON{}, nil
+	return &topicSubscriptionPayloadJSON{Topic: &p.topic, Prefix: &p.prefix, Offset: p.offset}, nil
 }
 
 func (p *TopicSubscriptionPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.topic).Validate(); err != nil {
+		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
+	}
+	if !utf8.ValidString(p.prefix) {
+		return fmt.Errorf("%w: prefix must contain valid UTF-8", ErrInvalidPayload)
+	}
+	if p.offset != nil && *p.offset < 0 {
+		return fmt.Errorf("%w: negative offset %d", ErrInvalidPayload, *p.offset)
 	}
 	return nil
 }

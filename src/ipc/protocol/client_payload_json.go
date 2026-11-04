@@ -61,16 +61,33 @@ func (p consumerInfoPayloadJSON) validate() error {
 	return nil
 }
 
-type topicSubscriptionPayloadJSON struct{}
+type topicSubscriptionPayloadJSON struct {
+	// Topic is required and must match the topic name format.
+	Topic *string `json:"topic"`
+	// Prefix is required, but an empty string matches all messages.
+	Prefix *string `json:"prefix"`
+	// Offset is optional; nil requests resume, while explicit zero requests replay.
+	Offset *int32 `json:"offset,omitempty"`
+}
 
 func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &TopicSubscriptionPayload{}, nil
+	payload := NewTopicSubscriptionPayload(*p.Topic, *p.Prefix, p.Offset)
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p topicSubscriptionPayloadJSON) validate() error {
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
+	if p.Prefix == nil {
+		return ErrMissingPrefix
+	}
 	return nil
 }
 

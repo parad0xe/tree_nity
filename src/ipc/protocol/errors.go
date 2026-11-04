@@ -16,6 +16,8 @@ var (
 	ErrMissingPayload = errors.New("missing payload")
 	// ErrMissingTopic indicates that a request payload has no topic field.
 	ErrMissingTopic = errors.New("missing topic")
+	// ErrMissingPrefix indicates that a subscription request has no prefix field.
+	ErrMissingPrefix = errors.New("missing prefix")
 	// ErrMissingTopics indicates that a topic list response has no topics field.
 	ErrMissingTopics = errors.New("missing topics")
 	// ErrMissingErrorKind indicates that an error reply has no kind.
