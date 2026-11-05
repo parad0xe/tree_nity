@@ -47,32 +47,40 @@ func TestInfoAccessors(t *testing.T) {
 	}
 }
 
-// TestInfoValidate checks missing metadata and ID validation boundaries.
+// TestInfoValidate checks valid ID boundaries.
 func TestInfoValidate(t *testing.T) {
 	tests := []struct {
-		name        string
-		info        *Info
-		wantErr     error
-		wantMessage string
+		name string
+		info *Info
 	}{
-		{name: "nil receiver", wantErr: ErrInfoUninitialized},
-		{name: "zero value", info: &Info{}, wantMessage: "invalid consumer ID"},
 		{name: "minimum ID", info: &Info{id: "a"}},
 		{name: "allowed characters", info: &Info{id: "Ab0_.-z"}},
 		{name: "maximum ID", info: &Info{id: id.ID(strings.Repeat("a", 32))}},
-		{name: "ID too long", info: &Info{id: id.ID(strings.Repeat("a", 33))}, wantMessage: "invalid consumer ID"},
-		{name: "invalid character", info: &Info{id: "consumer/name"}, wantMessage: "invalid consumer ID"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.info.validate()
-			if tt.wantMessage != "" {
-				if err == nil || err.Error() != tt.wantMessage {
-					t.Errorf("validate() on %+v error = %v, want %q", tt.info, err, tt.wantMessage)
-				}
-				return
+			if err := tt.info.validate(); err != nil {
+				t.Errorf("validate() on %+v error = %v, want nil", tt.info, err)
 			}
-			if !errors.Is(err, tt.wantErr) {
+		})
+	}
+}
+
+// TestInfoValidateRejectsInvalidMetadata checks missing metadata and invalid IDs.
+func TestInfoValidateRejectsInvalidMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		info    *Info
+		wantErr error
+	}{
+		{name: "nil receiver", wantErr: ErrInfoUninitialized},
+		{name: "zero value", info: &Info{}, wantErr: id.ErrInvalidID},
+		{name: "ID too long", info: &Info{id: id.ID(strings.Repeat("a", 33))}, wantErr: id.ErrInvalidID},
+		{name: "invalid character", info: &Info{id: "consumer/name"}, wantErr: id.ErrInvalidID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.info.validate(); !errors.Is(err, tt.wantErr) {
 				t.Errorf("validate() on %+v error = %v, want %v", tt.info, err, tt.wantErr)
 			}
 		})
