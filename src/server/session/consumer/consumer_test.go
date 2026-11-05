@@ -81,7 +81,7 @@ func TestConsumerCloseAtFunctionReturn(t *testing.T) {
 		return
 	}
 	connection := func() *Connection {
-		c := getTestConsumer(t, manager, original.id)
+		c := openTestConsumer(t, manager, original.id)
 		if c == nil {
 			return nil
 		}
