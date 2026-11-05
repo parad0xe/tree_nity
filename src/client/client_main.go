@@ -24,6 +24,12 @@ const defaultGracePeriod = 4 * time.Second
 // defaultCancelTimeout is the time the command has to stop once cancelled.
 const defaultCancelTimeout = 1 * time.Second
 
+// commandParsers maps each command name to the function that parses its arguments.
+var commandParsers = map[string]func(args []string) (commands.Command, error){
+	"produce": commands.ParseProduce,
+	// TODO: add the create, list, subscribe and info commands.
+}
+
 func main() {
 	retcode := run(context.Background())
 	os.Exit(retcode)
@@ -75,17 +81,21 @@ func parse(args []string) (string, commands.Command, error) {
 	if len(args) < 1 {
 		return "", nil, errMissingIPCIdentifier
 	}
-
 	if len(args) < 2 {
 		return "", nil, errMissingCommand
 	}
-	commandName := args[1]
+	serverIPCPath, commandName := args[0], args[1]
 
-	switch commandName {
-	// TODO: parse the produce, create, list, subscribe and info commands.
-	default:
+	parseCommand, ok := commandParsers[commandName]
+	if !ok {
 		return "", nil, fmt.Errorf("%w: %s", errUnknownCommand, commandName)
 	}
+	command, err := parseCommand(args[2:])
+	if err != nil {
+		return "", nil, err
+	}
+
+	return serverIPCPath, command, nil
 }
 
 // logError writes a diagnostic line to stderr. A failed write is ignored

@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"flag"
+	"io"
 
 	"tree_nity/src/ipc"
 	"tree_nity/src/lifecycle"
@@ -22,4 +24,12 @@ type Command interface {
 	// Execute runs the command and returns the exit code of the client, which is
 	// exitcode.Success when the error is nil. It returns once ctx is cancelled.
 	Execute(ctx context.Context, env Env) (int, error)
+}
+
+// newFlagSet returns a flag set for the command name that reports errors
+// instead of printing them or exiting.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
 }
