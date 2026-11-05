@@ -675,18 +675,21 @@ func TestCheckTopicReplyRoundTrip(t *testing.T) {
 
 // TestTopicSubscriptionPayloadRoundTrip checks prefixes and optional offsets through the public API.
 func TestTopicSubscriptionPayloadRoundTrip(t *testing.T) {
-	zero, one, maximum := int32(0), int32(1), int32(2147483647)
+	zero, one, maximum := uint32(0), uint32(1), uint32(4294967295)
+	signedMaximum, aboveSignedMaximum := uint32(2147483647), uint32(2147483648)
 	tests := []struct {
 		name   string
 		topic  string
 		prefix string
-		offset *int32
+		offset *uint32
 		json   string
 	}{
 		{name: "resume with all messages", topic: "orders", json: `{"topic":"orders","prefix":""}`},
 		{name: "replay from zero", topic: "orders", offset: &zero, json: `{"topic":"orders","prefix":"","offset":0}`},
 		{name: "minimal", topic: "t", prefix: "k", offset: &one, json: `{"topic":"t","prefix":"k","offset":1}`},
-		{name: "maximum offset", topic: "orders", offset: &maximum, json: `{"topic":"orders","prefix":"","offset":2147483647}`},
+		{name: "maximum signed offset", topic: "orders", offset: &signedMaximum, json: `{"topic":"orders","prefix":"","offset":2147483647}`},
+		{name: "above signed limit", topic: "orders", offset: &aboveSignedMaximum, json: `{"topic":"orders","prefix":"","offset":2147483648}`},
+		{name: "maximum offset", topic: "orders", offset: &maximum, json: `{"topic":"orders","prefix":"","offset":4294967295}`},
 		{name: "maximum topic length", topic: strings.Repeat("t", 32), json: `{"topic":"` + strings.Repeat("t", 32) + `","prefix":""}`},
 		{name: "mixed topic characters", topic: "User_09.events-1", json: `{"topic":"User_09.events-1","prefix":""}`},
 		{name: "unicode prefix", topic: "orders", prefix: "événement/", json: `{"topic":"orders","prefix":"événement/"}`},
@@ -754,38 +757,37 @@ func TestTopicSubscriptionNullOffsetResumes(t *testing.T) {
 
 // TestTopicSubscriptionPayloadCopiesOffset checks ownership of the constructor argument.
 func TestTopicSubscriptionPayloadCopiesOffset(t *testing.T) {
-	offset := int32(42)
+	offset := uint32(42)
 	payload := protocol.NewTopicSubscriptionPayload("orders", "", &offset)
-	offset = -1
+	offset = 99
 	got := payload.Offset()
 	if got == nil {
-		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() after input becomes -1 = nil, want 42")
+		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() after input becomes 99 = nil, want 42")
 	} else if *got != 42 {
-		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() after input becomes -1 = %d, want 42", *got)
+		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() after input becomes 99 = %d, want 42", *got)
 	}
 }
 
 // TestTopicSubscriptionPayloadOffsetReturnsCopy checks ownership of the accessor result.
 func TestTopicSubscriptionPayloadOffsetReturnsCopy(t *testing.T) {
-	offset := int32(42)
+	offset := uint32(42)
 	payload := protocol.NewTopicSubscriptionPayload("orders", "", &offset)
 	returned := payload.Offset()
 	if returned == nil {
 		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() = nil, want 42")
 		return
 	}
-	*returned = -1
+	*returned = 99
 	got := payload.Offset()
 	if got == nil {
-		t.Errorf("Offset() after returned value becomes -1 = nil, want 42")
+		t.Errorf("Offset() after returned value becomes 99 = nil, want 42")
 	} else if *got != 42 {
-		t.Errorf("Offset() after returned value becomes -1 = %d, want 42", *got)
+		t.Errorf("Offset() after returned value becomes 99 = %d, want 42", *got)
 	}
 }
 
 // TestNewDataRejectsInvalidTopicSubscription checks validation at the public construction boundary.
 func TestNewDataRejectsInvalidTopicSubscription(t *testing.T) {
-	negative := int32(-1)
 	tests := []struct {
 		name    string
 		payload *protocol.TopicSubscriptionPayload
@@ -795,7 +797,6 @@ func TestNewDataRejectsInvalidTopicSubscription(t *testing.T) {
 		{name: "zero value", payload: &protocol.TopicSubscriptionPayload{}, wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid topic", payload: protocol.NewTopicSubscriptionPayload("user/events", "", nil), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid UTF-8 prefix", payload: protocol.NewTopicSubscriptionPayload("orders", "\xff", nil), wantErr: protocol.ErrInvalidPayload},
-		{name: "negative offset", payload: protocol.NewTopicSubscriptionPayload("orders", "", &negative), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

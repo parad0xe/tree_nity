@@ -73,17 +73,17 @@ func (p *CreateTopicReplyPayload) validate() error {
 	return nil
 }
 
-// ConsumerInfoReplyPayload describes a consumer's subscription.
+// ConsumerInfoReplyPayload describes a consumer's subscription with a uint32 offset.
 type ConsumerInfoReplyPayload struct {
 	client string
 	topic  string
-	offset int32
+	offset uint32
 	prefix string
 	ipc    string
 }
 
 // NewConsumerInfoReplyPayload returns a consumer information response.
-func NewConsumerInfoReplyPayload(client, topic string, offset int32, prefix, ipc string) *ConsumerInfoReplyPayload {
+func NewConsumerInfoReplyPayload(client, topic string, offset uint32, prefix, ipc string) *ConsumerInfoReplyPayload {
 	return &ConsumerInfoReplyPayload{client: client, topic: topic, offset: offset, prefix: prefix, ipc: ipc}
 }
 
@@ -98,7 +98,7 @@ func (p ConsumerInfoReplyPayload) Topic() string {
 }
 
 // Offset returns the next offset to consume.
-func (p ConsumerInfoReplyPayload) Offset() int32 {
+func (p ConsumerInfoReplyPayload) Offset() uint32 {
 	return p.offset
 }
 
@@ -131,9 +131,6 @@ func (p *ConsumerInfoReplyPayload) validate() error {
 	}
 	if err := id.ID(p.topic).Validate(); err != nil {
 		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
-	}
-	if p.offset < 0 {
-		return fmt.Errorf("%w: negative offset %d", ErrInvalidPayload, p.offset)
 	}
 	if !utf8.ValidString(p.prefix) {
 		return fmt.Errorf("%w: prefix must contain valid UTF-8", ErrInvalidPayload)
@@ -238,13 +235,13 @@ func (p *ErrorReplyPayload) validate() error {
 	return nil
 }
 
-// MessageDeliveryPayload carries a message and its queue offset.
+// MessageDeliveryPayload carries a message and its uint32 queue offset.
 type MessageDeliveryPayload struct {
 	message Message
 }
 
 // NewMessageDeliveryPayload returns a delivery at offset.
-func NewMessageDeliveryPayload(offset int32, message Message) *MessageDeliveryPayload {
+func NewMessageDeliveryPayload(offset uint32, message Message) *MessageDeliveryPayload {
 	message.offset = offset
 	return &MessageDeliveryPayload{message: message}
 }
@@ -273,9 +270,6 @@ func (p *MessageDeliveryPayload) toJSON(emitter Emitter, opcode Opcode) (payload
 func (p *MessageDeliveryPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
-	}
-	if p.message.offset < 0 {
-		return fmt.Errorf("%w: negative message offset %d", ErrInvalidPayload, p.message.offset)
 	}
 	return p.message.validate()
 }

@@ -13,12 +13,14 @@ import (
 func TestAcknowledgementRoundTrip(t *testing.T) {
 	tests := []struct {
 		name   string
-		offset int32
+		offset uint32
 	}{
 		{name: "zero", offset: 0},
 		{name: "after first message", offset: 1},
 		{name: "next offset", offset: 43},
-		{name: "maximum int32", offset: 2147483647},
+		{name: "maximum signed offset", offset: 2147483647},
+		{name: "above signed limit", offset: 2147483648},
+		{name: "maximum uint32", offset: 4294967295},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,7 +77,6 @@ func TestNewDataRejectsInvalidAcknowledgement(t *testing.T) {
 	}{
 		{name: "nil payload", metadata: protocol.NewClientMetadata("client-1", "/client-1"), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: (*protocol.AcknowledgementPayload)(nil), wantErr: protocol.ErrMissingPayload},
-		{name: "negative offset", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewAcknowledgementPayload(-1), wantErr: protocol.ErrInvalidPayload},
 		{name: "server metadata", metadata: protocol.NewServerMetadata(), payload: protocol.NewAcknowledgementPayload(43), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {

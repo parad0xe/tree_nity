@@ -52,7 +52,7 @@ type consumerInfoReplyPayloadJSON struct {
 	Client *string `json:"client"`
 	Topic  *string `json:"topic"`
 	// Offset is required, including zero.
-	Offset *int32 `json:"offset"`
+	Offset *uint32 `json:"offset"`
 	// Prefix is required, including empty.
 	Prefix *string `json:"prefix"`
 	// IPC is required, including empty.
@@ -146,7 +146,7 @@ func (p errorReplyPayloadJSON) validate() error {
 type deliveredMessageJSON struct {
 	messageJSON
 	// Offset is required, including zero.
-	Offset *int32 `json:"offset"`
+	Offset *uint32 `json:"offset"`
 }
 
 type messageDeliveryPayloadJSON struct {

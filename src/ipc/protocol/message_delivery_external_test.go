@@ -16,7 +16,7 @@ func TestMessageDeliveryRoundTrip(t *testing.T) {
 	maximumValue := []byte(strings.Repeat("v", protocol.MessageSize))
 	tests := []struct {
 		name   string
-		offset int32
+		offset uint32
 		key    []byte
 		value  []byte
 		json   string
@@ -24,7 +24,9 @@ func TestMessageDeliveryRoundTrip(t *testing.T) {
 		{name: "empty message at zero", json: `{"message":{"key":"","value":"","offset":0}}`},
 		{name: "minimal message", offset: 1, key: []byte("k"), value: []byte("v"), json: `{"message":{"key":"aw==","value":"dg==","offset":1}}`},
 		{name: "binary bytes", offset: 42, key: []byte("user"), value: []byte{0x00, 0xff, 0x10}, json: `{"message":{"key":"dXNlcg==","value":"AP8Q","offset":42}}`},
-		{name: "maximum offset", offset: 2147483647, json: `{"message":{"key":"","value":"","offset":2147483647}}`},
+		{name: "maximum signed offset", offset: 2147483647, json: `{"message":{"key":"","value":"","offset":2147483647}}`},
+		{name: "above signed limit", offset: 2147483648, json: `{"message":{"key":"","value":"","offset":2147483648}}`},
+		{name: "maximum offset", offset: 4294967295, json: `{"message":{"key":"","value":"","offset":4294967295}}`},
 		{name: "decoded byte limit", offset: 42, value: maximumValue, json: `{"message":{"key":"","value":"` + base64.StdEncoding.EncodeToString(maximumValue) + `","offset":42}}`},
 	}
 	for _, tt := range tests {
@@ -96,7 +98,6 @@ func TestNewDataRejectsInvalidMessageDelivery(t *testing.T) {
 	}{
 		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.MessageDeliveryPayload)(nil), wantErr: protocol.ErrMissingPayload},
-		{name: "negative offset", metadata: protocol.NewServerMetadata(), payload: protocol.NewMessageDeliveryPayload(-1, protocol.NewMessage(nil, nil)), wantErr: protocol.ErrInvalidPayload},
 		{name: "oversized message", metadata: protocol.NewServerMetadata(), payload: protocol.NewMessageDeliveryPayload(0, protocol.NewMessage([]byte("k"), []byte(strings.Repeat("v", protocol.MessageSize)))), wantErr: protocol.ErrMessageTooLarge},
 		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewMessageDeliveryPayload(0, protocol.NewMessage(nil, nil)), wantErr: protocol.ErrInvalidPayload},
 	}

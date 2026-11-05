@@ -102,15 +102,15 @@ func (p *ConsumerInfoPayload) validate() error {
 	return nil
 }
 
-// TopicSubscriptionPayload carries a topic, key prefix, and optional offset.
+// TopicSubscriptionPayload carries a topic, key prefix, and optional uint32 offset.
 type TopicSubscriptionPayload struct {
 	topic  string
 	prefix string
-	offset *int32
+	offset *uint32
 }
 
 // NewTopicSubscriptionPayload returns a subscription request with a copy of offset.
-func NewTopicSubscriptionPayload(topic, prefix string, offset *int32) *TopicSubscriptionPayload {
+func NewTopicSubscriptionPayload(topic, prefix string, offset *uint32) *TopicSubscriptionPayload {
 	payload := &TopicSubscriptionPayload{topic: topic, prefix: prefix}
 	if offset != nil {
 		start := *offset
@@ -130,7 +130,7 @@ func (p TopicSubscriptionPayload) Prefix() string {
 }
 
 // Offset returns an offset copy; nil resumes, zero replays.
-func (p TopicSubscriptionPayload) Offset() *int32 {
+func (p TopicSubscriptionPayload) Offset() *uint32 {
 	if p.offset == nil {
 		return nil
 	}
@@ -158,24 +158,21 @@ func (p *TopicSubscriptionPayload) validate() error {
 	if !utf8.ValidString(p.prefix) {
 		return fmt.Errorf("%w: prefix must contain valid UTF-8", ErrInvalidPayload)
 	}
-	if p.offset != nil && *p.offset < 0 {
-		return fmt.Errorf("%w: negative offset %d", ErrInvalidPayload, *p.offset)
-	}
 	return nil
 }
 
-// AcknowledgementPayload carries the next offset to consume (received offset + 1).
+// AcknowledgementPayload carries the next uint32 offset to consume (received offset + 1).
 type AcknowledgementPayload struct {
-	offset int32
+	offset uint32
 }
 
 // NewAcknowledgementPayload returns an acknowledgement for the next offset.
-func NewAcknowledgementPayload(offset int32) *AcknowledgementPayload {
+func NewAcknowledgementPayload(offset uint32) *AcknowledgementPayload {
 	return &AcknowledgementPayload{offset: offset}
 }
 
 // Offset returns the next offset to consume.
-func (p AcknowledgementPayload) Offset() int32 {
+func (p AcknowledgementPayload) Offset() uint32 {
 	return p.offset
 }
 
@@ -192,9 +189,6 @@ func (p *AcknowledgementPayload) toJSON(emitter Emitter, opcode Opcode) (payload
 func (p *AcknowledgementPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
-	}
-	if p.offset < 0 {
-		return fmt.Errorf("%w: negative offset %d", ErrInvalidPayload, p.offset)
 	}
 	return nil
 }

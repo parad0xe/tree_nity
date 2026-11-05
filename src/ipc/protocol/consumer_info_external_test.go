@@ -58,14 +58,16 @@ func TestConsumerInfoReplyRoundTrip(t *testing.T) {
 		name   string
 		client string
 		topic  string
-		offset int32
+		offset uint32
 		prefix string
 		ipc    string
 		json   string
 	}{
 		{name: "minimal with zero and empty fields", client: "c", topic: "t", json: `{"client":"c","topic":"t","offset":0,"prefix":"","ipc":""}`},
+		{name: "maximum signed offset", client: "c", topic: "t", offset: 2147483647, json: `{"client":"c","topic":"t","offset":2147483647,"prefix":"","ipc":""}`},
+		{name: "above signed limit", client: "c", topic: "t", offset: 2147483648, json: `{"client":"c","topic":"t","offset":2147483648,"prefix":"","ipc":""}`},
 		{name: "subscription", client: "consumer-1", topic: "orders", offset: 43, prefix: "user:", ipc: "/consumer-1", json: `{"client":"consumer-1","topic":"orders","offset":43,"prefix":"user:","ipc":"/consumer-1"}`},
-		{name: "maximum names and offset", client: strings.Repeat("c", 32), topic: strings.Repeat("t", 32), offset: 2147483647, json: `{"client":"` + strings.Repeat("c", 32) + `","topic":"` + strings.Repeat("t", 32) + `","offset":2147483647,"prefix":"","ipc":""}`},
+		{name: "maximum names and offset", client: strings.Repeat("c", 32), topic: strings.Repeat("t", 32), offset: 4294967295, json: `{"client":"` + strings.Repeat("c", 32) + `","topic":"` + strings.Repeat("t", 32) + `","offset":4294967295,"prefix":"","ipc":""}`},
 		{name: "UTF-8 strings", client: "Consumer_09.events-1", topic: "User_09.events-1", prefix: "événement/", ipc: "/tmp/猫", json: `{"client":"Consumer_09.events-1","topic":"User_09.events-1","offset":0,"prefix":"événement/","ipc":"/tmp/猫"}`},
 		{name: "escaped strings", client: "c", topic: "t", prefix: "\"\\\n\x00", ipc: "/queue\"\\\n", json: `{"client":"c","topic":"t","offset":0,"prefix":"\"\\\n\u0000","ipc":"/queue\"\\\n"}`},
 		{name: "large text fields", client: "c", topic: "t", prefix: strings.Repeat("p", 4096), ipc: strings.Repeat("q", 4096), json: `{"client":"c","topic":"t","offset":0,"prefix":"` + strings.Repeat("p", 4096) + `","ipc":"` + strings.Repeat("q", 4096) + `"}`},
@@ -117,7 +119,6 @@ func TestNewDataRejectsInvalidConsumerInfoPayloads(t *testing.T) {
 		{name: "nil reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: (*protocol.ConsumerInfoReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: &protocol.ConsumerInfoReplyPayload{}, wantErr: protocol.ErrInvalidPayload},
 		{name: "empty reply topic", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "", 0, "", ""), wantErr: protocol.ErrInvalidPayload},
-		{name: "negative reply offset", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "t", -1, "", ""), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid prefix UTF-8", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "t", 0, "\xff", ""), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid IPC UTF-8", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "t", 0, "", "\xff"), wantErr: protocol.ErrInvalidPayload},
 		{name: "reply from client", opcode: protocol.ConsumerInfoReply, metadata: client, payload: protocol.NewConsumerInfoReplyPayload("c", "t", 0, "", ""), wantErr: protocol.ErrInvalidPayload},

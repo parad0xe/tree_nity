@@ -244,7 +244,6 @@ func TestCheckTopicPayloadJSONRejectsInvalidInput(t *testing.T) {
 
 // TestTopicSubscriptionPayloadToJSONRejectsInvalidInput checks content and routing validation.
 func TestTopicSubscriptionPayloadToJSONRejectsInvalidInput(t *testing.T) {
-	negative := int32(-1)
 	tests := []struct {
 		name    string
 		emitter Emitter
@@ -257,7 +256,6 @@ func TestTopicSubscriptionPayloadToJSONRejectsInvalidInput(t *testing.T) {
 		{name: "long topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: strings.Repeat("t", 33)}, wantErr: ErrInvalidPayload},
 		{name: "invalid topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "user/events"}, wantErr: ErrInvalidPayload},
 		{name: "invalid UTF-8 prefix", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders", prefix: "\xff"}, wantErr: ErrInvalidPayload},
-		{name: "negative offset", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders", offset: &negative}, wantErr: ErrInvalidPayload},
 		{name: "wrong opcode", emitter: Client, opcode: CreateTopic, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
 		{name: "server emitter", emitter: Server, opcode: TopicSubscriptionReply, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
 	}
@@ -271,12 +269,13 @@ func TestTopicSubscriptionPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsInvalidTopicSubscription checks required fields, types, and int32 bounds.
+// TestDecodeRejectsInvalidTopicSubscription checks required fields, types, and uint32 bounds.
 func TestDecodeRejectsInvalidTopicSubscription(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload string
-		wantErr error
+		name          string
+		payload       string
+		wantErr       error
+		wantTypeError bool
 	}{
 		{name: "empty object", payload: `{}`, wantErr: ErrMissingTopic},
 		{name: "missing topic", payload: `{"prefix":""}`, wantErr: ErrMissingTopic},
@@ -292,10 +291,10 @@ func TestDecodeRejectsInvalidTopicSubscription(t *testing.T) {
 		{name: "boolean prefix", payload: `{"topic":"orders","prefix":false}`},
 		{name: "array prefix", payload: `{"topic":"orders","prefix":[]}`},
 		{name: "object prefix", payload: `{"topic":"orders","prefix":{}}`},
-		{name: "negative offset", payload: `{"topic":"orders","prefix":"","offset":-1}`, wantErr: ErrInvalidPayload},
-		{name: "minimum int32 offset", payload: `{"topic":"orders","prefix":"","offset":-2147483648}`, wantErr: ErrInvalidPayload},
-		{name: "overflow offset", payload: `{"topic":"orders","prefix":"","offset":2147483648}`},
-		{name: "underflow offset", payload: `{"topic":"orders","prefix":"","offset":-2147483649}`},
+		{name: "negative offset", payload: `{"topic":"orders","prefix":"","offset":-1}`, wantTypeError: true},
+		{name: "large negative offset", payload: `{"topic":"orders","prefix":"","offset":-2147483648}`, wantTypeError: true},
+		{name: "overflow offset", payload: `{"topic":"orders","prefix":"","offset":4294967296}`, wantTypeError: true},
+		{name: "underflow offset", payload: `{"topic":"orders","prefix":"","offset":-2147483649}`, wantTypeError: true},
 		{name: "fractional offset", payload: `{"topic":"orders","prefix":"","offset":0.5}`},
 		{name: "string offset", payload: `{"topic":"orders","prefix":"","offset":"0"}`},
 		{name: "boolean offset", payload: `{"topic":"orders","prefix":"","offset":false}`},
@@ -314,6 +313,12 @@ func TestDecodeRejectsInvalidTopicSubscription(t *testing.T) {
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
 				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+			if tt.wantTypeError {
+				var typeErr *json.UnmarshalTypeError
+				if !errors.As(err, &typeErr) || typeErr.Type != reflect.TypeFor[uint32]() {
+					t.Errorf("Decode(%q) error = %v, want a JSON type error for uint32", frame, err)
+				}
 			}
 		})
 	}

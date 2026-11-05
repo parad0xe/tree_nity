@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -18,7 +19,6 @@ func TestMessageDeliveryPayloadToJSONRejectsInvalidInput(t *testing.T) {
 		wantErr error
 	}{
 		{name: "nil payload", emitter: Server, opcode: MessageDelivery, wantErr: ErrMissingPayload},
-		{name: "negative offset", emitter: Server, opcode: MessageDelivery, payload: &MessageDeliveryPayload{message: Message{offset: -1}}, wantErr: ErrInvalidPayload},
 		{name: "oversized message", emitter: Server, opcode: MessageDelivery, payload: &MessageDeliveryPayload{message: Message{value: []byte(strings.Repeat("v", MessageSize+1))}}, wantErr: ErrMessageTooLarge},
 		{name: "wrong opcode", emitter: Server, opcode: ErrorReply, payload: &MessageDeliveryPayload{}, wantErr: ErrInvalidPayload},
 		{name: "client emitter", emitter: Client, opcode: ProduceMessage, payload: &MessageDeliveryPayload{}, wantErr: ErrInvalidPayload},
@@ -33,13 +33,14 @@ func TestMessageDeliveryPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsInvalidMessageDelivery checks required fields, decoded sizes, and int32 bounds.
+// TestDecodeRejectsInvalidMessageDelivery checks required fields, decoded sizes, and uint32 bounds.
 func TestDecodeRejectsInvalidMessageDelivery(t *testing.T) {
 	oversized := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("v", MessageSize)))
 	tests := []struct {
-		name    string
-		payload string
-		wantErr error
+		name          string
+		payload       string
+		wantErr       error
+		wantTypeError bool
 	}{
 		{name: "missing message", payload: `{}`, wantErr: ErrMissingMessage},
 		{name: "null message", payload: `{"message":null}`, wantErr: ErrMissingMessage},
@@ -49,10 +50,10 @@ func TestDecodeRejectsInvalidMessageDelivery(t *testing.T) {
 		{name: "null key", payload: `{"message":{"key":null,"value":"","offset":0}}`, wantErr: ErrMissingMessageKey},
 		{name: "missing value", payload: `{"message":{"key":"","offset":0}}`, wantErr: ErrMissingMessageValue},
 		{name: "null value", payload: `{"message":{"key":"","value":null,"offset":0}}`, wantErr: ErrMissingMessageValue},
-		{name: "negative offset", payload: `{"message":{"key":"","value":"","offset":-1}}`, wantErr: ErrInvalidPayload},
-		{name: "minimum int32 offset", payload: `{"message":{"key":"","value":"","offset":-2147483648}}`, wantErr: ErrInvalidPayload},
-		{name: "overflow offset", payload: `{"message":{"key":"","value":"","offset":2147483648}}`},
-		{name: "underflow offset", payload: `{"message":{"key":"","value":"","offset":-2147483649}}`},
+		{name: "negative offset", payload: `{"message":{"key":"","value":"","offset":-1}}`, wantTypeError: true},
+		{name: "large negative offset", payload: `{"message":{"key":"","value":"","offset":-2147483648}}`, wantTypeError: true},
+		{name: "overflow offset", payload: `{"message":{"key":"","value":"","offset":4294967296}}`, wantTypeError: true},
+		{name: "underflow offset", payload: `{"message":{"key":"","value":"","offset":-2147483649}}`, wantTypeError: true},
 		{name: "fractional offset", payload: `{"message":{"key":"","value":"","offset":0.5}}`},
 		{name: "string offset", payload: `{"message":{"key":"","value":"","offset":"0"}}`},
 		{name: "boolean offset", payload: `{"message":{"key":"","value":"","offset":false}}`},
@@ -81,6 +82,12 @@ func TestDecodeRejectsInvalidMessageDelivery(t *testing.T) {
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
 				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+			if tt.wantTypeError {
+				var typeErr *json.UnmarshalTypeError
+				if !errors.As(err, &typeErr) || typeErr.Type != reflect.TypeFor[uint32]() {
+					t.Errorf("Decode(%q) error = %v, want a JSON type error for uint32", frame, err)
+				}
 			}
 		})
 	}

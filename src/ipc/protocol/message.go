@@ -2,9 +2,9 @@ package protocol
 
 import "encoding/base64"
 
-// Message holds a binary key, value, and queue offset.
+// Message holds a binary key, value, and uint32 queue offset.
 type Message struct {
-	offset int32
+	offset uint32
 	key    []byte
 	value  []byte
 }
@@ -25,7 +25,7 @@ func (m Message) Value() []byte {
 }
 
 // Offset returns the queue offset, encoded only in MessageDelivery.
-func (m Message) Offset() int32 {
+func (m Message) Offset() uint32 {
 	return m.offset
 }
 

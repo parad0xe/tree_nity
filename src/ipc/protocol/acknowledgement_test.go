@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -16,8 +17,6 @@ func TestAcknowledgementPayloadToJSONRejectsInvalidInput(t *testing.T) {
 		wantErr error
 	}{
 		{name: "nil payload", emitter: Client, opcode: Acknowledgement, wantErr: ErrMissingPayload},
-		{name: "negative offset", emitter: Client, opcode: Acknowledgement, payload: &AcknowledgementPayload{offset: -1}, wantErr: ErrInvalidPayload},
-		{name: "minimum int32 offset", emitter: Client, opcode: Acknowledgement, payload: &AcknowledgementPayload{offset: -2147483648}, wantErr: ErrInvalidPayload},
 		{name: "wrong opcode", emitter: Client, opcode: ListTopic, payload: &AcknowledgementPayload{}, wantErr: ErrInvalidPayload},
 		{name: "server emitter", emitter: Server, opcode: CheckTopicReply, payload: &AcknowledgementPayload{}, wantErr: ErrInvalidPayload},
 	}
@@ -31,19 +30,20 @@ func TestAcknowledgementPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsInvalidAcknowledgement checks the mandatory int32 offset and strict JSON fields.
+// TestDecodeRejectsInvalidAcknowledgement checks the mandatory uint32 offset and strict JSON fields.
 func TestDecodeRejectsInvalidAcknowledgement(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload string
-		wantErr error
+		name          string
+		payload       string
+		wantErr       error
+		wantTypeError bool
 	}{
 		{name: "missing offset", payload: `{}`, wantErr: ErrMissingOffset},
 		{name: "null offset", payload: `{"offset":null}`, wantErr: ErrMissingOffset},
-		{name: "negative offset", payload: `{"offset":-1}`, wantErr: ErrInvalidPayload},
-		{name: "minimum int32 offset", payload: `{"offset":-2147483648}`, wantErr: ErrInvalidPayload},
-		{name: "overflow offset", payload: `{"offset":2147483648}`},
-		{name: "underflow offset", payload: `{"offset":-2147483649}`},
+		{name: "negative offset", payload: `{"offset":-1}`, wantTypeError: true},
+		{name: "large negative offset", payload: `{"offset":-2147483648}`, wantTypeError: true},
+		{name: "overflow offset", payload: `{"offset":4294967296}`, wantTypeError: true},
+		{name: "underflow offset", payload: `{"offset":-2147483649}`, wantTypeError: true},
 		{name: "fractional offset", payload: `{"offset":0.5}`},
 		{name: "string offset", payload: `{"offset":"0"}`},
 		{name: "boolean offset", payload: `{"offset":false}`},
@@ -66,6 +66,12 @@ func TestDecodeRejectsInvalidAcknowledgement(t *testing.T) {
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
 				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+			if tt.wantTypeError {
+				var typeErr *json.UnmarshalTypeError
+				if !errors.As(err, &typeErr) || typeErr.Type != reflect.TypeFor[uint32]() {
+					t.Errorf("Decode(%q) error = %v, want a JSON type error for uint32", frame, err)
+				}
 			}
 		})
 	}

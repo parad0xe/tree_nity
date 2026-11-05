@@ -77,7 +77,7 @@ type topicSubscriptionPayloadJSON struct {
 	// Prefix is required; empty matches all messages.
 	Prefix *string `json:"prefix"`
 	// Offset is optional; absent or null resumes, zero replays.
-	Offset *int32 `json:"offset,omitempty"`
+	Offset *uint32 `json:"offset,omitempty"`
 }
 
 func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
@@ -103,7 +103,7 @@ func (p topicSubscriptionPayloadJSON) validate() error {
 
 type acknowledgementPayloadJSON struct {
 	// Offset is required, including zero.
-	Offset *int32 `json:"offset"`
+	Offset *uint32 `json:"offset"`
 }
 
 func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {

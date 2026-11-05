@@ -48,7 +48,6 @@ func TestConsumerInfoReplyPayloadToJSONRejectsInvalidInput(t *testing.T) {
 		{name: "zero value", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoReplyPayload{}, wantErr: ErrInvalidPayload},
 		{name: "invalid client", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoReplyPayload{client: "consumer/name", topic: "orders"}, wantErr: ErrInvalidPayload},
 		{name: "invalid topic", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoReplyPayload{client: "consumer-1", topic: "user/events"}, wantErr: ErrInvalidPayload},
-		{name: "negative offset", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoReplyPayload{client: "consumer-1", topic: "orders", offset: -1}, wantErr: ErrInvalidPayload},
 		{name: "invalid prefix UTF-8", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoReplyPayload{client: "consumer-1", topic: "orders", prefix: "\xff"}, wantErr: ErrInvalidPayload},
 		{name: "invalid IPC UTF-8", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoReplyPayload{client: "consumer-1", topic: "orders", ipc: "\xff"}, wantErr: ErrInvalidPayload},
 		{name: "wrong opcode", emitter: Server, opcode: ErrorReply, payload: &ConsumerInfoReplyPayload{client: "consumer-1", topic: "orders"}, wantErr: ErrInvalidPayload},
@@ -147,10 +146,11 @@ func TestDecodeRejectsMissingConsumerInfoReplyFields(t *testing.T) {
 // TestDecodeRejectsInvalidConsumerInfoReplyFields checks field types, ranges, and unknown fields.
 func TestDecodeRejectsInvalidConsumerInfoReplyFields(t *testing.T) {
 	tests := []struct {
-		name    string
-		field   string
-		value   string
-		wantErr error
+		name          string
+		field         string
+		value         string
+		wantErr       error
+		wantTypeError bool
 	}{
 		{name: "empty client", field: "client", value: `""`, wantErr: ErrInvalidPayload},
 		{name: "long client", field: "client", value: `"` + strings.Repeat("c", 33) + `"`, wantErr: ErrInvalidPayload},
@@ -162,10 +162,10 @@ func TestDecodeRejectsInvalidConsumerInfoReplyFields(t *testing.T) {
 		{name: "invalid topic", field: "topic", value: `"user/events"`, wantErr: ErrInvalidPayload},
 		{name: "non-ASCII topic", field: "topic", value: `"événements"`, wantErr: ErrInvalidPayload},
 		{name: "boolean topic", field: "topic", value: `false`},
-		{name: "negative offset", field: "offset", value: `-1`, wantErr: ErrInvalidPayload},
-		{name: "minimum int32 offset", field: "offset", value: `-2147483648`, wantErr: ErrInvalidPayload},
-		{name: "overflow offset", field: "offset", value: `2147483648`},
-		{name: "underflow offset", field: "offset", value: `-2147483649`},
+		{name: "negative offset", field: "offset", value: `-1`, wantTypeError: true},
+		{name: "large negative offset", field: "offset", value: `-2147483648`, wantTypeError: true},
+		{name: "overflow offset", field: "offset", value: `4294967296`, wantTypeError: true},
+		{name: "underflow offset", field: "offset", value: `-2147483649`, wantTypeError: true},
 		{name: "fractional offset", field: "offset", value: `0.5`},
 		{name: "string offset", field: "offset", value: `"0"`},
 		{name: "boolean offset", field: "offset", value: `false`},
@@ -196,6 +196,12 @@ func TestDecodeRejectsInvalidConsumerInfoReplyFields(t *testing.T) {
 			}
 			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
 				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+			if tt.wantTypeError {
+				var typeErr *json.UnmarshalTypeError
+				if !errors.As(err, &typeErr) || typeErr.Type != reflect.TypeFor[uint32]() {
+					t.Errorf("Decode(%q) error = %v, want a JSON type error for uint32", frame, err)
+				}
 			}
 		})
 	}
