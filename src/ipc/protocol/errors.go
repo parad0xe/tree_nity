@@ -36,6 +36,8 @@ var (
 	ErrInvalidMetadata = errors.New("invalid metadata")
 	// ErrInvalidPayload indicates a payload with an incompatible type or invalid content.
 	ErrInvalidPayload = errors.New("invalid payload")
+	// ErrUnknownField indicates an unsupported JSON field in a protocol frame.
+	ErrUnknownField = errors.New("unknown JSON field")
 	// ErrUnknownOpcode indicates that an operation code is unsupported.
 	ErrUnknownOpcode = errors.New("unknown opcode")
 	// ErrUnknownEmitter indicates that a sender type is unsupported.

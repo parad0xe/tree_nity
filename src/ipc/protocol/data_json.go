@@ -38,8 +38,7 @@ func (d dataJSON) toData() (Data, error) {
 	tmpPayload := createPayload()
 
 	decoder := json.NewDecoder(bytes.NewReader(*d.Payload))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(tmpPayload); err != nil {
+	if err := decodeStrictJSON(decoder, tmpPayload); err != nil {
 		return Data{}, err
 	}
 	payload, err := tmpPayload.toPayload()

@@ -538,7 +538,7 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		{name: "number frame", input: `1`},
 		{name: "boolean frame", input: `false`},
 		{name: "empty object", input: `{}`, wantErr: ErrMissingOpcode},
-		{name: "unknown frame field", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{},"extra":true}`},
+		{name: "unknown frame field", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{},"extra":true}`, wantErr: ErrUnknownField},
 		{name: "missing opcode", input: `{"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`, wantErr: ErrMissingOpcode},
 		{name: "null opcode", input: `{"opcode":null,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`, wantErr: ErrMissingOpcode},
 		{name: "negative opcode", input: `{"opcode":-1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`, wantErr: ErrUnknownOpcode},
@@ -554,7 +554,7 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		{name: "missing metadata", input: `{"opcode":0,"emitter":1,"payload":{}}`, wantErr: ErrMissingMetadata},
 		{name: "null metadata", input: `{"opcode":0,"emitter":1,"metadata":null,"payload":{}}`, wantErr: ErrMissingMetadata},
 		{name: "array metadata", input: `{"opcode":0,"emitter":1,"metadata":[],"payload":{}}`},
-		{name: "unknown metadata field", input: `{"opcode":0,"emitter":1,"metadata":{"extra":true},"payload":{}}`},
+		{name: "unknown metadata field", input: `{"opcode":0,"emitter":1,"metadata":{"extra":true},"payload":{}}`, wantErr: ErrUnknownField},
 		{name: "missing clientId", input: `{"opcode":0,"emitter":0,"metadata":{"clientIPC":"/client"},"payload":{}}`, wantErr: ErrMissingClientID},
 		{name: "null clientId", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":null,"clientIPC":"/client"},"payload":{}}`, wantErr: ErrMissingClientID},
 		{name: "missing clientIPC", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client"},"payload":{}}`, wantErr: ErrMissingClientIPC},
@@ -562,14 +562,14 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		{name: "missing payload", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"}}`, wantErr: ErrMissingPayload},
 		{name: "null payload", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":null}`, wantErr: ErrMissingPayload},
 		{name: "array payload", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":[]}`},
-		{name: "unknown payload field", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"extra":true}}`},
+		{name: "unknown payload field", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"extra":true}}`, wantErr: ErrUnknownField},
 		{name: "missing topic", input: `{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`, wantErr: ErrMissingTopic},
 		{name: "missing check topic", input: `{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`, wantErr: ErrMissingTopic},
 		{name: "missing produce topic", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"message":{"key":"aw==","value":"dg=="}}}`, wantErr: ErrMissingTopic},
 		{name: "missing message", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders"}}`, wantErr: ErrMissingMessage},
 		{name: "missing message key", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"value":"dg=="}}}`, wantErr: ErrMissingMessageKey},
 		{name: "missing message value", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"aw=="}}}`, wantErr: ErrMissingMessageValue},
-		{name: "unknown message field", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"aw==","value":"dg==","extra":true}}}`},
+		{name: "unknown message field", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"aw==","value":"dg==","extra":true}}}`, wantErr: ErrUnknownField},
 		{name: "array message key", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":[0,255],"value":""}}}`},
 		{name: "array message value", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"","value":[0,255]}}}`},
 		{name: "invalid base64 key", input: `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"?","value":""}}}`, wantErr: ErrInvalidPayload},
@@ -597,6 +597,28 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, want %#v", tt.input, got, Data{})
+			}
+		})
+	}
+}
+
+// TestDecodePreservesJSONErrors checks that syntax and type errors keep their concrete types.
+func TestDecodePreservesJSONErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantType reflect.Type
+	}{
+		{name: "malformed JSON", input: `{"opcode":}`, wantType: reflect.TypeFor[*json.SyntaxError]()},
+		{name: "wrong envelope type", input: `{"opcode":"zero","emitter":0,"metadata":{},"payload":{}}`, wantType: reflect.TypeFor[*json.UnmarshalTypeError]()},
+		{name: "wrong metadata type", input: `{"opcode":0,"emitter":0,"metadata":{"clientId":1,"clientIPC":"/client-1"},"payload":{}}`, wantType: reflect.TypeFor[*json.UnmarshalTypeError]()},
+		{name: "wrong payload type", input: `{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":false}}`, wantType: reflect.TypeFor[*json.UnmarshalTypeError]()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Decode([]byte(tt.input))
+			if reflect.TypeOf(err) != tt.wantType || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v (%T), want zero Data and %v", tt.input, got, err, err, tt.wantType)
 			}
 		})
 	}

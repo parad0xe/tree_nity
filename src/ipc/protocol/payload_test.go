@@ -78,8 +78,8 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
-			if err == nil || !strings.Contains(err.Error(), `json: unknown field "unexpected"`) || !reflect.DeepEqual(got, Data{}) {
-				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and an unknown field error", tt.opcode, emitter, payload, got, err)
+			if !errors.Is(err, ErrUnknownField) || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("toData(opcode=%d, emitter=%d, payload=%s) = %#v, error = %v, want zero Data and %v", tt.opcode, emitter, payload, got, err, ErrUnknownField)
 			}
 		})
 	}

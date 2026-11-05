@@ -34,6 +34,10 @@ func TestServerOpcodeValues(t *testing.T) {
 
 // TestOpcodeValidateRejectsInvalidServerOperations checks unknown codes and emitters.
 func TestOpcodeValidateRejectsInvalidServerOperations(t *testing.T) {
+	var firstUnknown Opcode
+	for opcode := range serverPayloadJSONFactories {
+		firstUnknown = max(firstUnknown, opcode+1)
+	}
 	tests := []struct {
 		name    string
 		emitter Emitter
@@ -41,8 +45,8 @@ func TestOpcodeValidateRejectsInvalidServerOperations(t *testing.T) {
 		wantErr error
 	}{
 		{name: "negative opcode", emitter: Server, opcode: -1, wantErr: ErrUnknownOpcode},
-		{name: "first unknown opcode", emitter: Server, opcode: 8, wantErr: ErrUnknownOpcode},
-		{name: "unknown opcode", emitter: Server, opcode: 256, wantErr: ErrUnknownOpcode},
+		{name: "after registered opcodes", emitter: Server, opcode: firstUnknown, wantErr: ErrUnknownOpcode},
+		{name: "larger unknown opcode", emitter: Server, opcode: firstUnknown + 1, wantErr: ErrUnknownOpcode},
 		{name: "negative emitter", emitter: -1, opcode: ErrorReply, wantErr: ErrUnknownEmitter},
 		{name: "unknown emitter", emitter: 2, opcode: ErrorReply, wantErr: ErrUnknownEmitter},
 	}
@@ -102,7 +106,7 @@ func TestDecodeRejectsInvalidErrorReply(t *testing.T) {
 		{name: "numeric reason", payload: `{"kind":0,"reason":1}`},
 		{name: "boolean reason", payload: `{"kind":0,"reason":false}`},
 		{name: "array reason", payload: `{"kind":0,"reason":[]}`},
-		{name: "unknown field", payload: `{"kind":0,"reason":"error","extra":true}`},
+		{name: "unknown field", payload: `{"kind":0,"reason":"error","extra":true}`, wantErr: ErrUnknownField},
 		{name: "null payload", payload: `null`, wantErr: ErrMissingPayload},
 		{name: "array payload", payload: `[]`},
 		{name: "string payload", payload: `"error"`},
@@ -128,8 +132,8 @@ func TestDecodeRejectsInvalidErrorReply(t *testing.T) {
 func TestDecodeRejectsErrorReplyFromClient(t *testing.T) {
 	frame := `{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"kind":0,"reason":"error"}}`
 	got, err := Decode([]byte(frame))
-	if err == nil || !reflect.DeepEqual(got, Data{}) {
-		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an unknown field error", frame, got, err)
+	if !errors.Is(err, ErrUnknownField) || !reflect.DeepEqual(got, Data{}) {
+		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, got, err, ErrUnknownField)
 	}
 }
 
@@ -164,7 +168,7 @@ func TestDecodeRejectsInvalidCreateTopicReply(t *testing.T) {
 		wantErr error
 	}{
 		{name: "topic field", payload: `{"topic":"orders"}`},
-		{name: "unknown field", payload: `{"extra":true}`},
+		{name: "unknown field", payload: `{"extra":true}`, wantErr: ErrUnknownField},
 		{name: "array", payload: `[]`},
 		{name: "string", payload: `"created"`},
 		{name: "number", payload: `1`},
@@ -232,7 +236,7 @@ func TestDecodeRejectsInvalidListTopicReply(t *testing.T) {
 		{name: "long name", payload: `{"topics":["` + strings.Repeat("t", 33) + `"]}`, wantErr: ErrInvalidPayload},
 		{name: "non-ASCII name", payload: `{"topics":["événements"]}`, wantErr: ErrInvalidPayload},
 		{name: "invalid second name", payload: `{"topics":["orders","user events"]}`, wantErr: ErrInvalidPayload},
-		{name: "unknown field", payload: `{"topics":[],"extra":true}`},
+		{name: "unknown field", payload: `{"topics":[],"extra":true}`, wantErr: ErrUnknownField},
 		{name: "null payload", payload: `null`, wantErr: ErrMissingPayload},
 		{name: "array payload", payload: `[]`},
 	}
@@ -254,8 +258,8 @@ func TestDecodeRejectsInvalidListTopicReply(t *testing.T) {
 func TestDecodeRejectsListTopicReplyFromClient(t *testing.T) {
 	frame := `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topics":[]}}`
 	got, err := Decode([]byte(frame))
-	if err == nil || !reflect.DeepEqual(got, Data{}) {
-		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an unknown field error", frame, got, err)
+	if !errors.Is(err, ErrUnknownField) || !reflect.DeepEqual(got, Data{}) {
+		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, got, err, ErrUnknownField)
 	}
 }
 
@@ -292,7 +296,7 @@ func TestDecodeRejectsInvalidTopicSubscriptionReply(t *testing.T) {
 		{name: "topic field", payload: `{"topic":"orders"}`},
 		{name: "prefix field", payload: `{"prefix":""}`},
 		{name: "offset field", payload: `{"offset":0}`},
-		{name: "unknown field", payload: `{"extra":true}`},
+		{name: "unknown field", payload: `{"extra":true}`, wantErr: ErrUnknownField},
 		{name: "array", payload: `[]`},
 		{name: "string", payload: `"subscribed"`},
 		{name: "number", payload: `1`},
@@ -353,7 +357,7 @@ func TestDecodeRejectsInvalidCheckTopicReply(t *testing.T) {
 		wantErr error
 	}{
 		{name: "topic field", payload: `{"topic":"orders"}`},
-		{name: "unknown field", payload: `{"extra":true}`},
+		{name: "unknown field", payload: `{"extra":true}`, wantErr: ErrUnknownField},
 		{name: "array", payload: `[]`},
 		{name: "string", payload: `"exists"`},
 		{name: "number", payload: `1`},

@@ -24,9 +24,7 @@ func newMetadataJSON(emitter Emitter, raw json.RawMessage) (metadataJSON, error)
 	tmpMetadata := createMetadata()
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(tmpMetadata); err != nil {
+	if err := decodeStrictJSON(decoder, tmpMetadata); err != nil {
 		return nil, err
 	}
 
