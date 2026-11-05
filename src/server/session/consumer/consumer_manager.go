@@ -8,8 +8,7 @@ import (
 	"tree_nity/src/server/utils/hashmap"
 )
 
-// Manager stores consumer metadata independently of active connections.
-// Its methods are safe for concurrent use. Initialize it with NewManager.
+// Manager safely stores metadata independently of connections; initialize with NewManager.
 type Manager struct {
 	mu            sync.RWMutex
 	consumerTable *hashmap.HashMap[id.ID, *Info]
@@ -22,10 +21,7 @@ func NewManager() *Manager {
 	}
 }
 
-// AddConsumer stores consumer metadata, including its topic, after validating
-// the consumer ID, without opening a connection.
-// It returns hashmap.ErrKeyExists when the ID is already registered, or
-// ErrManagerUninitialized when the manager is nil or uninitialized.
+// AddConsumer validates and stores metadata without opening a connection.
 func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix string, ipcPath string) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -41,12 +37,7 @@ func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix stri
 	return m.consumerTable.Insert(info.id, info)
 }
 
-// GetConsumer returns a copy of the stored metadata with a new connection.
-// The caller owns the consumer and must call Consumer.Close when it is no longer
-// needed, typically using defer in the function that owns its lifetime.
-// It returns ErrNotFound when the consumer ID is absent, or ErrManagerUninitialized
-// when the manager is nil or uninitialized. The consumer's queue must already exist.
-// Connection initialization errors leave the stored metadata unchanged.
+// GetConsumer returns a metadata copy with a new connection; the caller must Close it.
 func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	if err := m.validate(); err != nil {
 		return nil, err
@@ -69,10 +60,7 @@ func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	return newConsumer(&consumerInfo, connection), nil
 }
 
-// UpdateOffset stores the next topic offset the consumer wants to consume.
-// The caller supplies the committed offset, without an additional increment.
-// It returns ErrNotFound when the consumer ID is absent, or
-// ErrManagerUninitialized when the manager is nil or uninitialized.
+// UpdateOffset stores the next topic offset without incrementing it.
 func (m *Manager) UpdateOffset(id id.ID, offset uint32) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -90,8 +78,6 @@ func (m *Manager) UpdateOffset(id id.ID, offset uint32) error {
 }
 
 // UpdateTopic changes the stored subscription topic, preserving other metadata.
-// It returns ErrNotFound when the consumer ID is absent, or
-// ErrManagerUninitialized when the manager is nil or uninitialized.
 func (m *Manager) UpdateTopic(id id.ID, topic string) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -108,9 +94,7 @@ func (m *Manager) UpdateTopic(id id.ID, topic string) error {
 	return nil
 }
 
-// RemoveConsumer deletes stored metadata; active connections belong to their topics.
-// It returns ErrNotFound when the consumer ID is absent, or
-// ErrManagerUninitialized when the manager is nil or uninitialized.
+// RemoveConsumer deletes metadata without closing active connections.
 func (m *Manager) RemoveConsumer(id id.ID) error {
 	if err := m.validate(); err != nil {
 		return err

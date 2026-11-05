@@ -11,8 +11,7 @@ import (
 
 // Connection holds the transient resources for one consumer connection.
 type Connection struct {
-	// Cancel requests termination of this connection's routines.
-	// It is set when the connection is attached to a topic.
+	// Cancel stops connection workers; set when attached to a topic.
 	Cancel           context.CancelFunc
 	MessageChan      chan protocol.Message
 	AcknowledgedChan chan uint32
@@ -36,7 +35,6 @@ func newConnection(ipcPath string) (*Connection, error) {
 }
 
 // Close cancels the connection's workers and closes its outbound at most once.
-// Only the call that closes the outbound can return a closure error.
 func (c *Connection) Close() error {
 	if err := c.validate(); err != nil {
 		return nil
