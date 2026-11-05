@@ -155,19 +155,18 @@ func TestManagerLifecycle(t *testing.T) {
 func TestManagerRejectsAdd(t *testing.T) {
 	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "old/", ipcPath: "/consumer-1"}
 	tests := []struct {
-		name        string
-		info        Info
-		wantErr     error
-		wantMessage string
+		name    string
+		info    Info
+		wantErr error
 	}{
 		{
 			name:    "duplicate ID",
 			info:    Info{id: original.id, topic: "other-topic", offset: 99, prefix: "new/", ipcPath: "/other"},
 			wantErr: hashmap.ErrKeyExists,
 		},
-		{name: "empty ID", info: Info{}, wantMessage: "invalid consumer ID"},
-		{name: "invalid ID", info: Info{id: "invalid/id"}, wantMessage: "invalid consumer ID"},
-		{name: "ID too long", info: Info{id: id.ID(strings.Repeat("a", 33))}, wantMessage: "invalid consumer ID"},
+		{name: "empty ID", info: Info{}, wantErr: id.ErrInvalidID},
+		{name: "invalid ID", info: Info{id: "invalid/id"}, wantErr: id.ErrInvalidID},
+		{name: "ID too long", info: Info{id: id.ID(strings.Repeat("a", 33))}, wantErr: id.ErrInvalidID},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -181,11 +180,7 @@ func TestManagerRejectsAdd(t *testing.T) {
 				return
 			}
 			err := manager.AddConsumer(tt.info.id, tt.info.topic, tt.info.offset, tt.info.prefix, tt.info.ipcPath)
-			if tt.wantMessage != "" {
-				if err == nil || err.Error() != tt.wantMessage {
-					t.Errorf("AddConsumer(%+v) error = %v, want %q", tt.info, err, tt.wantMessage)
-				}
-			} else if !errors.Is(err, tt.wantErr) {
+			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("AddConsumer(%+v) error = %v, want %v", tt.info, err, tt.wantErr)
 			}
 			if got := manager.Len(); got != 1 {
