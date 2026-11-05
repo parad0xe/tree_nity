@@ -42,7 +42,8 @@ func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix stri
 }
 
 // GetConsumer returns a copy of the stored metadata with a new connection.
-// The caller owns the connection and must close it when it is no longer needed.
+// The caller owns the consumer and must call Consumer.Close when it is no longer
+// needed, typically using defer in the function that owns its lifetime.
 // It returns ErrNotFound when the consumer ID is absent, or ErrManagerUninitialized
 // when the manager is nil or uninitialized. The consumer's queue must already exist.
 // Connection initialization errors leave the stored metadata unchanged.
