@@ -37,8 +37,8 @@ func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix stri
 	return m.consumerTable.Insert(info.id, info)
 }
 
-// GetConsumer returns a metadata copy with a new connection; the caller must Close it.
-func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
+// OpenConsumer returns a metadata copy with a new connection; the caller must Close it.
+func (m *Manager) OpenConsumer(id id.ID) (*Consumer, error) {
 	if err := m.validate(); err != nil {
 		return nil, err
 	}

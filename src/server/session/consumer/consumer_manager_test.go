@@ -30,19 +30,19 @@ func newTestManager(t *testing.T, infos ...Info) *Manager {
 	return manager
 }
 
-func getTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Consumer {
+func openTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Consumer {
 	t.Helper()
-	c, err := manager.GetConsumer(consumerID)
+	c, err := manager.OpenConsumer(consumerID)
 	if err != nil || c == nil || c.Connection == nil {
-		t.Errorf("GetConsumer(%q) = %+v, error = %v, want a consumer with a connection and nil error", consumerID, c, err)
+		t.Errorf("OpenConsumer(%q) = %+v, error = %v, want a consumer with a connection and nil error", consumerID, c, err)
 		return nil
 	}
 	cleanupTestConnection(t, c.Connection)
 	return c
 }
 
-// TestManagerGetConsumerPropagatesConnectionError checks queue errors and metadata ownership.
-func TestManagerGetConsumerPropagatesConnectionError(t *testing.T) {
+// TestManagerOpenConsumerPropagatesConnectionError checks queue errors and metadata ownership.
+func TestManagerOpenConsumerPropagatesConnectionError(t *testing.T) {
 	tests := []struct {
 		name    string
 		ipcPath string
@@ -58,17 +58,17 @@ func TestManagerGetConsumerPropagatesConnectionError(t *testing.T) {
 			if manager == nil {
 				return
 			}
-			c, err := manager.GetConsumer(original.id)
+			c, err := manager.OpenConsumer(original.id)
 			if c != nil {
 				cleanupTestConnection(t, c.Connection)
-				t.Errorf("GetConsumer(%q) with queue %q = %+v, want nil on connection initialization failure", original.id, tt.ipcPath, c)
+				t.Errorf("OpenConsumer(%q) with queue %q = %+v, want nil on connection initialization failure", original.id, tt.ipcPath, c)
 			}
 			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("GetConsumer(%q) with queue %q error = %v, want %v", original.id, tt.ipcPath, err, tt.wantErr)
+				t.Errorf("OpenConsumer(%q) with queue %q error = %v, want %v", original.id, tt.ipcPath, err, tt.wantErr)
 			}
 			stored, exists := manager.consumerTable.Get(original.id)
 			if !exists || stored == nil || *stored != original {
-				t.Errorf("stored metadata for %q after failed GetConsumer with queue %q = %+v, exists = %t, want %+v and true", original.id, tt.ipcPath, stored, exists, original)
+				t.Errorf("stored metadata for %q after failed OpenConsumer with queue %q = %+v, exists = %t, want %+v and true", original.id, tt.ipcPath, stored, exists, original)
 			}
 		})
 	}
@@ -89,8 +89,8 @@ func TestManagerUninitialized(t *testing.T) {
 			if err := tt.manager.AddConsumer(consumerID, "events", 7, "events/", "/consumer-1"); !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("AddConsumer(%q, %q, 7, %q, %q) on %s error = %v, want %v", consumerID, "events", "events/", "/consumer-1", tt.name, err, ErrManagerUninitialized)
 			}
-			if c, err := tt.manager.GetConsumer(consumerID); c != nil || !errors.Is(err, ErrManagerUninitialized) {
-				t.Errorf("GetConsumer(%q) on %s = %+v, error = %v, want nil and %v", consumerID, tt.name, c, err, ErrManagerUninitialized)
+			if c, err := tt.manager.OpenConsumer(consumerID); c != nil || !errors.Is(err, ErrManagerUninitialized) {
+				t.Errorf("OpenConsumer(%q) on %s = %+v, error = %v, want nil and %v", consumerID, tt.name, c, err, ErrManagerUninitialized)
 			}
 			if err := tt.manager.UpdateOffset(consumerID, 8); !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("UpdateOffset(%q, 8) on %s error = %v, want %v", consumerID, tt.name, err, ErrManagerUninitialized)
@@ -186,9 +186,9 @@ func TestManagerRejectsAdd(t *testing.T) {
 			if got := manager.Len(); got != 1 {
 				t.Errorf("Len() after rejecting AddConsumer(%+v) = %d, want 1", tt.info, got)
 			}
-			stored := getTestConsumer(t, manager, original.id)
+			stored := openTestConsumer(t, manager, original.id)
 			if stored != nil && stored.Info != original {
-				t.Errorf("GetConsumer(%q).Info after rejecting AddConsumer(%+v) = %+v, want %+v", original.id, tt.info, stored.Info, original)
+				t.Errorf("OpenConsumer(%q).Info after rejecting AddConsumer(%+v) = %+v, want %+v", original.id, tt.info, stored.Info, original)
 			}
 		})
 	}
@@ -210,8 +210,8 @@ func TestManagerNotFound(t *testing.T) {
 				return
 			}
 			consumerID := id.ID("missing")
-			if c, err := manager.GetConsumer(consumerID); c != nil || !errors.Is(err, ErrNotFound) {
-				t.Errorf("GetConsumer(%q) with %d stored consumers = %+v, error = %v, want nil and %v", consumerID, len(tt.infos), c, err, ErrNotFound)
+			if c, err := manager.OpenConsumer(consumerID); c != nil || !errors.Is(err, ErrNotFound) {
+				t.Errorf("OpenConsumer(%q) with %d stored consumers = %+v, error = %v, want nil and %v", consumerID, len(tt.infos), c, err, ErrNotFound)
 			}
 			if err := manager.UpdateOffset(consumerID, 8); !errors.Is(err, ErrNotFound) {
 				t.Errorf("UpdateOffset(%q, 8) with %d stored consumers error = %v, want %v", consumerID, len(tt.infos), err, ErrNotFound)
@@ -253,7 +253,7 @@ func TestManagerUpdateOffset(t *testing.T) {
 			if manager == nil {
 				return
 			}
-			previous := getTestConsumer(t, manager, original.id)
+			previous := openTestConsumer(t, manager, original.id)
 			if previous == nil {
 				return
 			}
@@ -263,14 +263,14 @@ func TestManagerUpdateOffset(t *testing.T) {
 			}
 			want := original
 			want.offset = tt.offset
-			if got := getTestConsumer(t, manager, original.id); got != nil && got.Info != want {
-				t.Errorf("GetConsumer(%q).Info after UpdateOffset(%d) = %+v, want %+v", original.id, tt.offset, got.Info, want)
+			if got := openTestConsumer(t, manager, original.id); got != nil && got.Info != want {
+				t.Errorf("OpenConsumer(%q).Info after UpdateOffset(%d) = %+v, want %+v", original.id, tt.offset, got.Info, want)
 			}
 			if previous.Info != original {
-				t.Errorf("previous GetConsumer(%q).Info after UpdateOffset(%d) = %+v, want %+v", original.id, tt.offset, previous.Info, original)
+				t.Errorf("previous OpenConsumer(%q).Info after UpdateOffset(%d) = %+v, want %+v", original.id, tt.offset, previous.Info, original)
 			}
-			if got := getTestConsumer(t, manager, other.id); got != nil && got.Info != other {
-				t.Errorf("GetConsumer(%q).Info after UpdateOffset(%q, %d) = %+v, want %+v", other.id, original.id, tt.offset, got.Info, other)
+			if got := openTestConsumer(t, manager, other.id); got != nil && got.Info != other {
+				t.Errorf("OpenConsumer(%q).Info after UpdateOffset(%q, %d) = %+v, want %+v", other.id, original.id, tt.offset, got.Info, other)
 			}
 		})
 	}
@@ -299,7 +299,7 @@ func TestManagerUpdateTopic(t *testing.T) {
 			if manager == nil {
 				return
 			}
-			previous := getTestConsumer(t, manager, original.id)
+			previous := openTestConsumer(t, manager, original.id)
 			if previous == nil {
 				return
 			}
@@ -309,14 +309,14 @@ func TestManagerUpdateTopic(t *testing.T) {
 			}
 			want := original
 			want.topic = tt.topic
-			if got := getTestConsumer(t, manager, original.id); got != nil && got.Info != want {
-				t.Errorf("GetConsumer(%q).Info after UpdateTopic(%q) = %+v, want %+v", original.id, tt.topic, got.Info, want)
+			if got := openTestConsumer(t, manager, original.id); got != nil && got.Info != want {
+				t.Errorf("OpenConsumer(%q).Info after UpdateTopic(%q) = %+v, want %+v", original.id, tt.topic, got.Info, want)
 			}
 			if previous.Info != original {
-				t.Errorf("previous GetConsumer(%q).Info after UpdateTopic(%q) = %+v, want %+v", original.id, tt.topic, previous.Info, original)
+				t.Errorf("previous OpenConsumer(%q).Info after UpdateTopic(%q) = %+v, want %+v", original.id, tt.topic, previous.Info, original)
 			}
-			if got := getTestConsumer(t, manager, other.id); got != nil && got.Info != other {
-				t.Errorf("GetConsumer(%q).Info after UpdateTopic(%q, %q) = %+v, want %+v", other.id, original.id, tt.topic, got.Info, other)
+			if got := openTestConsumer(t, manager, other.id); got != nil && got.Info != other {
+				t.Errorf("OpenConsumer(%q).Info after UpdateTopic(%q, %q) = %+v, want %+v", other.id, original.id, tt.topic, got.Info, other)
 			}
 		})
 	}
@@ -362,10 +362,10 @@ func TestManagerConcurrentUpdates(t *testing.T) {
 		defer group.Done()
 		<-start
 		for i := 0; i < iterations; i++ {
-			if c := getTestConsumer(t, manager, original.id); c == nil {
+			if c := openTestConsumer(t, manager, original.id); c == nil {
 				return
 			} else if c.Info.id != original.id || c.Info.prefix != original.prefix || c.Info.ipcPath != original.ipcPath {
-				t.Errorf("concurrent GetConsumer(%q).Info = %+v, want ID %q, prefix %q and IPC path %q", original.id, c.Info, original.id, original.prefix, original.ipcPath)
+				t.Errorf("concurrent OpenConsumer(%q).Info = %+v, want ID %q, prefix %q and IPC path %q", original.id, c.Info, original.id, original.prefix, original.ipcPath)
 			}
 		}
 	}()
@@ -374,13 +374,13 @@ func TestManagerConcurrentUpdates(t *testing.T) {
 	want := original
 	want.offset = iterations - 1
 	want.topic = fmt.Sprintf("topic-%d", iterations-1)
-	if got := getTestConsumer(t, manager, original.id); got != nil && got.Info != want {
-		t.Errorf("GetConsumer(%q).Info after %d concurrent updates per field = %+v, want %+v", original.id, iterations, got.Info, want)
+	if got := openTestConsumer(t, manager, original.id); got != nil && got.Info != want {
+		t.Errorf("OpenConsumer(%q).Info after %d concurrent updates per field = %+v, want %+v", original.id, iterations, got.Info, want)
 	}
 }
 
-// TestManagerGetConsumerCopies checks metadata isolation and fresh connection resources.
-func TestManagerGetConsumerCopies(t *testing.T) {
+// TestManagerOpenConsumerCopies checks metadata isolation and fresh connection resources.
+func TestManagerOpenConsumerCopies(t *testing.T) {
 	ipcPath := newTestConsumerQueue(t)
 	if ipcPath == "" {
 		return
@@ -390,37 +390,37 @@ func TestManagerGetConsumerCopies(t *testing.T) {
 	if manager == nil {
 		return
 	}
-	first := getTestConsumer(t, manager, original.id)
-	second := getTestConsumer(t, manager, original.id)
+	first := openTestConsumer(t, manager, original.id)
+	second := openTestConsumer(t, manager, original.id)
 	if first == nil || second == nil {
 		return
 	}
 	if first == second {
-		t.Errorf("GetConsumer(%q) twice returned the same consumer %p, want distinct consumers", original.id, first)
+		t.Errorf("OpenConsumer(%q) twice returned the same consumer %p, want distinct consumers", original.id, first)
 	}
 	if first.Connection == second.Connection {
-		t.Errorf("GetConsumer(%q) twice returned the same connection %p, want distinct connections", original.id, first.Connection)
+		t.Errorf("OpenConsumer(%q) twice returned the same connection %p, want distinct connections", original.id, first.Connection)
 	}
 	if first.Connection.MessageChan == second.Connection.MessageChan {
-		t.Errorf("GetConsumer(%q) twice shared MessageChan %v, want distinct channels", original.id, first.Connection.MessageChan)
+		t.Errorf("OpenConsumer(%q) twice shared MessageChan %v, want distinct channels", original.id, first.Connection.MessageChan)
 	}
 	if first.Connection.AcknowledgedChan == second.Connection.AcknowledgedChan {
-		t.Errorf("GetConsumer(%q) twice shared AcknowledgedChan %v, want distinct channels", original.id, first.Connection.AcknowledgedChan)
+		t.Errorf("OpenConsumer(%q) twice shared AcknowledgedChan %v, want distinct channels", original.id, first.Connection.AcknowledgedChan)
 	}
 	if first.Connection.HeartbeatChan == second.Connection.HeartbeatChan {
-		t.Errorf("GetConsumer(%q) twice shared HeartbeatChan %v, want distinct channels", original.id, first.Connection.HeartbeatChan)
+		t.Errorf("OpenConsumer(%q) twice shared HeartbeatChan %v, want distinct channels", original.id, first.Connection.HeartbeatChan)
 	}
 	if first.Info != original {
-		t.Errorf("GetConsumer(%q).Info = %+v, want %+v", original.id, first.Info, original)
+		t.Errorf("OpenConsumer(%q).Info = %+v, want %+v", original.id, first.Info, original)
 	}
 
 	first.Info = Info{id: "changed", topic: "other-topic", offset: 99, prefix: "other/", ipcPath: "/other"}
 	if second.Info != original {
-		t.Errorf("second GetConsumer(%q).Info after changing the first copy = %+v, want %+v", original.id, second.Info, original)
+		t.Errorf("second OpenConsumer(%q).Info after changing the first copy = %+v, want %+v", original.id, second.Info, original)
 	}
-	third := getTestConsumer(t, manager, original.id)
+	third := openTestConsumer(t, manager, original.id)
 	if third != nil && third.Info != original {
-		t.Errorf("GetConsumer(%q).Info after changing a returned copy = %+v, want %+v", original.id, third.Info, original)
+		t.Errorf("OpenConsumer(%q).Info after changing a returned copy = %+v, want %+v", original.id, third.Info, original)
 	}
 }
 
@@ -435,7 +435,7 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if manager == nil {
 		return
 	}
-	active := getTestConsumer(t, manager, original.id)
+	active := openTestConsumer(t, manager, original.id)
 	if active == nil {
 		return
 	}
@@ -449,8 +449,8 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if err := ctx.Err(); err != nil {
 		t.Errorf("RemoveConsumer(%q) changed the active connection context error to %v, want nil", original.id, err)
 	}
-	if c, err := manager.GetConsumer(original.id); c != nil || !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetConsumer(%q) after removal = %+v, error = %v, want nil and %v", original.id, c, err, ErrNotFound)
+	if c, err := manager.OpenConsumer(original.id); c != nil || !errors.Is(err, ErrNotFound) {
+		t.Errorf("OpenConsumer(%q) after removal = %+v, error = %v, want nil and %v", original.id, c, err, ErrNotFound)
 	}
 	if err := active.Connection.Close(); err != nil {
 		t.Errorf("Close() on the connection retained after RemoveConsumer(%q) error = %v, want nil", original.id, err)
@@ -466,16 +466,16 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 		t.Errorf("AddConsumer(%q, %q, 11, %q, %q) after removal error = %v, want nil", original.id, "other-topic", "new/", replacementIPCPath, err)
 		return
 	}
-	replacement := getTestConsumer(t, manager, original.id)
+	replacement := openTestConsumer(t, manager, original.id)
 	if replacement == nil {
 		return
 	}
 	want := Info{id: original.id, topic: "other-topic", offset: 11, prefix: "new/", ipcPath: replacementIPCPath}
 	if replacement.Info != want {
-		t.Errorf("GetConsumer(%q).Info after adding the ID again = %+v, want %+v", original.id, replacement.Info, want)
+		t.Errorf("OpenConsumer(%q).Info after adding the ID again = %+v, want %+v", original.id, replacement.Info, want)
 	}
 	if replacement.Connection == active.Connection {
-		t.Errorf("GetConsumer(%q) after adding the ID again reused connection %p, want a new connection", original.id, active.Connection)
+		t.Errorf("OpenConsumer(%q) after adding the ID again reused connection %p, want a new connection", original.id, active.Connection)
 	}
 }
 
@@ -504,12 +504,12 @@ func TestManagerConcurrent(t *testing.T) {
 					t.Errorf("concurrent AddConsumer(%+v) error = %v, want nil", want, err)
 					return
 				}
-				c := getTestConsumer(t, manager, consumerID)
+				c := openTestConsumer(t, manager, consumerID)
 				if c == nil {
 					return
 				}
 				if c.Info != want {
-					t.Errorf("concurrent GetConsumer(%q).Info = %+v, want %+v", consumerID, c.Info, want)
+					t.Errorf("concurrent OpenConsumer(%q).Info = %+v, want %+v", consumerID, c.Info, want)
 				}
 				if got := manager.Len(); got == 0 {
 					t.Errorf("concurrent Len() while consumer %q is present = %d, want at least 1", consumerID, got)
