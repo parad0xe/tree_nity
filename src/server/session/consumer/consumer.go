@@ -13,9 +13,7 @@ func newConsumer(info *Info, connection *Connection) *Consumer {
 	}
 }
 
-// Close cancels the consumer's connection workers and closes its outbound at most once.
-// It returns the connection's closure error, if any. A nil consumer or connection
-// can be closed safely. Use defer to close the consumer when its owning function returns.
+// Close cancels workers and closes the connection once; nil receivers are safe.
 func (c *Consumer) Close() error {
 	if c == nil {
 		return nil
@@ -24,7 +22,6 @@ func (c *Consumer) Close() error {
 }
 
 // Validate checks the consumer, its metadata, and its connection.
-// It returns ErrUninitialized for a nil consumer, or the metadata or connection error.
 func (c *Consumer) Validate() error {
 	if c == nil {
 		return ErrUninitialized
