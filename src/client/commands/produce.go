@@ -14,7 +14,7 @@ type produce struct {
 	raw   bool
 }
 
-// ParseProduce returns the produce command for args.
+// ParseProduce parses the arguments of the produce command.
 func ParseProduce(args []string) (Command, error) {
 	if len(args) < 1 {
 		return nil, fmt.Errorf("produce: %w: <topic_name>", errMissingArgument)
