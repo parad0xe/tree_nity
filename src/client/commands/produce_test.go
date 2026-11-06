@@ -15,9 +15,9 @@ func TestParseProduceReadsTopic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProduce(%q) error = %v, want nil", args, err)
 	}
-	p, ok := command.(*produce)
+	p, ok := command.(*produceCommand)
 	if !ok {
-		t.Fatalf("ParseProduce(%q) = %T, want *produce", args, command)
+		t.Fatalf("ParseProduce(%q) = %T, want *produceCommand", args, command)
 	}
 	if want := id.ID(args[0]); p.topic != want {
 		t.Errorf("ParseProduce(%q) topic = %q, want %q", args, p.topic, want)
@@ -35,9 +35,9 @@ func TestParseProduceReadsRawOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseProduce(%q) error = %v, want nil", args, err)
 	}
-	p, ok := command.(*produce)
+	p, ok := command.(*produceCommand)
 	if !ok {
-		t.Fatalf("ParseProduce(%q) = %T, want *produce", args, command)
+		t.Fatalf("ParseProduce(%q) = %T, want *produceCommand", args, command)
 	}
 	if !p.raw {
 		t.Errorf("ParseProduce(%q) raw = %v, want %v", args, p.raw, true)

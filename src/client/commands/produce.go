@@ -9,7 +9,7 @@ import (
 	"tree_nity/src/ipc/id"
 )
 
-type produce struct {
+type produceCommand struct {
 	topic id.ID
 	raw   bool
 }
@@ -25,10 +25,10 @@ func ParseProduce(args []string) (Command, error) {
 		return nil, fmt.Errorf("produce: topic %q: %w", topicID, err)
 	}
 
-	p := &produce{topic: topicID}
+	cmd := &produceCommand{topic: topicID}
 
 	fs := newFlagSet("produce")
-	fs.BoolVar(&p.raw, "raw", false, "read binary records from stdin")
+	fs.BoolVar(&cmd.raw, "raw", false, "read binary records from stdin")
 
 	if err := fs.Parse(args[1:]); err != nil {
 		return nil, fmt.Errorf("produce: %w: %w", errInvalidOption, err)
@@ -37,10 +37,10 @@ func ParseProduce(args []string) (Command, error) {
 		return nil, fmt.Errorf("produce: %w: %s", errTooManyArguments, fs.Arg(0))
 	}
 
-	return p, nil
+	return cmd, nil
 }
 
-func (p *produce) Execute(ctx context.Context, env Env) (int, error) {
+func (cmd *produceCommand) Execute(ctx context.Context, env Env) (int, error) {
 	// TODO: send packet `check if topic exists` (exitcode 2 if not exists)
 	// TODO: read message from stdin (using raw option) (in goroutine)
 	// TODO: wait for goroutine response or ctx.Done
