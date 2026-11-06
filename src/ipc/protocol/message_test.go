@@ -1,9 +1,11 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -28,28 +30,29 @@ func TestMessageJSONToMessage(t *testing.T) {
 		want  Message
 	}{
 		{name: "empty strings", input: `{"key":"","value":""}`, want: Message{}},
-		{name: "minimal key", input: `{"key":"k","value":""}`, want: Message{key: "k"}},
-		{name: "minimal value", input: `{"key":"","value":"v"}`, want: Message{value: "v"}},
-		{name: "message", input: `{"key":"key","value":"value"}`, want: Message{key: "key", value: "value"}},
+		{name: "minimal key", input: `{"key":"aw==","value":""}`, want: Message{key: []byte("k")}},
+		{name: "minimal value", input: `{"key":"","value":"dg=="}`, want: Message{value: []byte("v")}},
+		{name: "message", input: `{"key":"a2V5","value":"dmFsdWU="}`, want: Message{key: []byte("key"), value: []byte("value")}},
+		{name: "binary bytes", input: `{"key":"dXNlcg==","value":"AP8Q"}`, want: Message{key: []byte("user"), value: []byte{0x00, 0xff, 0x10}}},
 		{
 			name:  "key at byte limit",
-			input: fmt.Sprintf(`{"key":%q,"value":""}`, strings.Repeat("k", 1024)),
-			want:  Message{key: strings.Repeat("k", 1024)},
+			input: fmt.Sprintf(`{"key":%q,"value":""}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 1024)))),
+			want:  Message{key: []byte(strings.Repeat("k", 1024))},
 		},
 		{
 			name:  "value at byte limit",
-			input: fmt.Sprintf(`{"key":"","value":%q}`, strings.Repeat("v", 1024)),
-			want:  Message{value: strings.Repeat("v", 1024)},
+			input: fmt.Sprintf(`{"key":"","value":%q}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("v", 1024)))),
+			want:  Message{value: []byte(strings.Repeat("v", 1024))},
 		},
 		{
 			name:  "combined byte limit",
-			input: fmt.Sprintf(`{"key":%q,"value":%q}`, strings.Repeat("k", 512), strings.Repeat("v", 512)),
-			want:  Message{key: strings.Repeat("k", 512), value: strings.Repeat("v", 512)},
+			input: fmt.Sprintf(`{"key":%q,"value":%q}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 512))), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("v", 512)))),
+			want:  Message{key: []byte(strings.Repeat("k", 512)), value: []byte(strings.Repeat("v", 512))},
 		},
 		{
 			name:  "UTF-8 at byte limit",
-			input: fmt.Sprintf(`{"key":"","value":%q}`, strings.Repeat("é", 512)),
-			want:  Message{value: strings.Repeat("é", 512)},
+			input: fmt.Sprintf(`{"key":"","value":%q}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("é", 512)))),
+			want:  Message{value: []byte(strings.Repeat("é", 512))},
 		},
 	}
 
@@ -65,14 +68,14 @@ func TestMessageJSONToMessage(t *testing.T) {
 			if err != nil {
 				t.Errorf("toMessage(%s) error = %v, want nil", tt.input, err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("toMessage(%s) = %+v, want %+v", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestMessageJSONToMessageRejectsInvalidInput checks required fields and oversized messages.
+// TestMessageJSONToMessageRejectsInvalidInput checks required fields, base64, and decoded sizes.
 func TestMessageJSONToMessageRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -80,28 +83,32 @@ func TestMessageJSONToMessageRejectsInvalidInput(t *testing.T) {
 		wantErr error
 	}{
 		{name: "missing fields", input: `{}`, wantErr: ErrMissingMessageKey},
-		{name: "missing key", input: `{"value":"v"}`, wantErr: ErrMissingMessageKey},
-		{name: "null key", input: `{"key":null,"value":"v"}`, wantErr: ErrMissingMessageKey},
-		{name: "missing value", input: `{"key":"k"}`, wantErr: ErrMissingMessageValue},
-		{name: "null value", input: `{"key":"k","value":null}`, wantErr: ErrMissingMessageValue},
+		{name: "missing key", input: `{"value":"dg=="}`, wantErr: ErrMissingMessageKey},
+		{name: "null key", input: `{"key":null,"value":"dg=="}`, wantErr: ErrMissingMessageKey},
+		{name: "missing value", input: `{"key":"aw=="}`, wantErr: ErrMissingMessageValue},
+		{name: "null value", input: `{"key":"aw==","value":null}`, wantErr: ErrMissingMessageValue},
+		{name: "invalid base64 key", input: `{"key":"?","value":""}`, wantErr: ErrInvalidPayload},
+		{name: "invalid base64 value", input: `{"key":"","value":"?"}`, wantErr: ErrInvalidPayload},
+		{name: "missing base64 padding", input: `{"key":"aw","value":""}`, wantErr: ErrInvalidPayload},
+		{name: "truncated base64 padding", input: `{"key":"aw=","value":""}`, wantErr: ErrInvalidPayload},
 		{
 			name:    "oversized key",
-			input:   fmt.Sprintf(`{"key":%q,"value":""}`, strings.Repeat("k", 1025)),
+			input:   fmt.Sprintf(`{"key":%q,"value":""}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 1025)))),
 			wantErr: ErrMessageTooLarge,
 		},
 		{
 			name:    "oversized value",
-			input:   fmt.Sprintf(`{"key":"","value":%q}`, strings.Repeat("v", 1025)),
+			input:   fmt.Sprintf(`{"key":"","value":%q}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("v", 1025)))),
 			wantErr: ErrMessageTooLarge,
 		},
 		{
 			name:    "combined size exceeds limit",
-			input:   fmt.Sprintf(`{"key":%q,"value":%q}`, strings.Repeat("k", 512), strings.Repeat("v", 513)),
+			input:   fmt.Sprintf(`{"key":%q,"value":%q}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 512))), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("v", 513)))),
 			wantErr: ErrMessageTooLarge,
 		},
 		{
 			name:    "UTF-8 exceeds byte limit",
-			input:   fmt.Sprintf(`{"key":"k","value":%q}`, strings.Repeat("é", 512)),
+			input:   fmt.Sprintf(`{"key":"aw==","value":%q}`, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("é", 512)))),
 			wantErr: ErrMessageTooLarge,
 		},
 	}
@@ -118,7 +125,7 @@ func TestMessageJSONToMessageRejectsInvalidInput(t *testing.T) {
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("toMessage(%s) error = %v, want %v", tt.input, err, tt.wantErr)
 			}
-			if got != (Message{}) {
+			if !reflect.DeepEqual(got, Message{}) {
 				t.Errorf("toMessage(%s) = %+v, want zero Message", tt.input, got)
 			}
 		})

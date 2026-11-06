@@ -87,9 +87,9 @@ func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 		{name: "boolean", emitter: Server, input: `false`},
 		{name: "clientId has wrong type", emitter: Client, input: `{"clientId":1,"clientIPC":"/client"}`},
 		{name: "clientIPC has wrong type", emitter: Client, input: `{"clientId":"client","clientIPC":false}`},
-		{name: "unknown client field", emitter: Client, input: `{"clientId":"client","clientIPC":"/client","extra":true}`},
-		{name: "unknown server field", emitter: Server, input: `{"extra":true}`},
-		{name: "client metadata from server", emitter: Server, input: `{"clientId":"client","clientIPC":"/client"}`},
+		{name: "unknown client field", emitter: Client, input: `{"clientId":"client","clientIPC":"/client","extra":true}`, wantErr: ErrUnknownField},
+		{name: "unknown server field", emitter: Server, input: `{"extra":true}`, wantErr: ErrUnknownField},
+		{name: "client metadata from server", emitter: Server, input: `{"clientId":"client","clientIPC":"/client"}`, wantErr: ErrUnknownField},
 	}
 
 	for _, tt := range tests {

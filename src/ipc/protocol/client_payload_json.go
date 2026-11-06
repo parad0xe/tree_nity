@@ -25,75 +25,132 @@ func (p listTopicPayloadJSON) validate() error {
 	return nil
 }
 
-type createTopicPayloadJSON struct{}
+type createTopicPayloadJSON struct {
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
+	Topic *string `json:"topic"`
+}
 
 func (p createTopicPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &CreateTopicPayload{}, nil
+	payload := &CreateTopicPayload{topic: *p.Topic}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p createTopicPayloadJSON) validate() error {
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
 	return nil
 }
 
-type consumerInfoPayloadJSON struct{}
+type consumerInfoPayloadJSON struct {
+	// Subscriber is the required consumer name to query.
+	Subscriber *string `json:"subscriber"`
+}
 
 func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &ConsumerInfoPayload{}, nil
+	payload := &ConsumerInfoPayload{subscriber: *p.Subscriber}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p consumerInfoPayloadJSON) validate() error {
+	if p.Subscriber == nil {
+		return ErrMissingSubscriber
+	}
 	return nil
 }
 
-type topicSubscriptionPayloadJSON struct{}
+type topicSubscriptionPayloadJSON struct {
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
+	Topic *string `json:"topic"`
+	// Prefix is required; empty matches all messages.
+	Prefix *string `json:"prefix"`
+	// Offset is optional; absent or null resumes, zero replays.
+	Offset *uint32 `json:"offset,omitempty"`
+}
 
 func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &TopicSubscriptionPayload{}, nil
+	payload := NewTopicSubscriptionPayload(*p.Topic, *p.Prefix, p.Offset)
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p topicSubscriptionPayloadJSON) validate() error {
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
+	if p.Prefix == nil {
+		return ErrMissingPrefix
+	}
 	return nil
 }
 
-type acknowledgementPayloadJSON struct{}
+type acknowledgementPayloadJSON struct {
+	// Offset is required, including zero.
+	Offset *uint32 `json:"offset"`
+}
 
 func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &AcknowledgementPayload{}, nil
+	payload := &AcknowledgementPayload{offset: *p.Offset}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p acknowledgementPayloadJSON) validate() error {
+	if p.Offset == nil {
+		return ErrMissingOffset
+	}
 	return nil
 }
 
-type checkTopicPayloadJSON struct{}
+type checkTopicPayloadJSON struct {
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
+	Topic *string `json:"topic"`
+}
 
 func (p checkTopicPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &CheckTopicPayload{}, nil
+	payload := &CheckTopicPayload{topic: *p.Topic}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p checkTopicPayloadJSON) validate() error {
+	if p.Topic == nil {
+		return ErrMissingTopic
+	}
 	return nil
 }
 
 type produceMessagePayloadJSON struct {
-	// Raw must be present even when its value is false.
-	Raw *bool `json:"raw"`
-	// Message must be present and pass key, value, and size validation.
+	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
+	Topic *string `json:"topic"`
+	// Message is required and limited to MessageSize bytes.
 	Message *messageJSON `json:"message"`
 }
 
@@ -107,15 +164,16 @@ func (p produceMessagePayloadJSON) toPayload() (Payload, error) {
 		return nil, err
 	}
 
-	return &ProduceMessagePayload{
-		raw:     *p.Raw,
-		message: message,
-	}, nil
+	payload := &ProduceMessagePayload{topic: *p.Topic, message: message}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p produceMessagePayloadJSON) validate() error {
-	if p.Raw == nil {
-		return ErrMissingRaw
+	if p.Topic == nil {
+		return ErrMissingTopic
 	}
 	if p.Message == nil {
 		return ErrMissingMessage

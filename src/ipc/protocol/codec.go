@@ -3,7 +3,9 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 )
 
 // Encode returns the JSON encoding of data after validation.
@@ -17,13 +19,12 @@ func Encode(data Data) ([]byte, error) {
 }
 
 // Decode returns validated protocol data from a single JSON frame.
+// Unknown JSON fields wrap ErrUnknownField.
 func Decode(frame []byte) (Data, error) {
 	var tmpData dataJSON
 
 	decoder := json.NewDecoder(bytes.NewReader(frame))
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&tmpData); err != nil {
+	if err := decodeStrictJSON(decoder, &tmpData); err != nil {
 		return Data{}, err
 	}
 	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
@@ -34,4 +35,16 @@ func Decode(frame []byte) (Data, error) {
 	}
 
 	return tmpData.toData()
+}
+
+func decodeStrictJSON(decoder *json.Decoder, target any) error {
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		// encoding/json exposes unknown fields only through its error text.
+		if strings.HasPrefix(err.Error(), "json: unknown field ") {
+			return fmt.Errorf("%w: %w", ErrUnknownField, err)
+		}
+		return err
+	}
+	return nil
 }

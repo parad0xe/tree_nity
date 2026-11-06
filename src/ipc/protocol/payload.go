@@ -1,9 +1,7 @@
 package protocol
 
-// Payload holds operation-specific frame data.
-// Each concrete payload type must match the frame's opcode.
-// The frame's emitter selects the opcode list used to validate the payload.
+// Payload holds data for a specific emitter and opcode.
 type Payload interface {
-	toJSON(opcode Opcode) (payloadJSON, error)
+	toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error)
 	validate() error
 }
