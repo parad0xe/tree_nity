@@ -27,7 +27,8 @@ const defaultCancelTimeout = 1 * time.Second
 // commandParsers maps each command name to the function that parses its arguments.
 var commandParsers = map[string]func(args []string) (commands.Command, error){
 	"produce": commands.ParseProduce,
-	// TODO: add the create, list, subscribe and info commands.
+	"list":    commands.ParseList,
+	// TODO: add the create, subscribe and info commands.
 }
 
 func main() {
