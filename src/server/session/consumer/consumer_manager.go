@@ -183,6 +183,40 @@ func (m *Manager) UpdateTopic(id id.ID, topic string) error {
 	return nil
 }
 
+// UpdateIPCPath changes the stored consumer queue name.
+func (m *Manager) UpdateIPCPath(id id.ID, ipcPath string) error {
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, exists := m.consumerTable.Get(id)
+	if !exists {
+		return ErrNotFound
+	}
+
+	info.ipcPath = ipcPath
+	return nil
+}
+
+// UpdatePrefix changes the stored subscription prefix.
+func (m *Manager) UpdatePrefix(id id.ID, prefix string) error {
+	if err := m.validate(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, exists := m.consumerTable.Get(id)
+	if !exists {
+		return ErrNotFound
+	}
+
+	info.prefix = prefix
+	return nil
+}
+
 // RemoveConsumer deletes metadata without closing active connections.
 func (m *Manager) RemoveConsumer(id id.ID) error {
 	if err := m.validate(); err != nil {

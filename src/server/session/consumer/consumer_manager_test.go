@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -36,8 +37,12 @@ func newTestManager(t *testing.T, infos ...Info) *Manager {
 func openTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Consumer {
 	t.Helper()
 	c, err := manager.GetOrCreateConsumer(consumerID)
-	if err != nil || c == nil {
+	if err != nil {
 		t.Errorf("GetOrCreateConsumer(%q) = %+v, error = %v, want a consumer and nil error", consumerID, c, err)
+		return nil
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("GetOrCreateConsumer(%q) validation error = %v, want nil", consumerID, err)
 		return nil
 	}
 	t.Cleanup(func() {
@@ -167,6 +172,12 @@ func TestManagerUninitialized(t *testing.T) {
 			if err := tt.manager.UpdateTopic(consumerID, "other-topic"); !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("UpdateTopic(%q, %q) on %s error = %v, want %v", consumerID, "other-topic", tt.name, err, ErrManagerUninitialized)
 			}
+			if err := tt.manager.UpdateIPCPath(consumerID, "/other-queue"); !errors.Is(err, ErrManagerUninitialized) {
+				t.Errorf("UpdateIPCPath(%q, %q) on %s error = %v, want %v", consumerID, "/other-queue", tt.name, err, ErrManagerUninitialized)
+			}
+			if err := tt.manager.UpdatePrefix(consumerID, "other/"); !errors.Is(err, ErrManagerUninitialized) {
+				t.Errorf("UpdatePrefix(%q, %q) on %s error = %v, want %v", consumerID, "other/", tt.name, err, ErrManagerUninitialized)
+			}
 			if err := tt.manager.RemoveConsumer(consumerID); !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("RemoveConsumer(%q) on %s error = %v, want %v", consumerID, tt.name, err, ErrManagerUninitialized)
 			}
@@ -288,6 +299,12 @@ func TestManagerNotFound(t *testing.T) {
 			if err := manager.UpdateTopic(consumerID, "other-topic"); !errors.Is(err, ErrNotFound) {
 				t.Errorf("UpdateTopic(%q, %q) with %d stored consumers error = %v, want %v", consumerID, "other-topic", len(tt.infos), err, ErrNotFound)
 			}
+			if err := manager.UpdateIPCPath(consumerID, "/other-queue"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("UpdateIPCPath(%q, %q) with %d stored consumers error = %v, want %v", consumerID, "/other-queue", len(tt.infos), err, ErrNotFound)
+			}
+			if err := manager.UpdatePrefix(consumerID, "other/"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("UpdatePrefix(%q, %q) with %d stored consumers error = %v, want %v", consumerID, "other/", len(tt.infos), err, ErrNotFound)
+			}
 			if err := manager.RemoveConsumer(consumerID); !errors.Is(err, ErrNotFound) {
 				t.Errorf("RemoveConsumer(%q) with %d stored consumers error = %v, want %v", consumerID, len(tt.infos), err, ErrNotFound)
 			}
@@ -391,6 +408,107 @@ func TestManagerUpdateTopic(t *testing.T) {
 	}
 }
 
+// TestManagerUpdateIPCPath checks queue name updates and metadata isolation.
+func TestManagerUpdateIPCPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+	}{
+		{name: "new queue", ipcPath: "/consumer-new"},
+		{name: "same queue", ipcPath: "/consumer-old"},
+		{name: "empty queue"},
+		{name: "long queue name", ipcPath: "/" + strings.Repeat("q", 255)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: "/consumer-old"}
+			other := Info{id: "consumer-2", topic: "other-topic", offset: 11, prefix: "other/", ipcPath: "/consumer-other"}
+			manager := newTestManager(t, original, other)
+			if err := manager.validate(); err != nil {
+				return
+			}
+			previous := openTestConsumer(t, manager, original.id)
+			if err := previous.Validate(); err != nil {
+				return
+			}
+			if err := manager.UpdateIPCPath(original.id, tt.ipcPath); err != nil {
+				t.Errorf("UpdateIPCPath(%q, %q) error = %v, want nil", original.id, tt.ipcPath, err)
+				return
+			}
+			want := original
+			want.ipcPath = tt.ipcPath
+			got := openTestConsumer(t, manager, original.id)
+			if err := got.Validate(); err != nil {
+				return
+			}
+			if got.Info != want {
+				t.Errorf("GetOrCreateConsumer(%q).Info after UpdateIPCPath(%q) = %+v, want %+v", original.id, tt.ipcPath, got.Info, want)
+			}
+			if previous.Info != original {
+				t.Errorf("previous metadata for %q after UpdateIPCPath(%q) = %+v, want %+v", original.id, tt.ipcPath, previous.Info, original)
+			}
+			otherCopy := openTestConsumer(t, manager, other.id)
+			if err := otherCopy.Validate(); err != nil {
+				return
+			}
+			if otherCopy.Info != other {
+				t.Errorf("GetOrCreateConsumer(%q).Info after UpdateIPCPath(%q, %q) = %+v, want %+v", other.id, original.id, tt.ipcPath, otherCopy.Info, other)
+			}
+		})
+	}
+}
+
+// TestManagerUpdatePrefix checks prefix updates and metadata isolation.
+func TestManagerUpdatePrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+	}{
+		{name: "new prefix", prefix: "new/"},
+		{name: "same prefix", prefix: "events/"},
+		{name: "all messages"},
+		{name: "UTF-8 prefix", prefix: "é/猫/"},
+		{name: "long prefix", prefix: strings.Repeat("p", 512)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: "/consumer-old"}
+			other := Info{id: "consumer-2", topic: "other-topic", offset: 11, prefix: "other/", ipcPath: "/consumer-other"}
+			manager := newTestManager(t, original, other)
+			if err := manager.validate(); err != nil {
+				return
+			}
+			previous := openTestConsumer(t, manager, original.id)
+			if err := previous.Validate(); err != nil {
+				return
+			}
+			if err := manager.UpdatePrefix(original.id, tt.prefix); err != nil {
+				t.Errorf("UpdatePrefix(%q, %q) error = %v, want nil", original.id, tt.prefix, err)
+				return
+			}
+			want := original
+			want.prefix = tt.prefix
+			got := openTestConsumer(t, manager, original.id)
+			if err := got.Validate(); err != nil {
+				return
+			}
+			if got.Info != want {
+				t.Errorf("GetOrCreateConsumer(%q).Info after UpdatePrefix(%q) = %+v, want %+v", original.id, tt.prefix, got.Info, want)
+			}
+			if previous.Info != original {
+				t.Errorf("previous metadata for %q after UpdatePrefix(%q) = %+v, want %+v", original.id, tt.prefix, previous.Info, original)
+			}
+			otherCopy := openTestConsumer(t, manager, other.id)
+			if err := otherCopy.Validate(); err != nil {
+				return
+			}
+			if otherCopy.Info != other {
+				t.Errorf("GetOrCreateConsumer(%q).Info after UpdatePrefix(%q, %q) = %+v, want %+v", other.id, original.id, tt.prefix, otherCopy.Info, other)
+			}
+		})
+	}
+}
+
 // TestManagerConcurrentUpdates checks simultaneous writes and metadata reads for one consumer.
 func TestManagerConcurrentUpdates(t *testing.T) {
 	ipcPath := newTestConsumerQueue(t)
@@ -445,6 +563,145 @@ func TestManagerConcurrentUpdates(t *testing.T) {
 	want.topic = fmt.Sprintf("topic-%d", iterations-1)
 	if got := openTestConsumer(t, manager, original.id); got != nil && got.Info != want {
 		t.Errorf("GetOrCreateConsumer(%q).Info after %d concurrent updates per field = %+v, want %+v", original.id, iterations, got.Info, want)
+	}
+}
+
+// TestManagerConcurrentContactUpdates checks concurrent contact metadata updates.
+func TestManagerConcurrentContactUpdates(t *testing.T) {
+	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "events/", ipcPath: "/consumer-old"}
+	manager := newTestManager(t, original)
+	if err := manager.validate(); err != nil {
+		return
+	}
+	const iterations = 64
+	operations := []struct {
+		name string
+		run  func(int) error
+	}{
+		{name: "UpdateIPCPath", run: func(i int) error {
+			return manager.UpdateIPCPath(original.id, fmt.Sprintf("/consumer-%d", i))
+		}},
+		{name: "UpdatePrefix", run: func(i int) error {
+			return manager.UpdatePrefix(original.id, fmt.Sprintf("prefix-%d/", i))
+		}},
+		{name: "GetOrCreateConsumer", run: func(int) error {
+			c, err := manager.GetOrCreateConsumer(original.id)
+			if err != nil {
+				return err
+			}
+			if err := c.Validate(); err != nil {
+				return err
+			}
+			if c.Info.id != original.id || c.Info.topic != original.topic || c.Info.offset != original.offset {
+				return fmt.Errorf("metadata = %+v, want ID %q, topic %q and offset %d", c.Info, original.id, original.topic, original.offset)
+			}
+			return nil
+		}},
+	}
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for _, operation := range operations {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			<-start
+			for i := 0; i < iterations; i++ {
+				if err := operation.run(i); err != nil {
+					t.Errorf("concurrent %s(%q), iteration %d error = %v, want nil", operation.name, original.id, i, err)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	group.Wait()
+	want := original
+	want.ipcPath = fmt.Sprintf("/consumer-%d", iterations-1)
+	want.prefix = fmt.Sprintf("prefix-%d/", iterations-1)
+	got := openTestConsumer(t, manager, original.id)
+	if err := got.Validate(); err != nil {
+		return
+	}
+	if got.Info != want {
+		t.Errorf("GetOrCreateConsumer(%q).Info after %d contact updates per field = %+v, want %+v", original.id, iterations, got.Info, want)
+	}
+}
+
+// TestManagerReconnectUpdatedContact checks delivery after changing contact metadata.
+func TestManagerReconnectUpdatedContact(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t, "old")
+	if ipcPath == "" {
+		return
+	}
+	original := Info{id: "consumer-1", topic: "events", offset: 7, prefix: "old/", ipcPath: ipcPath}
+	manager := newTestManager(t, original)
+	if err := manager.validate(); err != nil {
+		return
+	}
+	previous := connectTestConsumer(t, manager, original.id)
+	if err := previous.Validate(); err != nil {
+		return
+	}
+	if err := manager.DisconnectConsumer(previous); err != nil {
+		t.Errorf("DisconnectConsumer(%q) before contact updates error = %v, want nil", original.id, err)
+		return
+	}
+	wantInfo := original
+	wantInfo.ipcPath = fmt.Sprintf("/consumer.%s.%d.new", t.Name(), os.Getpid())
+	wantInfo.prefix = "new/"
+	if err := manager.UpdateIPCPath(original.id, wantInfo.ipcPath); err != nil {
+		t.Errorf("UpdateIPCPath(%q, %q) before creating the queue error = %v, want nil", original.id, wantInfo.ipcPath, err)
+		return
+	}
+	if err := manager.UpdatePrefix(original.id, wantInfo.prefix); err != nil {
+		t.Errorf("UpdatePrefix(%q, %q) before reconnecting error = %v, want nil", original.id, wantInfo.prefix, err)
+		return
+	}
+	receiver, err := mqueue.NewReceiver(wantInfo.ipcPath)
+	if err != nil {
+		t.Errorf("NewReceiver(%q) error = %v, want nil", wantInfo.ipcPath, err)
+		return
+	}
+	t.Cleanup(func() {
+		if err := receiver.Drop(); err != nil {
+			t.Errorf("Drop() for queue %q error = %v, want nil", wantInfo.ipcPath, err)
+		}
+	})
+	c := connectTestConsumer(t, manager, original.id)
+	if err := c.Validate(); err != nil {
+		return
+	}
+	if c.Info != wantInfo {
+		t.Errorf("reconnected consumer %q metadata = %+v, want %+v", original.id, c.Info, wantInfo)
+	}
+	if previous.Info != original {
+		t.Errorf("previous consumer %q metadata after contact updates = %+v, want %+v", original.id, previous.Info, original)
+	}
+	metadata := protocol.NewClientMetadata(string(original.id), wantInfo.ipcPath)
+	payload := protocol.NewConsumerHeartbeatPayload()
+	data, err := protocol.NewData(protocol.ConsumerHeartbeat, metadata, payload)
+	if err != nil {
+		t.Errorf("NewData(%v, %+v, %+v) error = %v, want nil", protocol.ConsumerHeartbeat, metadata, payload, err)
+		return
+	}
+	wantFrame, err := protocol.Encode(data)
+	if err != nil {
+		t.Errorf("Encode(%+v) error = %v, want nil", data, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	if err := c.Connection().Outbound.Send(ctx, data); err != nil {
+		t.Errorf("Send(%+v) after reconnecting consumer %q error = %v, want nil", data, original.id, err)
+		return
+	}
+	gotFrame, err := receiver.TimedRecv(time.Now().Add(time.Second))
+	if err != nil {
+		t.Errorf("TimedRecv() from updated queue %q error = %v, want nil", wantInfo.ipcPath, err)
+		return
+	}
+	if !bytes.Equal(gotFrame, wantFrame) {
+		t.Errorf("TimedRecv() from updated queue %q = %q, want %q", wantInfo.ipcPath, gotFrame, wantFrame)
 	}
 }
 
