@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -73,8 +74,8 @@ func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix stri
 	return m.consumerTable.Insert(info.id, info)
 }
 
-// ConnectConsumer opens a consumer connection and reserves its ID.
-func (m *Manager) ConnectConsumer(c *Consumer) error {
+// ConnectConsumer opens a connection tied to ctx and reserves the consumer ID.
+func (m *Manager) ConnectConsumer(ctx context.Context, c *Consumer) error {
 	if err := m.validate(); err != nil {
 		return err
 	}
@@ -107,7 +108,7 @@ func (m *Manager) ConnectConsumer(c *Consumer) error {
 		return err
 	}
 
-	connection, err := newConnection(c.Info.ipcPath)
+	connection, err := newConnection(ctx, c.Info.ipcPath)
 	if err != nil {
 		m.mu.Lock()
 		err = errors.Join(err, m.activeConsumers.Remove(c.managedID))

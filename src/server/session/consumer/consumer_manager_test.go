@@ -59,7 +59,7 @@ func connectTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Cons
 	if c == nil {
 		return nil
 	}
-	if err := manager.ConnectConsumer(c); err != nil {
+	if err := manager.ConnectConsumer(context.Background(), c); err != nil {
 		t.Errorf("ConnectConsumer() for consumer %q error = %v, want nil", consumerID, err)
 		return nil
 	}
@@ -124,7 +124,7 @@ func TestManagerConnectPropagatesConnectionError(t *testing.T) {
 			if c == nil {
 				return
 			}
-			if err := manager.ConnectConsumer(c); !errors.Is(err, tt.wantErr) {
+			if err := manager.ConnectConsumer(context.Background(), c); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ConnectConsumer() for consumer %q with queue %q error = %v, want %v", original.id, tt.ipcPath, err, tt.wantErr)
 			}
 			if connection := c.Connection(); connection != nil {
@@ -160,7 +160,7 @@ func TestManagerUninitialized(t *testing.T) {
 				t.Errorf("GetOrCreateConsumer(%q) on %s = %+v, error = %v, want nil and %v", consumerID, tt.name, c, err, ErrManagerUninitialized)
 			}
 			c := newConsumer(newInfo(consumerID, "events", 7, "events/", "/consumer-1"))
-			if err := tt.manager.ConnectConsumer(c); !errors.Is(err, ErrManagerUninitialized) {
+			if err := tt.manager.ConnectConsumer(context.Background(), c); !errors.Is(err, ErrManagerUninitialized) {
 				t.Errorf("ConnectConsumer(%q) on %s error = %v, want %v", consumerID, tt.name, err, ErrManagerUninitialized)
 			}
 			if err := tt.manager.DisconnectConsumer(c); !errors.Is(err, ErrManagerUninitialized) {
@@ -773,7 +773,7 @@ func TestManagerConnectRejectsDuplicateID(t *testing.T) {
 					return
 				}
 			}
-			if err := manager.ConnectConsumer(second); !errors.Is(err, ErrAlreadyConnected) {
+			if err := manager.ConnectConsumer(context.Background(), second); !errors.Is(err, ErrAlreadyConnected) {
 				t.Errorf("ConnectConsumer() for %s with active ID %q error = %v, want %v", tt.name, original.id, err, ErrAlreadyConnected)
 			}
 			if got := first.Connection(); got != connection {
@@ -807,7 +807,7 @@ func TestManagerConnectRetriesAfterQueueAppears(t *testing.T) {
 			if first == nil {
 				return
 			}
-			if err := manager.ConnectConsumer(first); !errors.Is(err, os.ErrNotExist) {
+			if err := manager.ConnectConsumer(context.Background(), first); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("ConnectConsumer() for consumer %q with missing queue %q error = %v, want %v", original.id, ipcPath, err, os.ErrNotExist)
 				return
 			}
@@ -822,10 +822,87 @@ func TestManagerConnectRetriesAfterQueueAppears(t *testing.T) {
 					return
 				}
 			}
-			if err := manager.ConnectConsumer(second); err != nil {
+			if err := manager.ConnectConsumer(context.Background(), second); err != nil {
 				t.Errorf("ConnectConsumer() for %s of ID %q after creating queue %q error = %v, want nil", tt.name, original.id, ipcPath, err)
 			}
 		})
+	}
+}
+
+// TestManagerConnectRejectsCanceledContext checks reservation cleanup after cancellation.
+func TestManagerConnectRejectsCanceledContext(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	expiredCtx, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	t.Cleanup(cancelExpired)
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceledCtx, wantErr: context.Canceled},
+		{name: "expired", ctx: expiredCtx, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			original := Info{id: "consumer-1", topic: "events", ipcPath: ipcPath}
+			manager := newTestManager(t, original)
+			if err := manager.validate(); err != nil {
+				return
+			}
+			c := openTestConsumer(t, manager, original.id)
+			if err := c.Validate(); err != nil {
+				return
+			}
+			if err := manager.ConnectConsumer(tt.ctx, c); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ConnectConsumer(%s context, %q) error = %v, want %v", tt.name, original.id, err, tt.wantErr)
+			}
+			if got := c.Connection(); got != nil {
+				t.Errorf("Connection() for %q after rejected %s context = %p, want nil", original.id, tt.name, got)
+			}
+			if got := manager.activeConsumers.Len(); got != 0 {
+				t.Errorf("active connection count after ConnectConsumer(%s context, %q) = %d, want 0", tt.name, original.id, got)
+			}
+			if err := manager.ConnectConsumer(context.Background(), c); err != nil {
+				t.Errorf("ConnectConsumer(ctx, %q) after rejected %s context error = %v, want nil", original.id, tt.name, err)
+			}
+		})
+	}
+}
+
+// TestManagerConnectUsesContext checks cancellation through the manager API.
+func TestManagerConnectUsesContext(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	original := Info{id: "consumer-1", topic: "events", ipcPath: ipcPath}
+	manager := newTestManager(t, original)
+	if err := manager.validate(); err != nil {
+		return
+	}
+	c := openTestConsumer(t, manager, original.id)
+	if err := c.Validate(); err != nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := manager.ConnectConsumer(ctx, c); err != nil {
+		t.Errorf("ConnectConsumer(ctx, %q) error = %v, want nil", original.id, err)
+		return
+	}
+	cancel()
+	select {
+	case <-c.Connection().Done():
+	default:
+		t.Errorf("Done() for %q after parent cancellation is open, want closed", original.id)
+	}
+	if got := manager.activeConsumers.Len(); got != 1 {
+		t.Errorf("active connection count for %q before DisconnectConsumer() = %d, want 1", original.id, got)
 	}
 }
 
@@ -848,7 +925,7 @@ func TestManagerConnectRejectsRemovedConsumer(t *testing.T) {
 		t.Errorf("RemoveConsumer(%q) error = %v, want nil", original.id, err)
 		return
 	}
-	if err := manager.ConnectConsumer(c); !errors.Is(err, ErrNotFound) {
+	if err := manager.ConnectConsumer(context.Background(), c); !errors.Is(err, ErrNotFound) {
 		t.Errorf("ConnectConsumer() for removed consumer %q error = %v, want %v", original.id, err, ErrNotFound)
 	}
 }
@@ -880,14 +957,14 @@ func TestManagerConnectRejectsReaddedActiveID(t *testing.T) {
 	if second == nil {
 		return
 	}
-	if err := manager.ConnectConsumer(second); !errors.Is(err, ErrAlreadyConnected) {
+	if err := manager.ConnectConsumer(context.Background(), second); !errors.Is(err, ErrAlreadyConnected) {
 		t.Errorf("ConnectConsumer() for readded ID %q with an old active connection error = %v, want %v", original.id, err, ErrAlreadyConnected)
 	}
 	if err := manager.DisconnectConsumer(first); err != nil {
 		t.Errorf("DisconnectConsumer() for old connection of readded ID %q error = %v, want nil", original.id, err)
 		return
 	}
-	if err := manager.ConnectConsumer(second); err != nil {
+	if err := manager.ConnectConsumer(context.Background(), second); err != nil {
 		t.Errorf("ConnectConsumer() for readded ID %q after old connection disconnected error = %v, want nil", original.id, err)
 	}
 }
@@ -915,16 +992,16 @@ func TestManagerDisconnectKeepsOtherConnection(t *testing.T) {
 	if second == nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	second.Connection().Cancel = cancel
+	done := second.Connection().Done()
 	if err := manager.DisconnectConsumer(first); err != nil {
 		t.Errorf("DisconnectConsumer() again for first copy of %q error = %v, want nil", original.id, err)
 	}
-	if err := ctx.Err(); err != nil {
-		t.Errorf("context error for second copy of %q after first copy disconnected again = %v, want nil", original.id, err)
+	select {
+	case <-done:
+		t.Errorf("second connection's Done() after DisconnectConsumer(%q) for first copy is closed, want open", original.id)
+	default:
 	}
-	if err := manager.ConnectConsumer(first); !errors.Is(err, ErrAlreadyConnected) {
+	if err := manager.ConnectConsumer(context.Background(), first); !errors.Is(err, ErrAlreadyConnected) {
 		t.Errorf("ConnectConsumer() for first copy of %q while second copy is active error = %v, want %v", original.id, err, ErrAlreadyConnected)
 	}
 }
@@ -1004,7 +1081,7 @@ func TestManagerConcurrentConnect(t *testing.T) {
 		go func() {
 			defer group.Done()
 			<-start
-			errorsByCopy[i] = manager.ConnectConsumer(c)
+			errorsByCopy[i] = manager.ConnectConsumer(context.Background(), c)
 		}()
 	}
 	close(start)
@@ -1037,15 +1114,15 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if active == nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	active.Connection().Cancel = cancel
+	done := active.Connection().Done()
 	if err := manager.RemoveConsumer(original.id); err != nil {
 		t.Errorf("RemoveConsumer(%q) error = %v, want nil", original.id, err)
 		return
 	}
-	if err := ctx.Err(); err != nil {
-		t.Errorf("RemoveConsumer(%q) changed the active connection context error to %v, want nil", original.id, err)
+	select {
+	case <-done:
+		t.Errorf("Done() after RemoveConsumer(%q) is closed, want open", original.id)
+	default:
 	}
 	if c, err := manager.GetOrCreateConsumer(original.id); c != nil || !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetOrCreateConsumer(%q) after removal = %+v, error = %v, want nil and %v", original.id, c, err, ErrNotFound)
@@ -1054,8 +1131,10 @@ func TestManagerRemoveKeepsConnection(t *testing.T) {
 	if err := manager.DisconnectConsumer(active); err != nil {
 		t.Errorf("DisconnectConsumer() on the consumer retained after RemoveConsumer(%q) error = %v, want nil", original.id, err)
 	}
-	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
-		t.Errorf("DisconnectConsumer() on the consumer retained after RemoveConsumer(%q): context error = %v, want %v", original.id, err, context.Canceled)
+	select {
+	case <-done:
+	default:
+		t.Errorf("Done() after DisconnectConsumer(%q) following removal is open, want closed", original.id)
 	}
 	replacementIPCPath := newTestConsumerQueue(t, "replacement")
 	if replacementIPCPath == "" {
@@ -1154,7 +1233,7 @@ func TestManagerDisconnectCancelsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	manager := NewManager()
-	c := &Consumer{manager: manager, connection: &Connection{Cancel: cancel}}
+	c := &Consumer{manager: manager, connection: &Connection{done: ctx.Done(), cancel: cancel}}
 	if err := manager.DisconnectConsumer(c); err != nil {
 		t.Errorf("DisconnectConsumer() with zero metadata error = %v, want nil", err)
 	}
@@ -1228,7 +1307,7 @@ func TestManagerConnectRejectsInvalidConsumer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := manager.ConnectConsumer(tt.consumer); !errors.Is(err, tt.wantErr) {
+			if err := manager.ConnectConsumer(context.Background(), tt.consumer); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ConnectConsumer() for %s error = %v, want %v", tt.name, err, tt.wantErr)
 			}
 			if connection := tt.consumer.Connection(); connection != nil {
@@ -1275,9 +1354,7 @@ func TestManagerReconnect(t *testing.T) {
 		return
 	}
 	first := c.Connection()
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	first.Cancel = cancel
+	done := first.Done()
 	for i := 0; i < 2; i++ {
 		if err := manager.DisconnectConsumer(c); err != nil {
 			t.Errorf("DisconnectConsumer() call %d for consumer %q error = %v, want nil", i+1, original.id, err)
@@ -1286,8 +1363,10 @@ func TestManagerReconnect(t *testing.T) {
 	if connection := c.Connection(); connection != nil {
 		t.Errorf("Connection() after DisconnectConsumer() for consumer %q = %p, want nil", original.id, connection)
 	}
-	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
-		t.Errorf("context error after DisconnectConsumer() for consumer %q = %v, want %v", original.id, err, context.Canceled)
+	select {
+	case <-done:
+	default:
+		t.Errorf("Done() after DisconnectConsumer(%q) is open, want closed", original.id)
 	}
 	if c.Info != original {
 		t.Errorf("Info after DisconnectConsumer() for consumer %q = %+v, want %+v", original.id, c.Info, original)
@@ -1295,7 +1374,7 @@ func TestManagerReconnect(t *testing.T) {
 	if stored := openTestConsumer(t, manager, original.id); stored != nil && stored.Info != original {
 		t.Errorf("GetOrCreateConsumer(%q).Info after DisconnectConsumer() = %+v, want %+v", original.id, stored.Info, original)
 	}
-	if err := manager.ConnectConsumer(c); err != nil {
+	if err := manager.ConnectConsumer(context.Background(), c); err != nil {
 		t.Errorf("ConnectConsumer() for consumer %q after DisconnectConsumer() error = %v, want nil", original.id, err)
 		return
 	}
@@ -1303,6 +1382,14 @@ func TestManagerReconnect(t *testing.T) {
 	if second == nil {
 		t.Errorf("Connection() for consumer %q after reconnecting = nil, want an initialized connection", original.id)
 		return
+	}
+	if second.Done() == done {
+		t.Errorf("Done() after reconnecting consumer %q reused signal %v, want a fresh signal", original.id, done)
+	}
+	select {
+	case <-second.Done():
+		t.Errorf("Done() after reconnecting consumer %q is closed, want open", original.id)
+	default:
 	}
 	if second == first || second.Outbound == first.Outbound || second.MessageChan == first.MessageChan || second.AcknowledgedChan == first.AcknowledgedChan || second.HeartbeatChan == first.HeartbeatChan {
 		t.Errorf("ConnectConsumer() for consumer %q after DisconnectConsumer() reused resources from %p in %p, want fresh connection resources", original.id, first, second)
@@ -1332,7 +1419,7 @@ func TestManagerConcurrentLifecycle(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{name: "ConnectConsumer", run: func() error { return manager.ConnectConsumer(c) }},
+		{name: "ConnectConsumer", run: func() error { return manager.ConnectConsumer(context.Background(), c) }},
 		{name: "DisconnectConsumer", run: func() error { return manager.DisconnectConsumer(c) }},
 		{name: "Connection", run: func() error {
 			c.Connection()
@@ -1358,7 +1445,7 @@ func TestManagerConcurrentLifecycle(t *testing.T) {
 	if err := manager.DisconnectConsumer(c); err != nil {
 		t.Errorf("DisconnectConsumer() after concurrent lifecycle calls for consumer %q error = %v, want nil", original.id, err)
 	}
-	if err := manager.ConnectConsumer(c); err != nil {
+	if err := manager.ConnectConsumer(context.Background(), c); err != nil {
 		t.Errorf("ConnectConsumer() after concurrent lifecycle calls for consumer %q error = %v, want nil", original.id, err)
 	}
 }
@@ -1369,7 +1456,7 @@ func TestManagerRejectsForeignConsumer(t *testing.T) {
 		name string
 		run  func(*Manager, *Consumer) error
 	}{
-		{name: "ConnectConsumer", run: (*Manager).ConnectConsumer},
+		{name: "ConnectConsumer", run: func(m *Manager, c *Consumer) error { return m.ConnectConsumer(context.Background(), c) }},
 		{name: "DisconnectConsumer", run: (*Manager).DisconnectConsumer},
 	}
 	for _, tt := range tests {
@@ -1389,17 +1476,17 @@ func TestManagerRejectsForeignConsumer(t *testing.T) {
 				return
 			}
 			connection := c.Connection()
-			ctx, cancel := context.WithCancel(context.Background())
-			t.Cleanup(cancel)
-			connection.Cancel = cancel
+			done := connection.Done()
 			if err := tt.run(other, c); !errors.Is(err, ErrNotFound) {
 				t.Errorf("%s(%q) through another manager error = %v, want %v", tt.name, original.id, err, ErrNotFound)
 			}
 			if got := c.Connection(); got != connection {
 				t.Errorf("Connection() for %q after rejected %s = %p, want %p", original.id, tt.name, got, connection)
 			}
-			if err := ctx.Err(); err != nil {
-				t.Errorf("context error for %q after rejected %s = %v, want nil", original.id, tt.name, err)
+			select {
+			case <-done:
+				t.Errorf("Done() for %q after rejected %s is closed, want open", original.id, tt.name)
+			default:
 			}
 			if got := owner.activeConsumers.Len(); got != 1 {
 				t.Errorf("owner's active connection count after rejected %s(%q) = %d, want 1", tt.name, original.id, got)
@@ -1426,9 +1513,7 @@ func TestManagerDisconnectInvalidMetadata(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	c.Connection().Cancel = cancel
+	done := c.Connection().Done()
 	c.Info = Info{}
 	if err := manager.DisconnectConsumer(c); err != nil {
 		t.Errorf("DisconnectConsumer(%q) after invalidating metadata error = %v, want nil", original.id, err)
@@ -1436,8 +1521,10 @@ func TestManagerDisconnectInvalidMetadata(t *testing.T) {
 	if c.connection != nil {
 		t.Errorf("connection for %q after DisconnectConsumer() with invalid metadata = %p, want nil", original.id, c.connection)
 	}
-	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
-		t.Errorf("context error for %q after DisconnectConsumer() with invalid metadata = %v, want %v", original.id, err, context.Canceled)
+	select {
+	case <-done:
+	default:
+		t.Errorf("Done() after DisconnectConsumer(%q) with invalid metadata is open, want closed", original.id)
 	}
 	if got := manager.activeConsumers.Len(); got != 0 {
 		t.Errorf("active connection count after DisconnectConsumer(%q) with invalid metadata = %d, want 0", original.id, got)

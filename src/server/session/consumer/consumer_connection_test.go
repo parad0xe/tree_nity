@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -47,13 +48,13 @@ func TestNewConnection(t *testing.T) {
 	if ipcPath == "" {
 		return
 	}
-	first, err := newConnection(ipcPath)
+	first, err := newConnection(context.Background(), ipcPath)
 	if err != nil {
 		t.Errorf("newConnection(%q) error = %v, want nil", ipcPath, err)
 		return
 	}
 	cleanupTestConnection(t, first)
-	second, err := newConnection(ipcPath)
+	second, err := newConnection(context.Background(), ipcPath)
 	if err != nil {
 		t.Errorf("second newConnection(%q) error = %v, want nil", ipcPath, err)
 		return
@@ -87,6 +88,14 @@ func TestNewConnection(t *testing.T) {
 			if tt.connection.HeartbeatChan == nil {
 				t.Errorf("newConnection(%q).HeartbeatChan for %s connection = nil, want an initialized channel", ipcPath, tt.name)
 			}
+			if tt.connection.Done() == nil {
+				t.Errorf("Done() for %s connection to %q = nil, want a cancellation signal", tt.name, ipcPath)
+			}
+			select {
+			case <-tt.connection.Done():
+				t.Errorf("Done() for %s connection to %q is closed, want open", tt.name, ipcPath)
+			default:
+			}
 		})
 	}
 	if first.MessageChan == second.MessageChan {
@@ -97,6 +106,149 @@ func TestNewConnection(t *testing.T) {
 	}
 	if first.HeartbeatChan == second.HeartbeatChan {
 		t.Errorf("newConnection(%q) twice shared HeartbeatChan %v, want distinct channels", ipcPath, first.HeartbeatChan)
+	}
+	if first.Done() == second.Done() {
+		t.Errorf("newConnection(%q) twice shared Done() %v, want distinct signals", ipcPath, first.Done())
+	}
+}
+
+// TestConnectionDoneWithoutContext checks missing cancellation signals.
+func TestConnectionDoneWithoutContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		connection *Connection
+	}{
+		{name: "nil receiver"},
+		{name: "zero value", connection: &Connection{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.connection.Done(); got != nil {
+				t.Errorf("Done() for %s = %v, want nil", tt.name, got)
+			}
+		})
+	}
+}
+
+// TestConnectionDoneParentCancellation checks cancellation propagation.
+func TestConnectionDoneParentCancellation(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	connection, err := newConnection(ctx, ipcPath)
+	if err != nil {
+		t.Errorf("newConnection(ctx, %q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, connection)
+	cancel()
+	select {
+	case <-connection.Done():
+	default:
+		t.Errorf("Done() for queue %q after parent cancellation is open, want closed", ipcPath)
+	}
+}
+
+// TestConnectionClosePreservesParent checks context ownership.
+func TestConnectionClosePreservesParent(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	if ipcPath == "" {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	connection, err := newConnection(ctx, ipcPath)
+	if err != nil {
+		t.Errorf("newConnection(ctx, %q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, connection)
+	if err := connection.Close(); err != nil {
+		t.Errorf("Close() for queue %q error = %v, want nil", ipcPath, err)
+	}
+	select {
+	case <-connection.Done():
+	default:
+		t.Errorf("Done() for queue %q after Close() is open, want closed", ipcPath)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("parent context error after Close() for queue %q = %v, want nil", ipcPath, err)
+	}
+}
+
+// TestConnectionDoneUnblocksSend checks cancellation without a channel reader.
+func TestConnectionDoneUnblocksSend(t *testing.T) {
+	tests := []struct {
+		name string
+		send func(*Connection, <-chan struct{}) string
+	}{
+		{name: "message", send: func(c *Connection, abort <-chan struct{}) string {
+			select {
+			case c.MessageChan <- protocol.Message{}:
+				return "sent"
+			case <-c.Done():
+				return "canceled"
+			case <-abort:
+				return "timed out"
+			}
+		}},
+		{name: "acknowledgement", send: func(c *Connection, abort <-chan struct{}) string {
+			select {
+			case c.AcknowledgedChan <- 7:
+				return "sent"
+			case <-c.Done():
+				return "canceled"
+			case <-abort:
+				return "timed out"
+			}
+		}},
+		{name: "heartbeat", send: func(c *Connection, abort <-chan struct{}) string {
+			select {
+			case c.HeartbeatChan <- struct{}{}:
+				return "sent"
+			case <-c.Done():
+				return "canceled"
+			case <-abort:
+				return "timed out"
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			connection, err := newConnection(context.Background(), ipcPath)
+			if err != nil {
+				t.Errorf("newConnection(ctx, %q) error = %v, want nil", ipcPath, err)
+				return
+			}
+			cleanupTestConnection(t, connection)
+			limitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			t.Cleanup(cancel)
+			started := make(chan struct{})
+			result := make(chan string, 1)
+			var group sync.WaitGroup
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				close(started)
+				result <- tt.send(connection, limitCtx.Done())
+			}()
+			<-started
+			if err := connection.Close(); err != nil {
+				t.Errorf("Close() while sending %s to queue %q error = %v, want nil", tt.name, ipcPath, err)
+			}
+			got := <-result
+			group.Wait()
+			if got != "canceled" {
+				t.Errorf("send %s without a reader after Close() for queue %q = %q, want %q", tt.name, ipcPath, got, "canceled")
+			}
+		})
 	}
 }
 
@@ -113,7 +265,7 @@ func TestNewConnectionSendsProtocolData(t *testing.T) {
 			t.Errorf("Drop() for inbound %q error = %v, want nil", ipcPath, err)
 		}
 	})
-	connection, err := newConnection(ipcPath)
+	connection, err := newConnection(context.Background(), ipcPath)
 	if err != nil {
 		t.Errorf("newConnection(%q) error = %v, want nil", ipcPath, err)
 		return
@@ -148,7 +300,7 @@ func TestNewConnectionRejectsInvalidData(t *testing.T) {
 	if ipcPath == "" {
 		return
 	}
-	connection, err := newConnection(ipcPath)
+	connection, err := newConnection(context.Background(), ipcPath)
 	if err != nil {
 		t.Errorf("newConnection(%q) error = %v, want nil", ipcPath, err)
 		return
@@ -166,6 +318,35 @@ func TestNewConnectionRejectsInvalidData(t *testing.T) {
 	}
 }
 
+// TestNewConnectionRejectsCanceledContext checks cancellation before opening IPC.
+func TestNewConnectionRejectsCanceledContext(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	expiredCtx, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	t.Cleanup(cancelExpired)
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceledCtx, wantErr: context.Canceled},
+		{name: "expired", ctx: expiredCtx, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := "/consumer-missing"
+			connection, err := newConnection(tt.ctx, ipcPath)
+			if connection != nil {
+				cleanupTestConnection(t, connection)
+				t.Errorf("newConnection(%s context, %q) = %p, want nil", tt.name, ipcPath, connection)
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("newConnection(%s context, %q) error = %v, want %v", tt.name, ipcPath, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestNewConnectionPropagatesQueueError checks invalid and missing queue errors.
 func TestNewConnectionPropagatesQueueError(t *testing.T) {
 	tests := []struct {
@@ -178,7 +359,7 @@ func TestNewConnectionPropagatesQueueError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			connection, err := newConnection(tt.ipcPath)
+			connection, err := newConnection(context.Background(), tt.ipcPath)
 			if connection != nil {
 				cleanupTestConnection(t, connection)
 				t.Errorf("newConnection(%q) connection = %p, want nil on initialization failure", tt.ipcPath, connection)
@@ -246,7 +427,7 @@ func TestConnectionCloseCancelsContext(t *testing.T) {
 			t.Cleanup(cancel)
 			otherCtx, cancelOther := context.WithCancel(context.Background())
 			t.Cleanup(cancelOther)
-			connection := &Connection{Cancel: cancel}
+			connection := &Connection{done: ctx.Done(), cancel: cancel}
 			if tt.alreadyCanceled {
 				cancel()
 			}
