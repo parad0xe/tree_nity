@@ -13,4 +13,6 @@ var (
 	ErrManagerUninitialized = errors.New("consumer manager is not initialized")
 	// ErrNotFound indicates that the requested consumer is absent from the manager.
 	ErrNotFound = errors.New("consumer not found")
+	// ErrAlreadyConnected indicates an active connection for the ID.
+	ErrAlreadyConnected = errors.New("consumer already connected")
 )

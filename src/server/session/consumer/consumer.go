@@ -1,36 +1,43 @@
 package consumer
 
-// Consumer combines stored metadata with the resources for one connection.
+import (
+	"sync"
+
+	"tree_nity/src/ipc/id"
+)
+
+// Consumer holds metadata and an optional connection; it must not be copied.
 type Consumer struct {
-	Info       Info
-	Connection *Connection
+	// Info is a caller-owned metadata snapshot.
+	Info Info
+
+	mu         sync.Mutex
+	connection *Connection
+	manager    *Manager
+	managedID  id.ID
 }
 
-func newConsumer(info *Info, connection *Connection) *Consumer {
+func newConsumer(info *Info) *Consumer {
 	return &Consumer{
-		Info:       *info,
-		Connection: connection,
+		Info: *info,
 	}
 }
 
-// Close cancels workers and closes the connection once; nil receivers are safe.
-func (c *Consumer) Close() error {
-	if c == nil {
+// Connection returns the current connection, or nil when disconnected.
+// Its use must be coordinated with DisconnectConsumer.
+func (c *Consumer) Connection() *Connection {
+	if err := c.Validate(); err != nil {
 		return nil
 	}
-	return c.Connection.Close()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connection
 }
 
-// Validate checks the consumer, its metadata, and its connection.
+// Validate checks the consumer and its metadata.
 func (c *Consumer) Validate() error {
 	if c == nil {
 		return ErrUninitialized
 	}
-	if err := c.Info.validate(); err != nil {
-		return err
-	}
-	if err := c.Connection.validate(); err != nil {
-		return err
-	}
-	return nil
+	return c.Info.validate()
 }
