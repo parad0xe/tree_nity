@@ -30,7 +30,7 @@ var commandParsers = map[string]func(args []string) (commands.Command, error){
 	"info":      commands.ParseInfo,
 	"subscribe": commands.ParseSubscribe,
 	"list":      commands.ParseList,
-	// TODO: add the create command.
+	"create":  commands.ParseCreate,
 }
 
 func main() {
