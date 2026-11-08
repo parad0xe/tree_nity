@@ -120,7 +120,7 @@ func (m *Manager) ConnectConsumer(ctx context.Context, c *Consumer) error {
 }
 
 // DisconnectConsumer closes a consumer connection and releases its ID.
-// The caller must first stop and wait for its workers.
+// In-flight sends finish before the ID is released.
 func (m *Manager) DisconnectConsumer(c *Consumer) error {
 	if err := m.validate(); err != nil {
 		return err

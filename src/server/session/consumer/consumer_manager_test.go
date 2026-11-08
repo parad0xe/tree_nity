@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -691,7 +690,7 @@ func TestManagerReconnectUpdatedContact(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
-	if err := c.Connection().Outbound.Send(ctx, data); err != nil {
+	if err := c.Connection().Send(ctx, data); err != nil {
 		t.Errorf("Send(%+v) after reconnecting consumer %q error = %v, want nil", data, original.id, err)
 		return
 	}
@@ -1277,8 +1276,8 @@ func TestManagerDisconnectAtFunctionReturn(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
-	if err := connection.Outbound.Send(ctx, data); !errors.Is(err, syscall.EBADF) {
-		t.Errorf("Send(%+v) to %q after deferred DisconnectConsumer() error = %v, want %v", data, ipcPath, err, syscall.EBADF)
+	if err := connection.Send(ctx, data); !errors.Is(err, context.Canceled) {
+		t.Errorf("Send(%+v) to %q after deferred DisconnectConsumer() error = %v, want %v", data, ipcPath, err, context.Canceled)
 	}
 	if err := manager.DisconnectConsumer(c); err != nil {
 		t.Errorf("repeated DisconnectConsumer() for consumer %q error = %v, want nil", original.id, err)
@@ -1391,7 +1390,7 @@ func TestManagerReconnect(t *testing.T) {
 		t.Errorf("Done() after reconnecting consumer %q is closed, want open", original.id)
 	default:
 	}
-	if second == first || second.Outbound == first.Outbound || second.MessageChan == first.MessageChan || second.AcknowledgedChan == first.AcknowledgedChan || second.HeartbeatChan == first.HeartbeatChan {
+	if second == first || second.outbound == first.outbound || second.MessageChan == first.MessageChan || second.AcknowledgedChan == first.AcknowledgedChan || second.HeartbeatChan == first.HeartbeatChan {
 		t.Errorf("ConnectConsumer() for consumer %q after DisconnectConsumer() reused resources from %p in %p, want fresh connection resources", original.id, first, second)
 	}
 	if c.Info != original {
@@ -1530,4 +1529,138 @@ func TestManagerDisconnectInvalidMetadata(t *testing.T) {
 		t.Errorf("active connection count after DisconnectConsumer(%q) with invalid metadata = %d, want 0", original.id, got)
 	}
 	connectTestConsumer(t, manager, original.id)
+}
+
+// TestManagerDisconnectWaitsForSend checks descriptor lifetime and ID reservation.
+func TestManagerDisconnectWaitsForSend(t *testing.T) {
+	tests := []struct {
+		name string
+		send func(*Connection, context.Context, protocol.Data) error
+	}{
+		{name: "Send", send: (*Connection).Send},
+		{name: "SendAhead", send: (*Connection).SendAhead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			original := Info{id: "consumer-1", topic: "events", ipcPath: ipcPath}
+			manager := newTestManager(t, original)
+			if err := manager.validate(); err != nil {
+				return
+			}
+			first := openTestConsumer(t, manager, original.id)
+			second := openTestConsumer(t, manager, original.id)
+			if first.Validate() != nil || second.Validate() != nil {
+				return
+			}
+			limitCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			t.Cleanup(cancel)
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			connection := newTestEncodedConnection(t, ipcPath, func(protocol.Data) ([]byte, error) {
+				close(entered)
+				select {
+				case <-release:
+					return []byte("in-flight frame"), nil
+				case <-limitCtx.Done():
+					return nil, limitCtx.Err()
+				}
+			})
+			if err := connection.validate(); err != nil {
+				return
+			}
+			first.connection = connection
+			if err := manager.activeConsumers.Insert(first.managedID, first); err != nil {
+				t.Errorf("reserve active consumer %q during setup error = %v, want nil", original.id, err)
+				return
+			}
+			var group sync.WaitGroup
+			t.Cleanup(func() {
+				unblock()
+				cancel()
+				group.Wait()
+			})
+			sent := make(chan error, 1)
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				sent <- tt.send(connection, limitCtx, protocol.Data{})
+			}()
+			select {
+			case <-entered:
+			case err := <-sent:
+				t.Errorf("%s() for %q returned %v before encoding, want an active send", tt.name, original.id, err)
+				return
+			}
+			closed := make(chan struct{})
+			var closeErr error
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				closeErr = manager.DisconnectConsumer(first)
+				close(closed)
+			}()
+			select {
+			case <-connection.Done():
+			case <-limitCtx.Done():
+				t.Errorf("Done() during DisconnectConsumer(%q) stayed open, want closed", original.id)
+				return
+			}
+			select {
+			case <-closed:
+				t.Errorf("DisconnectConsumer(%q) returned %v while %s was active, want it to wait", original.id, closeErr, tt.name)
+			default:
+			}
+			stale := make(chan error, 1)
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				stale <- tt.send(connection, context.Background(), protocol.Data{})
+			}()
+			select {
+			case err := <-stale:
+				if !errors.Is(err, context.Canceled) {
+					t.Errorf("new %s() for closing consumer %q error = %v, want %v", tt.name, original.id, err, context.Canceled)
+				}
+			case <-limitCtx.Done():
+				t.Errorf("new %s() for closing consumer %q blocked, want %v", tt.name, original.id, context.Canceled)
+				return
+			}
+			attempt := make(chan error, 1)
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				attempt <- manager.ConnectConsumer(context.Background(), second)
+			}()
+			select {
+			case err := <-attempt:
+				if !errors.Is(err, ErrAlreadyConnected) {
+					t.Errorf("ConnectConsumer(%q) while %s was active error = %v, want %v", original.id, tt.name, err, ErrAlreadyConnected)
+				}
+			case <-limitCtx.Done():
+				t.Errorf("ConnectConsumer(%q) blocked during %s, want %v", original.id, tt.name, ErrAlreadyConnected)
+				return
+			}
+			unblock()
+			if err := <-sent; err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("%s() for %q during disconnection error = %v, want nil or %v", tt.name, original.id, err, context.Canceled)
+			}
+			<-closed
+			group.Wait()
+			if closeErr != nil {
+				t.Errorf("DisconnectConsumer(%q) after %s completed error = %v, want nil", original.id, tt.name, closeErr)
+			}
+			if err := manager.ConnectConsumer(context.Background(), second); err != nil {
+				t.Errorf("ConnectConsumer(%q) after %s completed error = %v, want nil", original.id, tt.name, err)
+			}
+			if err := tt.send(connection, context.Background(), protocol.Data{}); !errors.Is(err, context.Canceled) {
+				t.Errorf("%s() on old connection for %q after reconnecting error = %v, want %v", tt.name, original.id, err, context.Canceled)
+			}
+		})
+	}
 }

@@ -42,6 +42,19 @@ func cleanupTestConnection(t *testing.T, connection *Connection) {
 	})
 }
 
+func newTestEncodedConnection(t *testing.T, ipcPath string, encode ipc.EncodeFunc) *Connection {
+	t.Helper()
+	outbound, err := ipc.NewOutbound(ipcPath, encode)
+	if err != nil {
+		t.Errorf("NewOutbound(%q) error = %v, want nil", ipcPath, err)
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	connection := &Connection{outbound: outbound, ctx: ctx, done: ctx.Done(), cancel: cancel}
+	cleanupTestConnection(t, connection)
+	return connection
+}
+
 // TestNewConnection checks channel initialization and independence between connections.
 func TestNewConnection(t *testing.T) {
 	ipcPath := newTestConsumerQueue(t)
@@ -76,8 +89,8 @@ func TestNewConnection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.connection.Outbound == nil {
-				t.Errorf("newConnection(%q).Outbound for %s connection = nil, want an initialized outbound", ipcPath, tt.name)
+			if tt.connection.outbound == nil {
+				t.Errorf("newConnection(%q).outbound for %s connection = nil, want an initialized outbound", ipcPath, tt.name)
 			}
 			if tt.connection.MessageChan == nil {
 				t.Errorf("newConnection(%q).MessageChan for %s connection = nil, want an initialized channel", ipcPath, tt.name)
@@ -280,7 +293,7 @@ func TestNewConnectionSendsProtocolData(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
-	if err := connection.Outbound.Send(ctx, want); err != nil {
+	if err := connection.Send(ctx, want); err != nil {
 		t.Errorf("Send(%+v) to %q error = %v, want nil", want, ipcPath, err)
 		return
 	}
@@ -309,7 +322,7 @@ func TestNewConnectionRejectsInvalidData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(cancel)
 	data := protocol.Data{}
-	err = connection.Outbound.Send(ctx, data)
+	err = connection.Send(ctx, data)
 	if !errors.Is(err, ipc.ErrInvalidData) {
 		t.Errorf("Send(%+v) to %q error = %v, want %v", data, ipcPath, err, ipc.ErrInvalidData)
 	}
@@ -459,7 +472,7 @@ func TestConnectionCloseOutbound(t *testing.T) {
 		t.Errorf("NewOutbound(%q) error = %v, want nil", ipcPath, err)
 		return
 	}
-	connection := &Connection{Outbound: outbound}
+	connection := &Connection{outbound: outbound}
 	cleanupTestConnection(t, connection)
 	for i := 0; i < 2; i++ {
 		if err := connection.Close(); err != nil {
@@ -476,5 +489,239 @@ func TestConnectionCloseOutbound(t *testing.T) {
 	}
 	if err := sender.Close(); err != nil {
 		t.Errorf("Close() for replacement sender %q error = %v, want nil", ipcPath, err)
+	}
+}
+
+// TestConnectionSendUninitialized checks missing connection resources.
+func TestConnectionSendUninitialized(t *testing.T) {
+	tests := []struct {
+		name       string
+		connection *Connection
+		send       func(*Connection, context.Context, protocol.Data) error
+	}{
+		{name: "Send nil", send: (*Connection).Send},
+		{name: "Send zero", connection: &Connection{}, send: (*Connection).Send},
+		{name: "SendAhead nil", send: (*Connection).SendAhead},
+		{name: "SendAhead zero", connection: &Connection{}, send: (*Connection).SendAhead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.send(tt.connection, context.Background(), protocol.Data{}); !errors.Is(err, ErrConnectionUninitialized) {
+				t.Errorf("%s with empty data error = %v, want %v", tt.name, err, ErrConnectionUninitialized)
+			}
+		})
+	}
+}
+
+// TestConnectionSendCanceledCaller checks per-send cancellation.
+func TestConnectionSendCanceledCaller(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	expiredCtx, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	t.Cleanup(cancelExpired)
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		send    func(*Connection, context.Context, protocol.Data) error
+		wantErr error
+	}{
+		{name: "Send canceled", ctx: canceledCtx, send: (*Connection).Send, wantErr: context.Canceled},
+		{name: "Send expired", ctx: expiredCtx, send: (*Connection).Send, wantErr: context.DeadlineExceeded},
+		{name: "SendAhead canceled", ctx: canceledCtx, send: (*Connection).SendAhead, wantErr: context.Canceled},
+		{name: "SendAhead expired", ctx: expiredCtx, send: (*Connection).SendAhead, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			connection, err := newConnection(context.Background(), ipcPath)
+			if err != nil {
+				t.Errorf("newConnection(ctx, %q) error = %v, want nil", ipcPath, err)
+				return
+			}
+			cleanupTestConnection(t, connection)
+			if err := tt.send(connection, tt.ctx, protocol.Data{}); !errors.Is(err, tt.wantErr) {
+				t.Errorf("%s for queue %q error = %v, want %v", tt.name, ipcPath, err, tt.wantErr)
+			}
+			select {
+			case <-connection.Done():
+				t.Errorf("Done() for queue %q after %s is closed, want open", ipcPath, tt.name)
+			default:
+			}
+		})
+	}
+}
+
+// TestConnectionCloseCancelsBlockedSend checks shutdown with a full queue.
+func TestConnectionCloseCancelsBlockedSend(t *testing.T) {
+	tests := []struct {
+		name string
+		send func(*Connection, context.Context, protocol.Data) error
+	}{
+		{name: "Send", send: (*Connection).Send},
+		{name: "SendAhead", send: (*Connection).SendAhead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" {
+				return
+			}
+			filler, err := mqueue.NewSender(ipcPath)
+			if err != nil {
+				t.Errorf("NewSender(%q) error = %v, want nil", ipcPath, err)
+				return
+			}
+			t.Cleanup(func() {
+				if err := filler.Close(); err != nil {
+					t.Errorf("Close() for queue filler %q error = %v, want nil", ipcPath, err)
+				}
+			})
+			for {
+				err := filler.TimedSend([]byte("fill"), time.Unix(1, 0))
+				if errors.Is(err, os.ErrDeadlineExceeded) {
+					break
+				}
+				if err != nil {
+					t.Errorf("TimedSend() while filling queue %q error = %v, want nil or %v", ipcPath, err, os.ErrDeadlineExceeded)
+					return
+				}
+			}
+			entered := make(chan struct{})
+			connection := newTestEncodedConnection(t, ipcPath, func(protocol.Data) ([]byte, error) {
+				close(entered)
+				return []byte("frame"), nil
+			})
+			if err := connection.validate(); err != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			t.Cleanup(cancel)
+			result := make(chan error, 1)
+			go func() { result <- tt.send(connection, ctx, protocol.Data{}) }()
+			select {
+			case <-entered:
+			case err := <-result:
+				t.Errorf("%s for full queue %q returned %v before encoding, want an active send", tt.name, ipcPath, err)
+				return
+			}
+			if err := connection.Close(); err != nil {
+				t.Errorf("Close() during %s for full queue %q error = %v, want nil", tt.name, ipcPath, err)
+			}
+			if err := <-result; !errors.Is(err, context.Canceled) {
+				t.Errorf("%s for full queue %q after Close() error = %v, want %v", tt.name, ipcPath, err, context.Canceled)
+			}
+		})
+	}
+}
+
+// TestConnectionClosedSendKeepsOtherQueueEmpty checks stale connection rejection.
+func TestConnectionClosedSendKeepsOtherQueueEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		send func(*Connection, context.Context, protocol.Data) error
+	}{
+		{name: "Send", send: (*Connection).Send},
+		{name: "SendAhead", send: (*Connection).SendAhead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldPath := newTestConsumerQueue(t, "old")
+			if oldPath == "" {
+				return
+			}
+			previous, err := newConnection(context.Background(), oldPath)
+			if err != nil {
+				t.Errorf("newConnection(ctx, %q) error = %v, want nil", oldPath, err)
+				return
+			}
+			cleanupTestConnection(t, previous)
+			newPath := fmt.Sprintf("/consumer.%s.%d.new", strings.ReplaceAll(t.Name(), "/", "."), os.Getpid())
+			receiver, err := mqueue.NewReceiver(newPath)
+			if err != nil {
+				t.Errorf("NewReceiver(%q) error = %v, want nil", newPath, err)
+				return
+			}
+			t.Cleanup(func() {
+				if err := receiver.Drop(); err != nil {
+					t.Errorf("Drop() for queue %q error = %v, want nil", newPath, err)
+				}
+			})
+			if err := previous.Close(); err != nil {
+				t.Errorf("Close() for old queue %q error = %v, want nil", oldPath, err)
+				return
+			}
+			current, err := newConnection(context.Background(), newPath)
+			if err != nil {
+				t.Errorf("newConnection(ctx, %q) error = %v, want nil", newPath, err)
+				return
+			}
+			cleanupTestConnection(t, current)
+			data, err := protocol.NewData(protocol.ConsumerHeartbeat, protocol.NewClientMetadata("old-consumer", oldPath), protocol.NewConsumerHeartbeatPayload())
+			if err != nil {
+				t.Errorf("NewData() for consumer %q at %q error = %v, want nil", "old-consumer", oldPath, err)
+				return
+			}
+			if err := tt.send(previous, context.Background(), data); !errors.Is(err, context.Canceled) {
+				t.Errorf("%s() for closed queue %q after opening %q error = %v, want %v", tt.name, oldPath, newPath, err, context.Canceled)
+			}
+			if frame, err := receiver.TimedRecv(time.Unix(1, 0)); !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("TimedRecv() from %q after stale %s = %q, error = %v, want no frame and %v", newPath, tt.name, frame, err, os.ErrDeadlineExceeded)
+			}
+		})
+	}
+}
+
+// TestConnectionSendAheadOvertakesQueuedFrames checks send priority.
+func TestConnectionSendAheadOvertakesQueuedFrames(t *testing.T) {
+	ipcPath := fmt.Sprintf("/consumer.%s.%d", t.Name(), os.Getpid())
+	receiver, err := mqueue.NewReceiver(ipcPath)
+	if err != nil {
+		t.Errorf("NewReceiver(%q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	t.Cleanup(func() {
+		if err := receiver.Drop(); err != nil {
+			t.Errorf("Drop() for queue %q error = %v, want nil", ipcPath, err)
+		}
+	})
+	connection, err := newConnection(context.Background(), ipcPath)
+	if err != nil {
+		t.Errorf("newConnection(ctx, %q) error = %v, want nil", ipcPath, err)
+		return
+	}
+	cleanupTestConnection(t, connection)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	frames := make([]protocol.Data, 3)
+	for i := range frames {
+		clientID := fmt.Sprintf("consumer-%d", i)
+		frames[i], err = protocol.NewData(protocol.ConsumerHeartbeat, protocol.NewClientMetadata(clientID, ipcPath), protocol.NewConsumerHeartbeatPayload())
+		if err != nil {
+			t.Errorf("NewData() for %q at %q error = %v, want nil", clientID, ipcPath, err)
+			return
+		}
+		if i == len(frames)-1 {
+			err = connection.SendAhead(ctx, frames[i])
+		} else {
+			err = connection.Send(ctx, frames[i])
+		}
+		if err != nil {
+			t.Errorf("send frame %d to %q error = %v, want nil", i, ipcPath, err)
+			return
+		}
+	}
+	for position, index := range []int{2, 0, 1} {
+		frame, err := receiver.TimedRecv(time.Now().Add(time.Second))
+		if err != nil {
+			t.Errorf("TimedRecv() for frame %d from %q error = %v, want nil", position, ipcPath, err)
+			return
+		}
+		got, err := protocol.Decode(frame)
+		if err != nil || !reflect.DeepEqual(got, frames[index]) {
+			t.Errorf("decoded frame %d from %q = %+v, error = %v, want %+v and nil", position, ipcPath, got, err, frames[index])
+		}
 	}
 }

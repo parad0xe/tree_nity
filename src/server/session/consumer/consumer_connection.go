@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -9,7 +10,7 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-// Connection holds the transient resources for one consumer connection.
+// Connection holds connection resources; it must not be copied.
 type Connection struct {
 	// MessageChan carries messages to deliver.
 	MessageChan chan protocol.Message
@@ -17,12 +18,14 @@ type Connection struct {
 	AcknowledgedChan chan uint32
 	// HeartbeatChan carries received heartbeats.
 	HeartbeatChan chan struct{}
-	// Outbound sends protocol frames to the consumer.
-	Outbound *ipc.Outbound
 
+	mu        sync.RWMutex
+	outbound  *ipc.Outbound
+	ctx       context.Context
 	done      <-chan struct{}
 	cancel    context.CancelFunc
 	closeOnce sync.Once
+	closeErr  error
 }
 
 // newConnection opens IPC with a cancellable context.
@@ -40,7 +43,8 @@ func newConnection(ctx context.Context, ipcPath string) (*Connection, error) {
 		MessageChan:      make(chan protocol.Message),
 		AcknowledgedChan: make(chan uint32),
 		HeartbeatChan:    make(chan struct{}),
-		Outbound:         outbound,
+		outbound:         outbound,
+		ctx:              connectionCtx,
 		done:             connectionCtx.Done(),
 		cancel:           cancel,
 	}, nil
@@ -54,7 +58,58 @@ func (c *Connection) Done() <-chan struct{} {
 	return c.done
 }
 
-// Close cancels the context and closes the outbound once.
+// Send sends a frame, returning a context error when canceled or closed.
+func (c *Connection) Send(ctx context.Context, data protocol.Data) error {
+	return c.send(ctx, data, false)
+}
+
+// SendAhead sends ahead of queued frames, with the same cancellation as Send.
+func (c *Connection) SendAhead(ctx context.Context, data protocol.Data) error {
+	return c.send(ctx, data, true)
+}
+
+func (c *Connection) send(ctx context.Context, data protocol.Data, ahead bool) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+	if c.ctx == nil {
+		return ErrConnectionUninitialized
+	}
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// Keep the descriptor open for the entire send.
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.outbound == nil {
+		return ErrConnectionUninitialized
+	}
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+
+	// Either context can interrupt a send waiting on a full queue.
+	sendCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(c.ctx, cancel)
+	defer stop()
+	defer cancel()
+	var err error
+	if ahead {
+		err = c.outbound.SendAhead(sendCtx, data)
+	} else {
+		err = c.outbound.Send(sendCtx, data)
+	}
+	if errors.Is(err, context.Canceled) && c.ctx.Err() != nil {
+		return c.ctx.Err()
+	}
+	return err
+}
+
+// Close cancels sends, waits for them, then closes IPC once.
 func (c *Connection) Close() error {
 	if err := c.validate(); err != nil {
 		return nil
@@ -62,15 +117,16 @@ func (c *Connection) Close() error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	var err error
 	c.closeOnce.Do(func() {
-		if c.Outbound != nil {
-			if outboundErr := c.Outbound.Close(); outboundErr != nil {
-				err = fmt.Errorf("close consumer outbound %q: %w", c.Outbound.IPCPath(), outboundErr)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.outbound != nil {
+			if outboundErr := c.outbound.Close(); outboundErr != nil {
+				c.closeErr = fmt.Errorf("close consumer outbound %q: %w", c.outbound.IPCPath(), outboundErr)
 			}
 		}
 	})
-	return err
+	return c.closeErr
 }
 
 func (c *Connection) validate() error {
