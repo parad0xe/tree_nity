@@ -28,6 +28,8 @@ type Env struct {
 	Inbound *ipc.Inbound
 	// Outbound sends the requests of the client to the server.
 	Outbound *ipc.Outbound
+	// Stdout receives the non-error output of the command.
+	Stdout io.Writer
 }
 
 // send sends data to the server.
@@ -83,6 +85,18 @@ func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode pro
 		return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
 	}
 	return reply, exitcode.Success, nil
+}
+
+// print writes raw bytes to the command output.
+func (env *Env) print(b []byte) error {
+	_, err := env.Stdout.Write(b)
+	return err
+}
+
+// println writes a line of text to the command output.
+func (env *Env) println(s string) error {
+	_, err := io.WriteString(env.Stdout, s+"\n")
+	return err
 }
 
 // Command is a client command parsed from the command line, ready to run.

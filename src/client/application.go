@@ -80,6 +80,7 @@ func (app *application) run(sigCtx context.Context, command commands.Command) (i
 		Shutdown: lifecycle.NewGracefulShutdown(sigCtx.Done()),
 		Inbound:  app.inbound,
 		Outbound: app.outbound,
+		Stdout:   os.Stdout,
 	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())
