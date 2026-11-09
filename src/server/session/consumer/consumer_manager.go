@@ -37,8 +37,8 @@ func (m *Manager) Len() uint64 {
 	return m.consumerTable.Len()
 }
 
-// GetOrCreateConsumer returns a disconnected consumer from stored metadata.
-func (m *Manager) GetOrCreateConsumer(id id.ID) (*Consumer, error) {
+// GetConsumer returns a disconnected snapshot of stored metadata.
+func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	if err := m.validate(); err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix stri
 	return m.consumerTable.Insert(info.id, info)
 }
 
-// ConnectConsumer opens a connection tied to ctx and reserves the consumer ID.
+// ConnectConsumer reserves the ID and opens its current queue, tied to ctx.
 func (m *Manager) ConnectConsumer(ctx context.Context, c *Consumer) error {
 	if err := m.validate(); err != nil {
 		return err
@@ -94,10 +94,12 @@ func (m *Manager) ConnectConsumer(ctx context.Context, c *Consumer) error {
 	}
 
 	m.mu.Lock()
-	if _, exists := m.consumerTable.Get(c.managedID); !exists {
+	consumerInfo, exists := m.consumerTable.Get(c.managedID)
+	if !exists {
 		m.mu.Unlock()
 		return ErrNotFound
 	}
+	ipcPath := consumerInfo.ipcPath
 	if _, exists := m.activeConsumers.Get(c.managedID); exists {
 		m.mu.Unlock()
 		return ErrAlreadyConnected
@@ -108,7 +110,7 @@ func (m *Manager) ConnectConsumer(ctx context.Context, c *Consumer) error {
 		return err
 	}
 
-	connection, err := newConnection(ctx, c.Info.ipcPath)
+	connection, err := newConnection(ctx, ipcPath)
 	if err != nil {
 		m.mu.Lock()
 		err = errors.Join(err, m.activeConsumers.Remove(c.managedID))
@@ -167,8 +169,8 @@ func (m *Manager) UpdateOffset(id id.ID, offset uint32) error {
 	return nil
 }
 
-// UpdateTopic changes the stored subscription topic, preserving other metadata.
-func (m *Manager) UpdateTopic(id id.ID, topic string) error {
+// UpdateSubscription changes the stored topic, prefix and queue name together.
+func (m *Manager) UpdateSubscription(id id.ID, topic, prefix, ipcPath string) error {
 	if err := m.validate(); err != nil {
 		return err
 	}
@@ -181,40 +183,8 @@ func (m *Manager) UpdateTopic(id id.ID, topic string) error {
 	}
 
 	info.topic = topic
-	return nil
-}
-
-// UpdateIPCPath changes the stored consumer queue name.
-func (m *Manager) UpdateIPCPath(id id.ID, ipcPath string) error {
-	if err := m.validate(); err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	info, exists := m.consumerTable.Get(id)
-	if !exists {
-		return ErrNotFound
-	}
-
-	info.ipcPath = ipcPath
-	return nil
-}
-
-// UpdatePrefix changes the stored subscription prefix.
-func (m *Manager) UpdatePrefix(id id.ID, prefix string) error {
-	if err := m.validate(); err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	info, exists := m.consumerTable.Get(id)
-	if !exists {
-		return ErrNotFound
-	}
-
 	info.prefix = prefix
+	info.ipcPath = ipcPath
 	return nil
 }
 

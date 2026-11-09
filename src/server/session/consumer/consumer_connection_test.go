@@ -42,17 +42,65 @@ func cleanupTestConnection(t *testing.T, connection *Connection) {
 	})
 }
 
-func newTestEncodedConnection(t *testing.T, ipcPath string, encode ipc.EncodeFunc) *Connection {
+func newTestEncodedConnection(t *testing.T, parent context.Context, ipcPath string, encode ipc.EncodeFunc) *Connection {
 	t.Helper()
 	outbound, err := ipc.NewOutbound(ipcPath, encode)
 	if err != nil {
 		t.Errorf("NewOutbound(%q) error = %v, want nil", ipcPath, err)
 		return nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	connection := &Connection{outbound: outbound, ctx: ctx, done: ctx.Done(), cancel: cancel}
+	ctx, cancel := context.WithCancel(parent)
+	connection := &Connection{outbound: outbound, done: ctx.Done(), cancel: cancel}
 	cleanupTestConnection(t, connection)
 	return connection
+}
+
+func fillTestConsumerQueue(t *testing.T, ipcPath string) bool {
+	t.Helper()
+	filler, err := mqueue.NewSender(ipcPath)
+	if err != nil {
+		t.Errorf("NewSender(%q) error = %v, want nil", ipcPath, err)
+		return false
+	}
+	t.Cleanup(func() {
+		if err := filler.Close(); err != nil {
+			t.Errorf("Close() for queue filler %q error = %v, want nil", ipcPath, err)
+		}
+	})
+	for {
+		err := filler.TimedSend([]byte("fill"), time.Unix(1, 0))
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return true
+		}
+		if err != nil {
+			t.Errorf("TimedSend() while filling queue %q error = %v, want nil or %v", ipcPath, err, os.ErrDeadlineExceeded)
+			return false
+		}
+	}
+}
+
+// TestConnectionClosed checks the shutdown signal without waiting.
+func TestConnectionClosed(t *testing.T) {
+	open := make(chan struct{})
+	stopped := make(chan struct{})
+	close(stopped)
+	tests := []struct {
+		name string
+		done <-chan struct{}
+		want bool
+	}{
+		{name: "no signal"},
+		{name: "open", done: open},
+		{name: "stopped", done: stopped, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			connection := &Connection{done: tt.done}
+			if got := connection.closed(); got != tt.want {
+				t.Errorf("closed() for %s signal = %t, want %t", tt.name, got, tt.want)
+			}
+		})
+	}
 }
 
 // TestNewConnection checks channel initialization and independence between connections.
@@ -569,28 +617,11 @@ func TestConnectionCloseCancelsBlockedSend(t *testing.T) {
 			if ipcPath == "" {
 				return
 			}
-			filler, err := mqueue.NewSender(ipcPath)
-			if err != nil {
-				t.Errorf("NewSender(%q) error = %v, want nil", ipcPath, err)
+			if !fillTestConsumerQueue(t, ipcPath) {
 				return
 			}
-			t.Cleanup(func() {
-				if err := filler.Close(); err != nil {
-					t.Errorf("Close() for queue filler %q error = %v, want nil", ipcPath, err)
-				}
-			})
-			for {
-				err := filler.TimedSend([]byte("fill"), time.Unix(1, 0))
-				if errors.Is(err, os.ErrDeadlineExceeded) {
-					break
-				}
-				if err != nil {
-					t.Errorf("TimedSend() while filling queue %q error = %v, want nil or %v", ipcPath, err, os.ErrDeadlineExceeded)
-					return
-				}
-			}
 			entered := make(chan struct{})
-			connection := newTestEncodedConnection(t, ipcPath, func(protocol.Data) ([]byte, error) {
+			connection := newTestEncodedConnection(t, context.Background(), ipcPath, func(protocol.Data) ([]byte, error) {
 				close(entered)
 				return []byte("frame"), nil
 			})
@@ -612,6 +643,49 @@ func TestConnectionCloseCancelsBlockedSend(t *testing.T) {
 			}
 			if err := <-result; !errors.Is(err, context.Canceled) {
 				t.Errorf("%s for full queue %q after Close() error = %v, want %v", tt.name, ipcPath, err, context.Canceled)
+			}
+		})
+	}
+}
+
+// TestConnectionParentCancellationStopsSend checks active send cancellation.
+func TestConnectionParentCancellationStopsSend(t *testing.T) {
+	tests := []struct {
+		name string
+		send func(*Connection, context.Context, protocol.Data) error
+	}{
+		{name: "Send", send: (*Connection).Send},
+		{name: "SendAhead", send: (*Connection).SendAhead},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			if ipcPath == "" || !fillTestConsumerQueue(t, ipcPath) {
+				return
+			}
+			parent, stop := context.WithCancel(context.Background())
+			t.Cleanup(stop)
+			entered := make(chan struct{})
+			connection := newTestEncodedConnection(t, parent, ipcPath, func(protocol.Data) ([]byte, error) {
+				close(entered)
+				return []byte("frame"), nil
+			})
+			if err := connection.validate(); err != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			t.Cleanup(cancel)
+			result := make(chan error, 1)
+			go func() { result <- tt.send(connection, ctx, protocol.Data{}) }()
+			select {
+			case <-entered:
+			case err := <-result:
+				t.Errorf("%s() for full queue %q returned %v before encoding, want an active send", tt.name, ipcPath, err)
+				return
+			}
+			stop()
+			if err := <-result; !errors.Is(err, context.Canceled) {
+				t.Errorf("%s() for queue %q after parent cancellation error = %v, want %v", tt.name, ipcPath, err, context.Canceled)
 			}
 		})
 	}

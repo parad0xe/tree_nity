@@ -2,7 +2,6 @@ package consumer
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -21,7 +20,6 @@ type Connection struct {
 
 	mu        sync.RWMutex
 	outbound  *ipc.Outbound
-	ctx       context.Context
 	done      <-chan struct{}
 	cancel    context.CancelFunc
 	closeOnce sync.Once
@@ -44,7 +42,6 @@ func newConnection(ctx context.Context, ipcPath string) (*Connection, error) {
 		AcknowledgedChan: make(chan uint32),
 		HeartbeatChan:    make(chan struct{}),
 		outbound:         outbound,
-		ctx:              connectionCtx,
 		done:             connectionCtx.Done(),
 		cancel:           cancel,
 	}, nil
@@ -72,11 +69,11 @@ func (c *Connection) send(ctx context.Context, data protocol.Data, ahead bool) e
 	if err := c.validate(); err != nil {
 		return err
 	}
-	if c.ctx == nil {
+	if c.done == nil {
 		return ErrConnectionUninitialized
 	}
-	if err := c.ctx.Err(); err != nil {
-		return err
+	if c.closed() {
+		return context.Canceled
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -88,25 +85,27 @@ func (c *Connection) send(ctx context.Context, data protocol.Data, ahead bool) e
 	if c.outbound == nil {
 		return ErrConnectionUninitialized
 	}
-	if err := c.ctx.Err(); err != nil {
-		return err
+	if c.closed() {
+		return context.Canceled
 	}
 
-	// Either context can interrupt a send waiting on a full queue.
 	sendCtx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(c.ctx, cancel)
-	defer stop()
 	defer cancel()
-	var err error
-	if ahead {
-		err = c.outbound.SendAhead(sendCtx, data)
-	} else {
-		err = c.outbound.Send(sendCtx, data)
+	errCh := make(chan error, 1)
+	go func() {
+		if ahead {
+			errCh <- c.outbound.SendAhead(sendCtx, data)
+		} else {
+			errCh <- c.outbound.Send(sendCtx, data)
+		}
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-c.done:
 	}
-	if errors.Is(err, context.Canceled) && c.ctx.Err() != nil {
-		return c.ctx.Err()
-	}
-	return err
+	cancel()
+	return <-errCh
 }
 
 // Close cancels sends, waits for them, then closes IPC once.
@@ -127,6 +126,16 @@ func (c *Connection) Close() error {
 		}
 	})
 	return c.closeErr
+}
+
+// closed reports whether shutdown was requested.
+func (c *Connection) closed() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Connection) validate() error {
