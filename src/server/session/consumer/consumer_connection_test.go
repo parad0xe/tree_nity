@@ -432,22 +432,19 @@ func TestNewConnectionPropagatesQueueError(t *testing.T) {
 	}
 }
 
-// TestConnectionValidate checks the missing-connection error.
+// TestConnectionValidate checks an allocated connection.
 func TestConnectionValidate(t *testing.T) {
-	tests := []struct {
-		name       string
-		connection *Connection
-		wantErr    error
-	}{
-		{name: "nil receiver", wantErr: ErrConnectionUninitialized},
-		{name: "zero value", connection: &Connection{}},
+	connection := &Connection{}
+	if err := connection.validate(); err != nil {
+		t.Errorf("validate() on %+v error = %v, want nil", connection, err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.connection.validate(); !errors.Is(err, tt.wantErr) {
-				t.Errorf("validate() on %+v error = %v, want %v", tt.connection, err, tt.wantErr)
-			}
-		})
+}
+
+// TestConnectionValidateRejectsNil checks the missing-connection error.
+func TestConnectionValidateRejectsNil(t *testing.T) {
+	var connection *Connection
+	if err := connection.validate(); !errors.Is(err, ErrConnectionUninitialized) {
+		t.Errorf("validate() on nil connection error = %v, want %v", err, ErrConnectionUninitialized)
 	}
 }
 
