@@ -9,7 +9,7 @@ type Topic struct {
 	messages          []protocol.Message
 	messageOffsetTrie MessageOffsetTrie
 	consumerTrie      ConsumerTrie
-	newConsumerChan   chan consumer.Consumer
+	newConsumerChan   chan *consumer.Consumer
 	shuttingDownChan  chan struct{}
 	newMessageChan    chan struct{}
 }
