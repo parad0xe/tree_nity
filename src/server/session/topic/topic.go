@@ -21,7 +21,7 @@ type Topic struct {
 	waitGroup         sync.WaitGroup
 	messageOffsetTrie *MessageOffsetTrie
 	consumerTrie      *ConsumerTrie
-	consumerMap       *hashmap.HashMap[id.ID, *consumer.Consumer]
+	consumerMap       *hashmap.HashMap[id.ID, *subscription]
 	newMessageCond    *sync.Cond
 }
 
@@ -32,7 +32,7 @@ func NewTopic(ctx context.Context) *Topic {
 	t := &Topic{
 		messageOffsetTrie: NewMessageOffsetTrie(),
 		consumerTrie:      NewConsumerTrie(),
-		consumerMap:       hashmap.NewHashMap[id.ID, *consumer.Consumer](),
+		consumerMap:       hashmap.NewHashMap[id.ID, *subscription](),
 	}
 	t.newMessageCond = sync.NewCond(&t.mu)
 	// TODO: start a single run goroutine when message processing is implemented.
@@ -48,6 +48,7 @@ func NewTopic(ctx context.Context) *Topic {
 // consumer, invalid ID, or invalid connection. An already canceled or expired ctx
 // returns its context error before either index is changed.
 // Failed index updates trigger rollback before returning their errors.
+// An error closing the previous connection is returned after the update is applied.
 func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -59,14 +60,18 @@ func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error 
 		return fmt.Errorf("%w: %v", ErrInvalidConsumer, err)
 	}
 
-	newConsumer := *c
+	newConsumer := &subscription{info: c.Info, connection: c.Connection()}
+	if err := newConsumer.validate(); err != nil {
+		return err
+	}
 	consumerCTX, cancel := context.WithCancel(ctx)
+	newConsumer.cancel = cancel
 
 	t.mu.Lock()
 
-	oldConnection, err := t.registerConsumer(consumerCTX, cancel, &newConsumer)
+	oldConsumer, err := t.registerConsumer(consumerCTX, newConsumer)
 	if err == nil {
-		t.startConsumerWorkers(consumerCTX, &newConsumer)
+		t.startConsumerWorkers(consumerCTX, newConsumer)
 	}
 
 	t.mu.Unlock()
@@ -76,8 +81,11 @@ func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error 
 		return err
 	}
 
-	if oldConnection != nil {
-		oldConnection.Close()
+	if oldConsumer != nil {
+		oldConsumer.cancel()
+		if err := oldConsumer.connection.Close(); err != nil {
+			return fmt.Errorf("close previous consumer connection: %w", err)
+		}
 	}
 
 	return nil
@@ -86,31 +94,31 @@ func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error 
 // registerConsumer updates the subscription and consumer indexes.
 // The new consumer must already be validated.
 // The caller must hold t.mu and start the new workers before unlocking.
-// Only successful updates return the previous connection for closure.
+// Only successful updates return the previous subscription for cancellation and closure.
 // The new consumer keeps its connection even when a later update
 // replaces the stored consumer.
-func (t *Topic) registerConsumer(ctx context.Context, cancel context.CancelFunc, newConsumer *consumer.Consumer) (*consumer.Connection, error) {
+func (t *Topic) registerConsumer(ctx context.Context, newConsumer *subscription) (*subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	consumerID := newConsumer.Info.ID()
+	consumerID := newConsumer.info.ID()
 	if storedConsumer, exists := t.consumerMap.Get(consumerID); exists {
-		if err := storedConsumer.Validate(); err != nil {
+		if err := storedConsumer.validate(); err != nil {
 			return nil, fmt.Errorf("%w: stored consumer %q: %v", ErrInvalidConsumer, consumerID, err)
 		}
-		return t.updateConsumer(consumerID, storedConsumer, newConsumer, cancel)
+		return t.updateConsumer(consumerID, storedConsumer, newConsumer)
 	}
 
-	if err := t.insertConsumer(consumerID, newConsumer, cancel); err != nil {
+	if err := t.insertConsumer(consumerID, newConsumer); err != nil {
 		return nil, err
 	}
 
 	return nil, nil
 }
 
-func (t *Topic) insertConsumer(consumerID id.ID, newConsumer *consumer.Consumer, cancel context.CancelFunc) error {
-	prefix := newConsumer.Info.Prefix()
+func (t *Topic) insertConsumer(consumerID id.ID, newConsumer *subscription) error {
+	prefix := newConsumer.info.Prefix()
 
 	if err := t.consumerTrie.Subscribe(prefix, consumerID); err != nil {
 		return fmt.Errorf("subscribe consumer %q: %w", consumerID, err)
@@ -122,12 +130,11 @@ func (t *Topic) insertConsumer(consumerID id.ID, newConsumer *consumer.Consumer,
 		return fmt.Errorf("insert consumer %q: %w", consumerID, errors.Join(err, rollbackErr))
 	}
 
-	newConsumer.Connection.Cancel = cancel
 	return nil
 }
 
-func (t *Topic) updateConsumer(consumerID id.ID, storedConsumer *consumer.Consumer, newConsumer *consumer.Consumer, cancel context.CancelFunc) (*consumer.Connection, error) {
-	if storedConsumer.Connection == newConsumer.Connection {
+func (t *Topic) updateConsumer(consumerID id.ID, storedConsumer *subscription, newConsumer *subscription) (*subscription, error) {
+	if storedConsumer.connection == newConsumer.connection {
 		return nil, fmt.Errorf("%w: connection already attached for consumer %q", ErrInvalidConsumer, consumerID)
 	}
 
@@ -135,17 +142,16 @@ func (t *Topic) updateConsumer(consumerID id.ID, storedConsumer *consumer.Consum
 		return nil, err
 	}
 
-	oldConnection := storedConsumer.Connection
+	oldConsumer := *storedConsumer
 
-	newConsumer.Connection.Cancel = cancel
 	*storedConsumer = *newConsumer
 
-	return oldConnection, nil
+	return &oldConsumer, nil
 }
 
-func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *consumer.Consumer, newConsumer *consumer.Consumer) error {
-	oldPrefix := storedConsumer.Info.Prefix()
-	newPrefix := newConsumer.Info.Prefix()
+func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *subscription, newConsumer *subscription) error {
+	oldPrefix := storedConsumer.info.Prefix()
+	newPrefix := newConsumer.info.Prefix()
 
 	if oldPrefix == newPrefix {
 		return nil
@@ -163,13 +169,14 @@ func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *con
 	return nil
 }
 
-func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *consumer.Consumer) {
+func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription) {
 	t.waitGroup.Add(2)
 
 	workDone := func() {
 		defer t.waitGroup.Done()
-		newConsumer.Connection.Cancel()
-		_ = t.RemoveConsumer(newConsumer)
+		newConsumer.cancel()
+		// Worker cleanup is best-effort; explicit removals report cleanup errors.
+		_ = t.removeConsumer(newConsumer)
 	}
 
 	go func() {
@@ -186,7 +193,8 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *consumer.
 // RemoveConsumer detaches a consumer from both indexes and requests its routines to stop.
 // It returns ErrUninitialized for an unusable topic or ErrInvalidConsumer for an
 // invalid or stored consumer.
-// Failed removals trigger rollback and leave the connection unclosed.
+// Failed index removals trigger rollback and leave the connection unclosed.
+// Connection closure errors are returned after the subscription is removed.
 func (t *Topic) RemoveConsumer(c *consumer.Consumer) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -195,15 +203,26 @@ func (t *Topic) RemoveConsumer(c *consumer.Consumer) error {
 		return fmt.Errorf("%w: %v", ErrInvalidConsumer, err)
 	}
 
+	return t.removeConsumer(&subscription{info: c.Info, connection: c.Connection()})
+}
+
+func (t *Topic) removeConsumer(c *subscription) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+
 	t.mu.Lock()
-	connection, err := t.unregisterConsumer(c)
+	removed, err := t.unregisterConsumer(c)
 	t.mu.Unlock()
 
 	if err != nil {
 		return err
 	}
-	if connection != nil {
-		connection.Close()
+	if removed != nil {
+		removed.cancel()
+		if err := removed.connection.Close(); err != nil {
+			return fmt.Errorf("close consumer connection: %w", err)
+		}
 	}
 
 	return nil
@@ -212,22 +231,22 @@ func (t *Topic) RemoveConsumer(c *consumer.Consumer) error {
 // unregisterConsumer removes a consumer from both indexes.
 // The caller must hold t.mu.
 // Only the connection currently registered for the consumer may be removed.
-// It returns the removed connection for closure after unlocking.
-func (t *Topic) unregisterConsumer(c *consumer.Consumer) (*consumer.Connection, error) {
-	consumerID := c.Info.ID()
+// It returns the removed subscription for cancellation and closure after unlocking.
+func (t *Topic) unregisterConsumer(c *subscription) (*subscription, error) {
+	consumerID := c.info.ID()
 
 	storedConsumer, exists := t.consumerMap.Get(consumerID)
 	if !exists {
 		return nil, nil
 	}
-	if err := storedConsumer.Validate(); err != nil {
+	if err := storedConsumer.validate(); err != nil {
 		return nil, fmt.Errorf("%w: stored consumer %q: %v", ErrInvalidConsumer, consumerID, err)
 	}
-	if storedConsumer.Connection != c.Connection {
+	if storedConsumer.connection != c.connection {
 		return nil, nil
 	}
 
-	prefix := storedConsumer.Info.Prefix()
+	prefix := storedConsumer.info.Prefix()
 
 	if err := t.consumerTrie.Unsubscribe(prefix, consumerID); err != nil {
 		return nil, fmt.Errorf("unsubscribe consumer %q: %w", consumerID, err)
@@ -238,7 +257,7 @@ func (t *Topic) unregisterConsumer(c *consumer.Consumer) (*consumer.Connection, 
 		return nil, fmt.Errorf("remove consumer %q: %w", consumerID, errors.Join(err, rollbackErr))
 	}
 
-	return storedConsumer.Connection, nil
+	return storedConsumer, nil
 }
 
 // ProduceMessage is the entry point for submitting a new message to the topic loop.
@@ -261,11 +280,11 @@ func (t *Topic) run() {
 	// and select matching consumers with consumerTrie. Release shared-state
 	// locks before forwarding each message to their Connection.MessageChan.
 	// Wake condition waits on cancellation and make channel sends cancellable,
-	// then cancel every attached consumer's Connection and wait for both loops.
+	// then cancel every attached subscription and wait for both loops.
 }
 
 // deliverMessages is the sending goroutine's entry point for one subscribed consumer.
-func (t *Topic) deliverMessages(ctx context.Context, consumer *consumer.Consumer) {
+func (t *Topic) deliverMessages(ctx context.Context, consumer *subscription) {
 	// TODO: replay messages from the consumer's stored offset, then receive
 	// targeted messages from Connection.MessageChan and send them through its IPC.
 	// Process Connection.AcknowledgedChan using the next offset to consume.
@@ -273,11 +292,14 @@ func (t *Topic) deliverMessages(ctx context.Context, consumer *consumer.Consumer
 	// consumerMap under t.mu, only while this connection is still current.
 	// Stop on consumer removal, disconnection, or ctx cancellation.
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-consumer.connection.Done():
+	}
 }
 
 // listenHeartbeat is the heartbeat goroutine's entry point for one subscribed consumer.
-func (t *Topic) listenHeartbeat(ctx context.Context, consumer *consumer.Consumer) {
+func (t *Topic) listenHeartbeat(ctx context.Context, consumer *subscription) {
 	// TODO: reset the consumer's timeout on each heartbeat and stop the
 	// connection if that timeout expires.
 
@@ -286,7 +308,10 @@ func (t *Topic) listenHeartbeat(ctx context.Context, consumer *consumer.Consumer
 		case <-ctx.Done():
 			return
 
-		case _, ok := <-consumer.Connection.HeartbeatChan:
+		case <-consumer.connection.Done():
+			return
+
+		case _, ok := <-consumer.connection.HeartbeatChan:
 			if !ok {
 				return
 			}
