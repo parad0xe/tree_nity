@@ -319,6 +319,26 @@ func TestRunPassesApplicationQueuesToCommand(t *testing.T) {
 	}
 }
 
+func TestRunPassesStdoutToCommand(t *testing.T) {
+	app := &application{
+		inbound:  &ipc.Inbound{},
+		outbound: &ipc.Outbound{},
+	}
+	var got commands.Env
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		got = env
+		return exitcode.Success, nil
+	})
+
+	if _, err := app.run(context.Background(), command); err != nil {
+		t.Errorf("run() error = %v, want nil", err)
+	}
+
+	if got.Stdout != os.Stdout {
+		t.Errorf("run() env.Stdout = %v, want %v", got.Stdout, os.Stdout)
+	}
+}
+
 func TestRunDoesNotRequestShutdownWithoutSignal(t *testing.T) {
 	app := &application{}
 	var requested bool
