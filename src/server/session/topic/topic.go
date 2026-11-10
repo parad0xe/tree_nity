@@ -25,9 +25,8 @@ type Topic struct {
 	newMessageCond    *sync.Cond
 }
 
-// NewTopic returns a topic with initialized indexes.
-// ctx must be non-nil and is reserved for the message-processing loop,
-// which remains to be implemented.
+// NewTopic initializes the indexes without starting message processing.
+// ctx is reserved for the future processing loop.
 func NewTopic(ctx context.Context) *Topic {
 	t := &Topic{
 		messageOffsetTrie: NewMessageOffsetTrie(),
@@ -39,16 +38,12 @@ func NewTopic(ctx context.Context) *Topic {
 	return t
 }
 
-// UpsertConsumer adds or updates a consumer's subscription, metadata, and connection.
-// ctx must be non-nil. Each call starts two workers with a child context of ctx.
-// The topic copies the metadata and shares the supplied connection. A successful
-// update cancels the previous workers, which keep their original connection.
-// A worker returning cancels its sibling through their shared child context.
-// It returns ErrUninitialized for an unusable topic, ErrInvalidConsumer for a nil
-// consumer, invalid ID, or invalid connection. An already canceled or expired ctx
-// returns its context error before either index is changed.
-// Failed index updates trigger rollback before returning their errors.
-// An error closing the previous connection is returned after the update is applied.
+// UpsertConsumer registers a metadata snapshot and c's current connection.
+// Registration starts two workers under non-nil ctx, cancels replaced workers,
+// and closes their connection. An already stopped ctx returns its context error.
+// It returns ErrUninitialized for an unusable topic or ErrInvalidConsumer for
+// invalid consumers. Index failures attempt rollback; errors closing the old
+// connection are returned after registration.
 func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -91,12 +86,9 @@ func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error 
 	return nil
 }
 
-// registerConsumer updates the subscription and consumer indexes.
-// The new consumer must already be validated.
-// The caller must hold t.mu and start the new workers before unlocking.
-// Only successful updates return the previous subscription for cancellation and closure.
-// The new consumer keeps its connection even when a later update
-// replaces the stored consumer.
+// registerConsumer updates both indexes and returns a replaced subscription.
+// newConsumer must be valid. The caller must hold t.mu and start the new
+// workers before unlocking.
 func (t *Topic) registerConsumer(ctx context.Context, newConsumer *subscription) (*subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -169,6 +161,7 @@ func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *sub
 	return nil
 }
 
+// startConsumerWorkers starts two workers; either exiting cancels its sibling.
 func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription) {
 	t.waitGroup.Add(2)
 
@@ -190,11 +183,11 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 	}()
 }
 
-// RemoveConsumer detaches a consumer from both indexes and requests its routines to stop.
-// It returns ErrUninitialized for an unusable topic or ErrInvalidConsumer for an
-// invalid or stored consumer.
-// Failed index removals trigger rollback and leave the connection unclosed.
-// Connection closure errors are returned after the subscription is removed.
+// RemoveConsumer detaches and closes c's registered connection.
+// Absent subscriptions and superseded connections are ignored.
+// It returns ErrUninitialized for an unusable topic or ErrInvalidConsumer for
+// invalid consumers or stored subscriptions. Index failures attempt rollback;
+// connection closure errors are returned after removal.
 func (t *Topic) RemoveConsumer(c *consumer.Consumer) error {
 	if err := t.validate(); err != nil {
 		return err

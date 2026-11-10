@@ -9,6 +9,7 @@ import (
 	"tree_nity/src/server/utils/hashmap"
 )
 
+// Manager holds state for topic-management handlers, which are not implemented yet.
 type Manager struct {
 	consumerManager consumer.Manager
 	topicMap        hashmap.HashMap[id.ID, *Topic]
@@ -27,19 +28,10 @@ func (m *Manager) CreateTopic(metadata protocol.ClientMetadata, payload protocol
 	// topic in topicMap, and send the creation confirmation to the client.
 }
 
+// NewSubscription is the entry point for subscription requests.
 func (m *Manager) NewSubscription(metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) {
-	// topic exists ? (topic manager method)
-
-	// consumer exists ? get consumerManager
-	// if not create
-	// if yes -> change metadata
-	// if changement imply changing topic
-
-	// if needed to add to the topic :
-	// get topic from topicMap
-
-	// method UPSERT from Topic
-	// ->
+	// TODO: check the topic, resolve the consumer and update its metadata,
+	// detach any previous topic subscription, then call Topic.UpsertConsumer.
 }
 
 // CheckTopic is the entry point for topic existence checks.
