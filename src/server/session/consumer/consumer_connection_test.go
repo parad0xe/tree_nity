@@ -332,8 +332,8 @@ func TestNewConnectionSendsProtocolData(t *testing.T) {
 		return
 	}
 	cleanupTestConnection(t, connection)
-	metadata := protocol.NewClientMetadata("consumer-1", ipcPath)
-	payload := protocol.NewConsumerHeartbeatPayload()
+	metadata := protocol.NewClientMetadata(ipcPath)
+	payload := protocol.NewConsumerHeartbeatPayload("consumer-1")
 	want, err := protocol.NewData(protocol.ConsumerHeartbeat, metadata, payload)
 	if err != nil {
 		t.Errorf("NewData(%v, %+v, %+v) error = %v, want nil", protocol.ConsumerHeartbeat, metadata, payload, err)
@@ -730,7 +730,7 @@ func TestConnectionClosedSendKeepsOtherQueueEmpty(t *testing.T) {
 				return
 			}
 			cleanupTestConnection(t, current)
-			data, err := protocol.NewData(protocol.ConsumerHeartbeat, protocol.NewClientMetadata("old-consumer", oldPath), protocol.NewConsumerHeartbeatPayload())
+			data, err := protocol.NewData(protocol.ConsumerHeartbeat, protocol.NewClientMetadata(oldPath), protocol.NewConsumerHeartbeatPayload("old-consumer"))
 			if err != nil {
 				t.Errorf("NewData() for consumer %q at %q error = %v, want nil", "old-consumer", oldPath, err)
 				return
@@ -769,7 +769,7 @@ func TestConnectionSendAheadOvertakesQueuedFrames(t *testing.T) {
 	frames := make([]protocol.Data, 3)
 	for i := range frames {
 		clientID := fmt.Sprintf("consumer-%d", i)
-		frames[i], err = protocol.NewData(protocol.ConsumerHeartbeat, protocol.NewClientMetadata(clientID, ipcPath), protocol.NewConsumerHeartbeatPayload())
+		frames[i], err = protocol.NewData(protocol.ConsumerHeartbeat, protocol.NewClientMetadata(ipcPath), protocol.NewConsumerHeartbeatPayload(clientID))
 		if err != nil {
 			t.Errorf("NewData() for %q at %q error = %v, want nil", clientID, ipcPath, err)
 			return

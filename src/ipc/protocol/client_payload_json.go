@@ -49,6 +49,8 @@ func (p createTopicPayloadJSON) validate() error {
 }
 
 type consumerInfoPayloadJSON struct {
+	// ClientID is required and must match ^[a-zA-Z0-9_.-]{1,32}$.
+	ClientID *string `json:"clientId"`
 	// Subscriber is the required consumer name to query.
 	Subscriber *string `json:"subscriber"`
 }
@@ -57,7 +59,7 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	payload := &ConsumerInfoPayload{subscriber: *p.Subscriber}
+	payload := &ConsumerInfoPayload{clientID: *p.ClientID, subscriber: *p.Subscriber}
 	if err := payload.validate(); err != nil {
 		return nil, err
 	}
@@ -65,6 +67,9 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p consumerInfoPayloadJSON) validate() error {
+	if p.ClientID == nil {
+		return ErrMissingClientID
+	}
 	if p.Subscriber == nil {
 		return ErrMissingSubscriber
 	}
@@ -72,6 +77,8 @@ func (p consumerInfoPayloadJSON) validate() error {
 }
 
 type topicSubscriptionPayloadJSON struct {
+	// ClientID is required and must match ^[a-zA-Z0-9_.-]{1,32}$.
+	ClientID *string `json:"clientId"`
 	// Topic must match ^[a-zA-Z0-9_.-]{1,32}$.
 	Topic *string `json:"topic"`
 	// Prefix is required; empty matches all messages.
@@ -84,7 +91,7 @@ func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	payload := NewTopicSubscriptionPayload(*p.Topic, *p.Prefix, p.Offset)
+	payload := NewTopicSubscriptionPayload(*p.ClientID, *p.Topic, *p.Prefix, p.Offset)
 	if err := payload.validate(); err != nil {
 		return nil, err
 	}
@@ -92,6 +99,9 @@ func (p topicSubscriptionPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p topicSubscriptionPayloadJSON) validate() error {
+	if p.ClientID == nil {
+		return ErrMissingClientID
+	}
 	if p.Topic == nil {
 		return ErrMissingTopic
 	}
@@ -102,6 +112,8 @@ func (p topicSubscriptionPayloadJSON) validate() error {
 }
 
 type acknowledgementPayloadJSON struct {
+	// ClientID is required and must match ^[a-zA-Z0-9_.-]{1,32}$.
+	ClientID *string `json:"clientId"`
 	// Offset is required, including zero.
 	Offset *uint32 `json:"offset"`
 }
@@ -110,7 +122,7 @@ func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	payload := &AcknowledgementPayload{offset: *p.Offset}
+	payload := &AcknowledgementPayload{clientID: *p.ClientID, offset: *p.Offset}
 	if err := payload.validate(); err != nil {
 		return nil, err
 	}
@@ -118,6 +130,9 @@ func (p acknowledgementPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p acknowledgementPayloadJSON) validate() error {
+	if p.ClientID == nil {
+		return ErrMissingClientID
+	}
 	if p.Offset == nil {
 		return ErrMissingOffset
 	}
@@ -181,28 +196,48 @@ func (p produceMessagePayloadJSON) validate() error {
 	return nil
 }
 
-type consumerDisconnectPayloadJSON struct{}
+type consumerDisconnectPayloadJSON struct {
+	// ClientID is required and must match ^[a-zA-Z0-9_.-]{1,32}$.
+	ClientID *string `json:"clientId"`
+}
 
 func (p consumerDisconnectPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &ConsumerDisconnectPayload{}, nil
+	payload := &ConsumerDisconnectPayload{clientID: *p.ClientID}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p consumerDisconnectPayloadJSON) validate() error {
+	if p.ClientID == nil {
+		return ErrMissingClientID
+	}
 	return nil
 }
 
-type consumerHeartbeatPayloadJSON struct{}
+type consumerHeartbeatPayloadJSON struct {
+	// ClientID is required and must match ^[a-zA-Z0-9_.-]{1,32}$.
+	ClientID *string `json:"clientId"`
+}
 
 func (p consumerHeartbeatPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return &ConsumerHeartbeatPayload{}, nil
+	payload := &ConsumerHeartbeatPayload{clientID: *p.ClientID}
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (p consumerHeartbeatPayloadJSON) validate() error {
+	if p.ClientID == nil {
+		return ErrMissingClientID
+	}
 	return nil
 }

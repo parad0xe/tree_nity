@@ -625,8 +625,8 @@ func TestManagerReconnectUpdatedSubscription(t *testing.T) {
 	if previous.Info != original {
 		t.Errorf("previous consumer %q metadata after contact updates = %+v, want %+v", original.id, previous.Info, original)
 	}
-	metadata := protocol.NewClientMetadata(string(original.id), wantInfo.ipcPath)
-	payload := protocol.NewConsumerHeartbeatPayload()
+	metadata := protocol.NewClientMetadata(wantInfo.ipcPath)
+	payload := protocol.NewConsumerHeartbeatPayload(string(original.id))
 	data, err := protocol.NewData(protocol.ConsumerHeartbeat, metadata, payload)
 	if err != nil {
 		t.Errorf("NewData(%v, %+v, %+v) error = %v, want nil", protocol.ConsumerHeartbeat, metadata, payload, err)
@@ -1216,8 +1216,8 @@ func TestManagerDisconnectAtFunctionReturn(t *testing.T) {
 	if connection == nil {
 		return
 	}
-	metadata := protocol.NewClientMetadata(string(original.id), ipcPath)
-	payload := protocol.NewConsumerHeartbeatPayload()
+	metadata := protocol.NewClientMetadata(ipcPath)
+	payload := protocol.NewConsumerHeartbeatPayload(string(original.id))
 	data, err := protocol.NewData(protocol.ConsumerHeartbeat, metadata, payload)
 	if err != nil {
 		t.Errorf("NewData(%v, %+v, %+v) error = %v, want nil", protocol.ConsumerHeartbeat, metadata, payload, err)

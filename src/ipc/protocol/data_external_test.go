@@ -23,24 +23,24 @@ func TestNewData(t *testing.T) {
 	}{
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), json: `{}`},
 		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), json: `{"topic":"orders"}`},
-		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1"), json: `{"subscriber":"consumer-1"}`},
-		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("orders", "", nil), json: `{"topic":"orders","prefix":""}`},
-		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(0), json: `{"offset":0}`},
+		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), json: `{"clientId":"client-1","subscriber":"consumer-1"}`},
+		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "orders", "", nil), json: `{"clientId":"client-1","topic":"orders","prefix":""}`},
+		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 0), json: `{"clientId":"client-1","offset":0}`},
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), json: `{"topic":"orders"}`},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
 			payload: protocol.NewProduceMessagePayload("orders", protocol.NewMessage([]byte("key"), []byte("value"))),
 			json:    `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`,
 		},
-		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload(), json: `{}`},
-		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload(), json: `{}`},
+		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), json: `{"clientId":"client-1"}`},
+		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), json: `{"clientId":"client-1"}`},
 	}
 	emitters := []struct {
 		name     string
 		metadata protocol.Metadata
 		emitter  protocol.Emitter
 	}{
-		{name: "client", metadata: protocol.NewClientMetadata("client-1", "/client-1"), emitter: protocol.Client},
+		{name: "client", metadata: protocol.NewClientMetadata("/client-1"), emitter: protocol.Client},
 	}
 	for _, p := range payloads {
 		for _, e := range emitters {
@@ -76,8 +76,8 @@ func TestNewData(t *testing.T) {
 					t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
 				}
 				if metadata, ok := decoded.Metadata().(*protocol.ClientMetadata); ok {
-					if metadata.ClientID() != "client-1" || metadata.ClientIPC() != "/client-1" {
-						t.Errorf("Decode(%q) client metadata = (%q, %q), want (%q, %q)", frame, metadata.ClientID(), metadata.ClientIPC(), "client-1", "/client-1")
+					if metadata.ClientIPC() != "/client-1" {
+						t.Errorf("Decode(%q).ClientIPC() = %q, want %q", frame, metadata.ClientIPC(), "/client-1")
 					}
 				}
 			})
@@ -97,23 +97,23 @@ func TestNewDataRejectsInvalidInput(t *testing.T) {
 		{name: "nil metadata", payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrMissingMetadata},
 		{name: "nil client metadata", metadata: (*protocol.ClientMetadata)(nil), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrMissingMetadata},
 		{name: "nil server metadata", metadata: (*protocol.ServerMetadata)(nil), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrMissingMetadata},
-		{name: "nil payload", metadata: protocol.NewClientMetadata("client-1", "/client-1"), wantErr: protocol.ErrMissingPayload},
-		{name: "nil payload pointer", opcode: protocol.CreateTopic, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: (*protocol.CreateTopicPayload)(nil), wantErr: protocol.ErrMissingPayload},
-		{name: "negative opcode", opcode: -1, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrUnknownOpcode},
-		{name: "unknown opcode", opcode: 9, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrUnknownOpcode},
-		{name: "incompatible payload", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
-		{name: "invalid client ID", metadata: protocol.NewClientMetadata("\xff", "/client"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
-		{name: "invalid client IPC", metadata: protocol.NewClientMetadata("client", "\xff"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
+		{name: "nil payload", metadata: protocol.NewClientMetadata("/client-1"), wantErr: protocol.ErrMissingPayload},
+		{name: "nil payload pointer", opcode: protocol.CreateTopic, metadata: protocol.NewClientMetadata("/client-1"), payload: (*protocol.CreateTopicPayload)(nil), wantErr: protocol.ErrMissingPayload},
+		{name: "negative opcode", opcode: -1, metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrUnknownOpcode},
+		{name: "unknown opcode", opcode: 9, metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrUnknownOpcode},
+		{name: "incompatible payload", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid client ID", opcode: protocol.ConsumerHeartbeat, metadata: protocol.NewClientMetadata("/client"), payload: protocol.NewConsumerHeartbeatPayload("\xff"), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid client IPC", metadata: protocol.NewClientMetadata("\xff"), payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidMetadata},
 		{
-			name: "empty produce topic", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
+			name: "empty produce topic", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("/client-1"),
 			payload: protocol.NewProduceMessagePayload("", protocol.NewMessage([]byte("key"), []byte("value"))), wantErr: protocol.ErrInvalidPayload,
 		},
 		{
-			name: "invalid produce topic", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
+			name: "invalid produce topic", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("/client-1"),
 			payload: protocol.NewProduceMessagePayload("user/events", protocol.NewMessage([]byte("key"), []byte("value"))), wantErr: protocol.ErrInvalidPayload,
 		},
 		{
-			name: "oversized message", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("client-1", "/client-1"),
+			name: "oversized message", opcode: protocol.ProduceMessage, metadata: protocol.NewClientMetadata("/client-1"),
 			payload: protocol.NewProduceMessagePayload("orders", protocol.NewMessage([]byte("k"), []byte(strings.Repeat("v", protocol.MessageSize)))), wantErr: protocol.ErrMessageTooLarge,
 		},
 	}
@@ -137,17 +137,17 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 	}{
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
-		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1"), wantErr: protocol.ErrInvalidPayload},
-		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("orders", "", nil), wantErr: protocol.ErrInvalidPayload},
-		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(0), wantErr: protocol.ErrInvalidPayload},
+		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: protocol.ErrInvalidPayload},
+		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "orders", "", nil), wantErr: protocol.ErrInvalidPayload},
+		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 0), wantErr: protocol.ErrInvalidPayload},
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
 		{
 			name: "produce message", opcode: protocol.ProduceMessage,
 			payload: protocol.NewProduceMessagePayload("orders", protocol.NewMessage([]byte("key"), []byte("value"))),
 			wantErr: protocol.ErrInvalidPayload,
 		},
-		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload(), wantErr: protocol.ErrInvalidPayload},
-		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload(), wantErr: protocol.ErrUnknownOpcode},
+		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: protocol.ErrInvalidPayload},
+		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: protocol.ErrUnknownOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,7 +186,7 @@ func TestProduceMessagePayloadAccessors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			message := protocol.NewMessage(tt.key, tt.value)
 			payload := protocol.NewProduceMessagePayload(tt.topic, message)
-			data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata("client-1", "/client-1"), payload)
+			data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata("/client-1"), payload)
 			if err != nil {
 				t.Errorf("NewData(ProduceMessage, client, %#v) error = %v, want nil", payload, err)
 				return
@@ -218,14 +218,14 @@ func TestProduceMessagePayloadAccessors(t *testing.T) {
 func TestProduceMessageBinaryFrame(t *testing.T) {
 	message := protocol.NewMessage([]byte("user"), []byte{0x00, 0xff, 0x10})
 	payload := protocol.NewProduceMessagePayload("user_events", message)
-	metadata := protocol.NewClientMetadata("client-1", "/client-1")
+	metadata := protocol.NewClientMetadata("/client-1")
 	data, err := protocol.NewData(protocol.ProduceMessage, metadata, payload)
 	if err != nil {
 		t.Errorf("NewData(ProduceMessage, %#v, %#v) error = %v, want nil", metadata, payload, err)
 		return
 	}
 	frame, err := protocol.Encode(data)
-	wantFrame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"user_events","message":{"key":"dXNlcg==","value":"AP8Q"}}}`
+	wantFrame := `{"opcode":6,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topic":"user_events","message":{"key":"dXNlcg==","value":"AP8Q"}}}`
 	if err != nil || string(frame) != wantFrame {
 		t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 	}
@@ -322,7 +322,7 @@ func TestNewDataRejectsInvalidErrorReply(t *testing.T) {
 		{name: "negative kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(-1, "error"), wantErr: protocol.ErrInvalidPayload},
 		{name: "unknown kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(5, "error"), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid UTF-8 reason", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "\xff"), wantErr: protocol.ErrInvalidPayload},
-		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "error"), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "error"), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -349,14 +349,14 @@ func TestCreateTopicPayloadRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := protocol.NewCreateTopicPayload(tt.topic)
-			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			metadata := protocol.NewClientMetadata("/client-1")
 			data, err := protocol.NewData(protocol.CreateTopic, metadata, payload)
 			if err != nil {
 				t.Errorf("NewData(CreateTopic, %#v, topic=%q) error = %v, want nil", metadata, tt.topic, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":%q}}`, tt.topic)
+			wantFrame := fmt.Sprintf(`{"opcode":1,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topic":%q}}`, tt.topic)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -396,7 +396,7 @@ func TestCreateTopicRejectsInvalidTopicNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := protocol.NewCreateTopicPayload(tt.topic)
-			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			metadata := protocol.NewClientMetadata("/client-1")
 			data, err := protocol.NewData(protocol.CreateTopic, metadata, payload)
 			if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(data, protocol.Data{}) {
 				t.Errorf("NewData(CreateTopic, %#v, topic=%q) = %#v, error = %v, want zero Data and %v", metadata, tt.topic, data, err, protocol.ErrInvalidPayload)
@@ -406,7 +406,7 @@ func TestCreateTopicRejectsInvalidTopicNames(t *testing.T) {
 				t.Errorf("Marshal(%q) error = %v, want nil", tt.topic, err)
 				return
 			}
-			frame := `{"opcode":1,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":` + string(topicJSON) + `}}`
+			frame := `{"opcode":1,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topic":` + string(topicJSON) + `}}`
 			decoded, err := protocol.Decode([]byte(frame))
 			if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(decoded, protocol.Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, decoded, err, protocol.ErrInvalidPayload)
@@ -448,7 +448,7 @@ func TestCreateTopicReplyRoundTrip(t *testing.T) {
 
 // TestNewDataRejectsCreateTopicReplyFromClient checks the opcode shared with CreateTopic.
 func TestNewDataRejectsCreateTopicReplyFromClient(t *testing.T) {
-	metadata := protocol.NewClientMetadata("client-1", "/client-1")
+	metadata := protocol.NewClientMetadata("/client-1")
 	payload := protocol.NewCreateTopicReplyPayload()
 	got, err := protocol.NewData(protocol.CreateTopicReply, metadata, payload)
 	if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(got, protocol.Data{}) {
@@ -559,7 +559,7 @@ func TestNewDataRejectsInvalidListTopicReply(t *testing.T) {
 		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.ListTopicReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "invalid topic", metadata: protocol.NewServerMetadata(), payload: protocol.NewListTopicReplyPayload([]string{"orders", "user/events"}), wantErr: protocol.ErrInvalidPayload},
-		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewListTopicReplyPayload([]string{"orders"}), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewListTopicReplyPayload([]string{"orders"}), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -586,14 +586,14 @@ func TestCheckTopicPayloadRoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := protocol.NewCheckTopicPayload(tt.topic)
-			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			metadata := protocol.NewClientMetadata("/client-1")
 			data, err := protocol.NewData(protocol.CheckTopic, metadata, payload)
 			if err != nil {
 				t.Errorf("NewData(CheckTopic, %#v, topic=%q) error = %v, want nil", metadata, tt.topic, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":%q}}`, tt.topic)
+			wantFrame := fmt.Sprintf(`{"opcode":5,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topic":%q}}`, tt.topic)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -633,7 +633,7 @@ func TestNewDataRejectsInvalidCheckTopicNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := protocol.NewCheckTopicPayload(tt.topic)
-			metadata := protocol.NewClientMetadata("client-1", "/client-1")
+			metadata := protocol.NewClientMetadata("/client-1")
 			got, err := protocol.NewData(protocol.CheckTopic, metadata, payload)
 			if !errors.Is(err, protocol.ErrInvalidPayload) || !reflect.DeepEqual(got, protocol.Data{}) {
 				t.Errorf("NewData(CheckTopic, %#v, topic=%q) = %#v, error = %v, want zero Data and %v", metadata, tt.topic, got, err, protocol.ErrInvalidPayload)
@@ -684,28 +684,28 @@ func TestTopicSubscriptionPayloadRoundTrip(t *testing.T) {
 		offset *uint32
 		json   string
 	}{
-		{name: "resume with all messages", topic: "orders", json: `{"topic":"orders","prefix":""}`},
-		{name: "replay from zero", topic: "orders", offset: &zero, json: `{"topic":"orders","prefix":"","offset":0}`},
-		{name: "minimal", topic: "t", prefix: "k", offset: &one, json: `{"topic":"t","prefix":"k","offset":1}`},
-		{name: "maximum signed offset", topic: "orders", offset: &signedMaximum, json: `{"topic":"orders","prefix":"","offset":2147483647}`},
-		{name: "above signed limit", topic: "orders", offset: &aboveSignedMaximum, json: `{"topic":"orders","prefix":"","offset":2147483648}`},
-		{name: "maximum offset", topic: "orders", offset: &maximum, json: `{"topic":"orders","prefix":"","offset":4294967295}`},
-		{name: "maximum topic length", topic: strings.Repeat("t", 32), json: `{"topic":"` + strings.Repeat("t", 32) + `","prefix":""}`},
-		{name: "mixed topic characters", topic: "User_09.events-1", json: `{"topic":"User_09.events-1","prefix":""}`},
-		{name: "unicode prefix", topic: "orders", prefix: "événement/", json: `{"topic":"orders","prefix":"événement/"}`},
-		{name: "escaped prefix", topic: "orders", prefix: "\"\\\n\x00", json: `{"topic":"orders","prefix":"\"\\\n\u0000"}`},
-		{name: "large prefix", topic: "orders", prefix: strings.Repeat("p", 4096), json: `{"topic":"orders","prefix":"` + strings.Repeat("p", 4096) + `"}`},
+		{name: "resume with all messages", topic: "orders", json: `{"clientId":"client-1","topic":"orders","prefix":""}`},
+		{name: "replay from zero", topic: "orders", offset: &zero, json: `{"clientId":"client-1","topic":"orders","prefix":"","offset":0}`},
+		{name: "minimal", topic: "t", prefix: "k", offset: &one, json: `{"clientId":"client-1","topic":"t","prefix":"k","offset":1}`},
+		{name: "maximum signed offset", topic: "orders", offset: &signedMaximum, json: `{"clientId":"client-1","topic":"orders","prefix":"","offset":2147483647}`},
+		{name: "above signed limit", topic: "orders", offset: &aboveSignedMaximum, json: `{"clientId":"client-1","topic":"orders","prefix":"","offset":2147483648}`},
+		{name: "maximum offset", topic: "orders", offset: &maximum, json: `{"clientId":"client-1","topic":"orders","prefix":"","offset":4294967295}`},
+		{name: "maximum topic length", topic: strings.Repeat("t", 32), json: `{"clientId":"client-1","topic":"` + strings.Repeat("t", 32) + `","prefix":""}`},
+		{name: "mixed topic characters", topic: "User_09.events-1", json: `{"clientId":"client-1","topic":"User_09.events-1","prefix":""}`},
+		{name: "unicode prefix", topic: "orders", prefix: "événement/", json: `{"clientId":"client-1","topic":"orders","prefix":"événement/"}`},
+		{name: "escaped prefix", topic: "orders", prefix: "\"\\\n\x00", json: `{"clientId":"client-1","topic":"orders","prefix":"\"\\\n\u0000"}`},
+		{name: "large prefix", topic: "orders", prefix: strings.Repeat("p", 4096), json: `{"clientId":"client-1","topic":"orders","prefix":"` + strings.Repeat("p", 4096) + `"}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := protocol.NewTopicSubscriptionPayload(tt.topic, tt.prefix, tt.offset)
-			data, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata("client-1", "/client-1"), payload)
+			payload := protocol.NewTopicSubscriptionPayload("client-1", tt.topic, tt.prefix, tt.offset)
+			data, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata("/client-1"), payload)
 			if err != nil {
 				t.Errorf("NewData(TopicSubscription, client, %#v) error = %v, want nil", payload, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.json + `}`
+			wantFrame := `{"opcode":3,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":` + tt.json + `}`
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -734,7 +734,7 @@ func TestTopicSubscriptionPayloadRoundTrip(t *testing.T) {
 
 // TestTopicSubscriptionNullOffsetResumes checks that null and absence have the same meaning.
 func TestTopicSubscriptionNullOffsetResumes(t *testing.T) {
-	frame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","prefix":"","offset":null}}`
+	frame := `{"opcode":3,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1","topic":"orders","prefix":"","offset":null}}`
 	data, err := protocol.Decode([]byte(frame))
 	if err != nil {
 		t.Errorf("Decode(%q) error = %v, want nil", frame, err)
@@ -749,7 +749,7 @@ func TestTopicSubscriptionNullOffsetResumes(t *testing.T) {
 		t.Errorf("Decode(%q).Offset() value = %d, want nil", frame, *offset)
 	}
 	encoded, err := protocol.Encode(data)
-	wantFrame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","prefix":""}}`
+	wantFrame := `{"opcode":3,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1","topic":"orders","prefix":""}}`
 	if err != nil || string(encoded) != wantFrame {
 		t.Errorf("Encode(Decode(%q)) = %q, error = %v, want %q and nil", frame, encoded, err, wantFrame)
 	}
@@ -758,7 +758,7 @@ func TestTopicSubscriptionNullOffsetResumes(t *testing.T) {
 // TestTopicSubscriptionPayloadCopiesOffset checks ownership of the constructor argument.
 func TestTopicSubscriptionPayloadCopiesOffset(t *testing.T) {
 	offset := uint32(42)
-	payload := protocol.NewTopicSubscriptionPayload("orders", "", &offset)
+	payload := protocol.NewTopicSubscriptionPayload("client-1", "orders", "", &offset)
 	offset = 99
 	got := payload.Offset()
 	if got == nil {
@@ -771,7 +771,7 @@ func TestTopicSubscriptionPayloadCopiesOffset(t *testing.T) {
 // TestTopicSubscriptionPayloadOffsetReturnsCopy checks ownership of the accessor result.
 func TestTopicSubscriptionPayloadOffsetReturnsCopy(t *testing.T) {
 	offset := uint32(42)
-	payload := protocol.NewTopicSubscriptionPayload("orders", "", &offset)
+	payload := protocol.NewTopicSubscriptionPayload("client-1", "orders", "", &offset)
 	returned := payload.Offset()
 	if returned == nil {
 		t.Errorf("NewTopicSubscriptionPayload(orders, empty, 42).Offset() = nil, want 42")
@@ -795,12 +795,12 @@ func TestNewDataRejectsInvalidTopicSubscription(t *testing.T) {
 	}{
 		{name: "nil payload", wantErr: protocol.ErrMissingPayload},
 		{name: "zero value", payload: &protocol.TopicSubscriptionPayload{}, wantErr: protocol.ErrInvalidPayload},
-		{name: "invalid topic", payload: protocol.NewTopicSubscriptionPayload("user/events", "", nil), wantErr: protocol.ErrInvalidPayload},
-		{name: "invalid UTF-8 prefix", payload: protocol.NewTopicSubscriptionPayload("orders", "\xff", nil), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid topic", payload: protocol.NewTopicSubscriptionPayload("client-1", "user/events", "", nil), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid UTF-8 prefix", payload: protocol.NewTopicSubscriptionPayload("client-1", "orders", "\xff", nil), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata("client-1", "/client-1"), tt.payload)
+			got, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata("/client-1"), tt.payload)
 			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
 				t.Errorf("NewData(TopicSubscription, client, %#v) = %#v, error = %v, want zero Data and %v", tt.payload, got, err, tt.wantErr)
 			}
@@ -848,7 +848,7 @@ func TestNewDataRejectsInvalidCheckTopicReply(t *testing.T) {
 	}{
 		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.CheckTopicReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
-		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewCheckTopicReplyPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewCheckTopicReplyPayload(), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

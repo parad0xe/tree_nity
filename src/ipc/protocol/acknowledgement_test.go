@@ -17,8 +17,8 @@ func TestAcknowledgementPayloadToJSONRejectsInvalidInput(t *testing.T) {
 		wantErr error
 	}{
 		{name: "nil payload", emitter: Client, opcode: Acknowledgement, wantErr: ErrMissingPayload},
-		{name: "wrong opcode", emitter: Client, opcode: ListTopic, payload: &AcknowledgementPayload{}, wantErr: ErrInvalidPayload},
-		{name: "server emitter", emitter: Server, opcode: CheckTopicReply, payload: &AcknowledgementPayload{}, wantErr: ErrInvalidPayload},
+		{name: "wrong opcode", emitter: Client, opcode: ListTopic, payload: &AcknowledgementPayload{clientID: "client-1"}, wantErr: ErrInvalidPayload},
+		{name: "server emitter", emitter: Server, opcode: CheckTopicReply, payload: &AcknowledgementPayload{clientID: "client-1"}, wantErr: ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -38,19 +38,19 @@ func TestDecodeRejectsInvalidAcknowledgement(t *testing.T) {
 		wantErr       error
 		wantTypeError bool
 	}{
-		{name: "missing offset", payload: `{}`, wantErr: ErrMissingOffset},
-		{name: "null offset", payload: `{"offset":null}`, wantErr: ErrMissingOffset},
-		{name: "negative offset", payload: `{"offset":-1}`, wantTypeError: true},
-		{name: "large negative offset", payload: `{"offset":-2147483648}`, wantTypeError: true},
-		{name: "overflow offset", payload: `{"offset":4294967296}`, wantTypeError: true},
-		{name: "underflow offset", payload: `{"offset":-2147483649}`, wantTypeError: true},
-		{name: "fractional offset", payload: `{"offset":0.5}`},
-		{name: "string offset", payload: `{"offset":"0"}`},
-		{name: "boolean offset", payload: `{"offset":false}`},
-		{name: "array offset", payload: `{"offset":[]}`},
-		{name: "object offset", payload: `{"offset":{}}`},
-		{name: "unknown field", payload: `{"offset":0,"extra":true}`},
-		{name: "nested offset", payload: `{"message":{"offset":1}}`},
+		{name: "missing offset", payload: `{"clientId":"client-1"}`, wantErr: ErrMissingOffset},
+		{name: "null offset", payload: `{"clientId":"client-1","offset":null}`, wantErr: ErrMissingOffset},
+		{name: "negative offset", payload: `{"clientId":"client-1","offset":-1}`, wantTypeError: true},
+		{name: "large negative offset", payload: `{"clientId":"client-1","offset":-2147483648}`, wantTypeError: true},
+		{name: "overflow offset", payload: `{"clientId":"client-1","offset":4294967296}`, wantTypeError: true},
+		{name: "underflow offset", payload: `{"clientId":"client-1","offset":-2147483649}`, wantTypeError: true},
+		{name: "fractional offset", payload: `{"clientId":"client-1","offset":0.5}`},
+		{name: "string offset", payload: `{"clientId":"client-1","offset":"0"}`},
+		{name: "boolean offset", payload: `{"clientId":"client-1","offset":false}`},
+		{name: "array offset", payload: `{"clientId":"client-1","offset":[]}`},
+		{name: "object offset", payload: `{"clientId":"client-1","offset":{}}`},
+		{name: "unknown field", payload: `{"clientId":"client-1","offset":0,"extra":true}`},
+		{name: "nested offset", payload: `{"clientId":"client-1","message":{"offset":1}}`},
 		{name: "null payload", payload: `null`, wantErr: ErrMissingPayload},
 		{name: "array payload", payload: `[]`},
 		{name: "string payload", payload: `"ack"`},
@@ -59,7 +59,7 @@ func TestDecodeRejectsInvalidAcknowledgement(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame := `{"opcode":4,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.payload + `}`
+			frame := `{"opcode":4,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":` + tt.payload + `}`
 			got, err := Decode([]byte(frame))
 			if err == nil || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)

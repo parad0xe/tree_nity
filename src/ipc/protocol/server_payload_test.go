@@ -130,7 +130,7 @@ func TestDecodeRejectsInvalidErrorReply(t *testing.T) {
 
 // TestDecodeRejectsErrorReplyFromClient checks the opcode shared with CheckTopic.
 func TestDecodeRejectsErrorReplyFromClient(t *testing.T) {
-	frame := `{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"kind":0,"reason":"error"}}`
+	frame := `{"opcode":5,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"kind":0,"reason":"error"}}`
 	got, err := Decode([]byte(frame))
 	if !errors.Is(err, ErrUnknownField) || !reflect.DeepEqual(got, Data{}) {
 		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, got, err, ErrUnknownField)
@@ -256,7 +256,7 @@ func TestDecodeRejectsInvalidListTopicReply(t *testing.T) {
 
 // TestDecodeRejectsListTopicReplyFromClient checks the opcode shared with ListTopic.
 func TestDecodeRejectsListTopicReplyFromClient(t *testing.T) {
-	frame := `{"opcode":0,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topics":[]}}`
+	frame := `{"opcode":0,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topics":[]}}`
 	got, err := Decode([]byte(frame))
 	if !errors.Is(err, ErrUnknownField) || !reflect.DeepEqual(got, Data{}) {
 		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, got, err, ErrUnknownField)
@@ -319,7 +319,7 @@ func TestDecodeRejectsInvalidTopicSubscriptionReply(t *testing.T) {
 
 // TestDecodeRejectsTopicSubscriptionReplyFromClient checks the opcode shared with the request.
 func TestDecodeRejectsTopicSubscriptionReplyFromClient(t *testing.T) {
-	frame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{}}`
+	frame := `{"opcode":3,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1"}}`
 	got, err := Decode([]byte(frame))
 	if !errors.Is(err, ErrMissingTopic) || !reflect.DeepEqual(got, Data{}) {
 		t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and %v", frame, got, err, ErrMissingTopic)
