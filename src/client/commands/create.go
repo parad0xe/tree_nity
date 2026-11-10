@@ -33,9 +33,8 @@ func ParseCreate(args []string) (Command, error) {
 
 // Execute asks the server to create the topic.
 func (cmd *createCommand) Execute(ctx context.Context, env Env) (int, error) {
-	data, err := protocol.NewData(
+	data, err := env.createData(
 		protocol.CreateTopic,
-		protocol.NewClientMetadata(env.Inbound.IPCPath()),
 		protocol.NewCreateTopicPayload(string(cmd.topic)),
 	)
 	if err != nil {

@@ -32,6 +32,11 @@ type Env struct {
 	Stdout io.Writer
 }
 
+// createData returns a client request.
+func (env *Env) createData(opcode protocol.Opcode, payload protocol.Payload) (protocol.Data, error) {
+	return protocol.NewData(opcode, protocol.NewClientMetadata(env.Inbound.IPCPath()), payload)
+}
+
 // send sends data to the server.
 func (env *Env) send(ctx context.Context, data protocol.Data) (int, error) {
 	sendCtx, sendCancel := context.WithTimeout(ctx, sendTimeout)
