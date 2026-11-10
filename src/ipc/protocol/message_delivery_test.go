@@ -105,7 +105,7 @@ func TestDecodeRejectsProduceMessageOffset(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"","value":"","offset":` + tt.offset + `}}}`
+			frame := `{"opcode":6,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"","value":"","offset":` + tt.offset + `}}}`
 			got, err := Decode([]byte(frame))
 			if err == nil || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an unknown field error", frame, got, err)

@@ -67,19 +67,25 @@ func (p *CreateTopicPayload) validate() error {
 	return nil
 }
 
-// ConsumerInfoPayload identifies the subscriber to query.
+// ConsumerInfoPayload identifies the requesting client and subscriber to query.
 type ConsumerInfoPayload struct {
+	clientID   string
 	subscriber string
 }
 
 // NewConsumerInfoPayload returns an info request for subscriber.
-func NewConsumerInfoPayload(subscriber string) *ConsumerInfoPayload {
-	return &ConsumerInfoPayload{subscriber: subscriber}
+func NewConsumerInfoPayload(clientID, subscriber string) *ConsumerInfoPayload {
+	return &ConsumerInfoPayload{clientID: clientID, subscriber: subscriber}
 }
 
 // Subscriber returns the queried consumer's name.
 func (p ConsumerInfoPayload) Subscriber() string {
 	return p.subscriber
+}
+
+// ClientID returns the client's identifier.
+func (p ConsumerInfoPayload) ClientID() string {
+	return p.clientID
 }
 
 func (p *ConsumerInfoPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -89,12 +95,15 @@ func (p *ConsumerInfoPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSO
 	if emitter != Client || opcode != ConsumerInfo {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &consumerInfoPayloadJSON{Subscriber: &p.subscriber}, nil
+	return &consumerInfoPayloadJSON{ClientID: &p.clientID, Subscriber: &p.subscriber}, nil
 }
 
 func (p *ConsumerInfoPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
 	}
 	if err := id.ID(p.subscriber).Validate(); err != nil {
 		return fmt.Errorf("%w: invalid subscriber %q", ErrInvalidPayload, p.subscriber)
@@ -102,16 +111,17 @@ func (p *ConsumerInfoPayload) validate() error {
 	return nil
 }
 
-// TopicSubscriptionPayload carries a topic, key prefix, and optional uint32 offset.
+// TopicSubscriptionPayload carries a client ID, topic, key prefix, and optional uint32 offset.
 type TopicSubscriptionPayload struct {
-	topic  string
-	prefix string
-	offset *uint32
+	clientID string
+	topic    string
+	prefix   string
+	offset   *uint32
 }
 
 // NewTopicSubscriptionPayload returns a subscription request with a copy of offset.
-func NewTopicSubscriptionPayload(topic, prefix string, offset *uint32) *TopicSubscriptionPayload {
-	payload := &TopicSubscriptionPayload{topic: topic, prefix: prefix}
+func NewTopicSubscriptionPayload(clientID, topic, prefix string, offset *uint32) *TopicSubscriptionPayload {
+	payload := &TopicSubscriptionPayload{clientID: clientID, topic: topic, prefix: prefix}
 	if offset != nil {
 		start := *offset
 		payload.offset = &start
@@ -138,6 +148,11 @@ func (p TopicSubscriptionPayload) Offset() *uint32 {
 	return &start
 }
 
+// ClientID returns the client's identifier.
+func (p TopicSubscriptionPayload) ClientID() string {
+	return p.clientID
+}
+
 func (p *TopicSubscriptionPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
@@ -145,12 +160,15 @@ func (p *TopicSubscriptionPayload) toJSON(emitter Emitter, opcode Opcode) (paylo
 	if emitter != Client || opcode != TopicSubscription {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &topicSubscriptionPayloadJSON{Topic: &p.topic, Prefix: &p.prefix, Offset: p.offset}, nil
+	return &topicSubscriptionPayloadJSON{ClientID: &p.clientID, Topic: &p.topic, Prefix: &p.prefix, Offset: p.offset}, nil
 }
 
 func (p *TopicSubscriptionPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
 	}
 	if err := id.ID(p.topic).Validate(); err != nil {
 		return fmt.Errorf("%w: invalid topic %q", ErrInvalidPayload, p.topic)
@@ -161,19 +179,25 @@ func (p *TopicSubscriptionPayload) validate() error {
 	return nil
 }
 
-// AcknowledgementPayload carries the next uint32 offset to consume (received offset + 1).
+// AcknowledgementPayload carries a client ID and the next uint32 offset to consume (received offset + 1).
 type AcknowledgementPayload struct {
-	offset uint32
+	clientID string
+	offset   uint32
 }
 
 // NewAcknowledgementPayload returns an acknowledgement for the next offset.
-func NewAcknowledgementPayload(offset uint32) *AcknowledgementPayload {
-	return &AcknowledgementPayload{offset: offset}
+func NewAcknowledgementPayload(clientID string, offset uint32) *AcknowledgementPayload {
+	return &AcknowledgementPayload{clientID: clientID, offset: offset}
 }
 
 // Offset returns the next offset to consume.
 func (p AcknowledgementPayload) Offset() uint32 {
 	return p.offset
+}
+
+// ClientID returns the client's identifier.
+func (p AcknowledgementPayload) ClientID() string {
+	return p.clientID
 }
 
 func (p *AcknowledgementPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -183,12 +207,15 @@ func (p *AcknowledgementPayload) toJSON(emitter Emitter, opcode Opcode) (payload
 	if emitter != Client || opcode != Acknowledgement {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &acknowledgementPayloadJSON{Offset: &p.offset}, nil
+	return &acknowledgementPayloadJSON{ClientID: &p.clientID, Offset: &p.offset}, nil
 }
 
 func (p *AcknowledgementPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
 	}
 	return nil
 }
@@ -274,11 +301,18 @@ func (p *ProduceMessagePayload) validate() error {
 }
 
 // ConsumerDisconnectPayload signals the end of a subscription.
-type ConsumerDisconnectPayload struct{}
+type ConsumerDisconnectPayload struct {
+	clientID string
+}
 
 // NewConsumerDisconnectPayload returns a disconnection request.
-func NewConsumerDisconnectPayload() *ConsumerDisconnectPayload {
-	return &ConsumerDisconnectPayload{}
+func NewConsumerDisconnectPayload(clientID string) *ConsumerDisconnectPayload {
+	return &ConsumerDisconnectPayload{clientID: clientID}
+}
+
+// ClientID returns the client's identifier.
+func (p ConsumerDisconnectPayload) ClientID() string {
+	return p.clientID
 }
 
 func (p *ConsumerDisconnectPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -288,22 +322,32 @@ func (p *ConsumerDisconnectPayload) toJSON(emitter Emitter, opcode Opcode) (payl
 	if emitter != Client || opcode != ConsumerDisconnect {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &consumerDisconnectPayloadJSON{}, nil
+	return &consumerDisconnectPayloadJSON{ClientID: &p.clientID}, nil
 }
 
 func (p *ConsumerDisconnectPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
 	}
+	if err := id.ID(p.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
+	}
 	return nil
 }
 
 // ConsumerHeartbeatPayload signals that a consumer is alive.
-type ConsumerHeartbeatPayload struct{}
+type ConsumerHeartbeatPayload struct {
+	clientID string
+}
 
 // NewConsumerHeartbeatPayload returns a heartbeat.
-func NewConsumerHeartbeatPayload() *ConsumerHeartbeatPayload {
-	return &ConsumerHeartbeatPayload{}
+func NewConsumerHeartbeatPayload(clientID string) *ConsumerHeartbeatPayload {
+	return &ConsumerHeartbeatPayload{clientID: clientID}
+}
+
+// ClientID returns the client's identifier.
+func (p ConsumerHeartbeatPayload) ClientID() string {
+	return p.clientID
 }
 
 func (p *ConsumerHeartbeatPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -313,12 +357,15 @@ func (p *ConsumerHeartbeatPayload) toJSON(emitter Emitter, opcode Opcode) (paylo
 	if emitter != Client || opcode != ConsumerHeartbeat {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &consumerHeartbeatPayloadJSON{}, nil
+	return &consumerHeartbeatPayloadJSON{ClientID: &p.clientID}, nil
 }
 
 func (p *ConsumerHeartbeatPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
+	}
+	if err := id.ID(p.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
 	}
 	return nil
 }

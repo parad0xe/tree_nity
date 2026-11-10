@@ -99,7 +99,7 @@ func TestNewDataRejectsInvalidMessageDelivery(t *testing.T) {
 		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.MessageDeliveryPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "oversized message", metadata: protocol.NewServerMetadata(), payload: protocol.NewMessageDeliveryPayload(0, protocol.NewMessage([]byte("k"), []byte(strings.Repeat("v", protocol.MessageSize)))), wantErr: protocol.ErrMessageTooLarge},
-		{name: "client metadata", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewMessageDeliveryPayload(0, protocol.NewMessage(nil, nil)), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewMessageDeliveryPayload(0, protocol.NewMessage(nil, nil)), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -115,13 +115,13 @@ func TestNewDataRejectsInvalidMessageDelivery(t *testing.T) {
 func TestProduceMessageOmitsDeliveryOffset(t *testing.T) {
 	message := protocol.NewMessageDeliveryPayload(42, protocol.NewMessage([]byte("k"), []byte("v"))).Message()
 	payload := protocol.NewProduceMessagePayload("orders", message)
-	data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata("client-1", "/client-1"), payload)
+	data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata("/client-1"), payload)
 	if err != nil {
 		t.Errorf("NewData(ProduceMessage, client, message at 42) error = %v, want nil", err)
 		return
 	}
 	frame, err := protocol.Encode(data)
-	wantFrame := `{"opcode":6,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"aw==","value":"dg=="}}}`
+	wantFrame := `{"opcode":6,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"topic":"orders","message":{"key":"aw==","value":"dg=="}}}`
 	if err != nil || string(frame) != wantFrame {
 		t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 	}

@@ -24,14 +24,14 @@ func TestConsumerInfoRoundTrip(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := protocol.NewConsumerInfoPayload(tt.subscriber)
-			data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata("caller-1", "/caller-1"), payload)
+			payload := protocol.NewConsumerInfoPayload("caller-1", tt.subscriber)
+			data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata("/caller-1"), payload)
 			if err != nil {
 				t.Errorf("NewData(ConsumerInfo, caller-1, subscriber=%q) error = %v, want nil", tt.subscriber, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":2,"emitter":0,"metadata":{"clientId":"caller-1","clientIPC":"/caller-1"},"payload":{"subscriber":%q}}`, tt.subscriber)
+			wantFrame := fmt.Sprintf(`{"opcode":2,"emitter":0,"metadata":{"clientIPC":"/caller-1"},"payload":{"clientId":"caller-1","subscriber":%q}}`, tt.subscriber)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -104,7 +104,7 @@ func TestConsumerInfoReplyRoundTrip(t *testing.T) {
 
 // TestNewDataRejectsInvalidConsumerInfoPayloads checks validation at the public construction boundary.
 func TestNewDataRejectsInvalidConsumerInfoPayloads(t *testing.T) {
-	client := protocol.NewClientMetadata("caller-1", "/caller-1")
+	client := protocol.NewClientMetadata("/caller-1")
 	server := protocol.NewServerMetadata()
 	tests := []struct {
 		name     string
@@ -115,7 +115,7 @@ func TestNewDataRejectsInvalidConsumerInfoPayloads(t *testing.T) {
 	}{
 		{name: "nil request", opcode: protocol.ConsumerInfo, metadata: client, payload: (*protocol.ConsumerInfoPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero request", opcode: protocol.ConsumerInfo, metadata: client, payload: &protocol.ConsumerInfoPayload{}, wantErr: protocol.ErrInvalidPayload},
-		{name: "invalid subscriber", opcode: protocol.ConsumerInfo, metadata: client, payload: protocol.NewConsumerInfoPayload("consumer/name"), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid subscriber", opcode: protocol.ConsumerInfo, metadata: client, payload: protocol.NewConsumerInfoPayload("caller-1", "consumer/name"), wantErr: protocol.ErrInvalidPayload},
 		{name: "nil reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: (*protocol.ConsumerInfoReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: &protocol.ConsumerInfoReplyPayload{}, wantErr: protocol.ErrInvalidPayload},
 		{name: "empty reply topic", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "", 0, "", ""), wantErr: protocol.ErrInvalidPayload},

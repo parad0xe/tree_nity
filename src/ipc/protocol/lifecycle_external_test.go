@@ -9,9 +9,9 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-// TestLifecyclePayloadRoundTrip checks empty payloads and emitter-specific decoding of opcode seven.
+// TestLifecyclePayloadRoundTrip checks client IDs and emitter-specific decoding of opcode seven.
 func TestLifecyclePayloadRoundTrip(t *testing.T) {
-	client := protocol.NewClientMetadata("client-1", "/client-1")
+	client := protocol.NewClientMetadata("/client-1")
 	server := protocol.NewServerMetadata()
 	tests := []struct {
 		name     string
@@ -19,14 +19,13 @@ func TestLifecyclePayloadRoundTrip(t *testing.T) {
 		emitter  protocol.Emitter
 		metadata protocol.Metadata
 		json     string
+		body     string
 		payload  protocol.Payload
 	}{
-		{name: "disconnect constructor", opcode: protocol.ConsumerDisconnect, emitter: protocol.Client, metadata: client, json: `{"clientId":"client-1","clientIPC":"/client-1"}`, payload: protocol.NewConsumerDisconnectPayload()},
-		{name: "disconnect zero value", opcode: protocol.ConsumerDisconnect, emitter: protocol.Client, metadata: client, json: `{"clientId":"client-1","clientIPC":"/client-1"}`, payload: &protocol.ConsumerDisconnectPayload{}},
-		{name: "heartbeat constructor", opcode: protocol.ConsumerHeartbeat, emitter: protocol.Client, metadata: client, json: `{"clientId":"client-1","clientIPC":"/client-1"}`, payload: protocol.NewConsumerHeartbeatPayload()},
-		{name: "heartbeat zero value", opcode: protocol.ConsumerHeartbeat, emitter: protocol.Client, metadata: client, json: `{"clientId":"client-1","clientIPC":"/client-1"}`, payload: &protocol.ConsumerHeartbeatPayload{}},
-		{name: "shutdown constructor", opcode: protocol.ServerShutdown, emitter: protocol.Server, metadata: server, json: `{}`, payload: protocol.NewServerShutdownPayload()},
-		{name: "shutdown zero value", opcode: protocol.ServerShutdown, emitter: protocol.Server, metadata: server, json: `{}`, payload: &protocol.ServerShutdownPayload{}},
+		{name: "disconnect constructor", opcode: protocol.ConsumerDisconnect, emitter: protocol.Client, metadata: client, json: `{"clientIPC":"/client-1"}`, body: `{"clientId":"client-1"}`, payload: protocol.NewConsumerDisconnectPayload("client-1")},
+		{name: "heartbeat constructor", opcode: protocol.ConsumerHeartbeat, emitter: protocol.Client, metadata: client, json: `{"clientIPC":"/client-1"}`, body: `{"clientId":"client-1"}`, payload: protocol.NewConsumerHeartbeatPayload("client-1")},
+		{name: "shutdown constructor", opcode: protocol.ServerShutdown, emitter: protocol.Server, metadata: server, json: `{}`, body: `{}`, payload: protocol.NewServerShutdownPayload()},
+		{name: "shutdown zero value", opcode: protocol.ServerShutdown, emitter: protocol.Server, metadata: server, json: `{}`, body: `{}`, payload: &protocol.ServerShutdownPayload{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -36,7 +35,7 @@ func TestLifecyclePayloadRoundTrip(t *testing.T) {
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":%s,"payload":{}}`, tt.opcode, tt.emitter, tt.json)
+			wantFrame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":%s,"payload":%s}`, tt.opcode, tt.emitter, tt.json, tt.body)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -61,7 +60,7 @@ func TestNewDataRejectsInvalidServerShutdown(t *testing.T) {
 		{name: "nil payload", opcode: protocol.ServerShutdown, metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", opcode: protocol.ServerShutdown, metadata: protocol.NewServerMetadata(), payload: (*protocol.ServerShutdownPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "wrong opcode", opcode: protocol.ErrorReply, metadata: protocol.NewServerMetadata(), payload: protocol.NewServerShutdownPayload(), wantErr: protocol.ErrInvalidPayload},
-		{name: "client metadata", opcode: protocol.ServerShutdown, metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: protocol.NewServerShutdownPayload(), wantErr: protocol.ErrInvalidPayload},
+		{name: "client metadata", opcode: protocol.ServerShutdown, metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewServerShutdownPayload(), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

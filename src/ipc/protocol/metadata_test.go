@@ -20,26 +20,26 @@ func TestNewMetadataJSON(t *testing.T) {
 		{
 			name:    "client",
 			emitter: Client,
-			input:   `{"clientId":"client-1","clientIPC":"/client-1"}`,
-			want:    &ClientMetadata{clientID: "client-1", clientIPC: "/client-1"},
+			input:   `{"clientIPC":"/client-1"}`,
+			want:    &ClientMetadata{clientIPC: "/client-1"},
 		},
 		{
 			name:    "empty client IPC",
 			emitter: Client,
-			input:   `{"clientId":"c","clientIPC":""}`,
-			want:    &ClientMetadata{clientID: "c"},
+			input:   `{"clientIPC":""}`,
+			want:    &ClientMetadata{},
 		},
 		{
-			name:    "minimal client strings",
+			name:    "minimal client IPC",
 			emitter: Client,
-			input:   `{"clientId":"c","clientIPC":"q"}`,
-			want:    &ClientMetadata{clientID: "c", clientIPC: "q"},
+			input:   `{"clientIPC":"q"}`,
+			want:    &ClientMetadata{clientIPC: "q"},
 		},
 		{
-			name:    "maximum client ID and large IPC",
+			name:    "large IPC",
 			emitter: Client,
-			input:   fmt.Sprintf(`{"clientId":%q,"clientIPC":%q}`, strings.Repeat("c", 32), strings.Repeat("q", 4096)),
-			want:    &ClientMetadata{clientID: strings.Repeat("c", 32), clientIPC: strings.Repeat("q", 4096)},
+			input:   fmt.Sprintf(`{"clientIPC":%q}`, strings.Repeat("q", 4096)),
+			want:    &ClientMetadata{clientIPC: strings.Repeat("q", 4096)},
 		},
 		{name: "server", emitter: Server, input: `{}`, want: &ServerMetadata{}},
 	}
@@ -85,11 +85,11 @@ func TestNewMetadataJSONRejectsInvalidInput(t *testing.T) {
 		{name: "string", emitter: Server, input: `"metadata"`},
 		{name: "number", emitter: Client, input: `1`},
 		{name: "boolean", emitter: Server, input: `false`},
-		{name: "clientId has wrong type", emitter: Client, input: `{"clientId":1,"clientIPC":"/client"}`},
-		{name: "clientIPC has wrong type", emitter: Client, input: `{"clientId":"client","clientIPC":false}`},
-		{name: "unknown client field", emitter: Client, input: `{"clientId":"client","clientIPC":"/client","extra":true}`, wantErr: ErrUnknownField},
+		{name: "legacy clientId", emitter: Client, input: `{"clientId":"client-1","clientIPC":"/client"}`, wantErr: ErrUnknownField},
+		{name: "clientIPC has wrong type", emitter: Client, input: `{"clientIPC":false}`},
+		{name: "unknown client field", emitter: Client, input: `{"clientIPC":"/client","extra":true}`, wantErr: ErrUnknownField},
 		{name: "unknown server field", emitter: Server, input: `{"extra":true}`, wantErr: ErrUnknownField},
-		{name: "client metadata from server", emitter: Server, input: `{"clientId":"client","clientIPC":"/client"}`, wantErr: ErrUnknownField},
+		{name: "client metadata from server", emitter: Server, input: `{"clientIPC":"/client"}`, wantErr: ErrUnknownField},
 	}
 
 	for _, tt := range tests {
@@ -112,11 +112,11 @@ func TestClientMetadataJSONToMetadataRejectsMissingFields(t *testing.T) {
 		input   string
 		wantErr error
 	}{
-		{name: "missing fields", input: `{}`, wantErr: ErrMissingClientID},
-		{name: "missing clientId", input: `{"clientIPC":"/client"}`, wantErr: ErrMissingClientID},
-		{name: "null clientId", input: `{"clientId":null,"clientIPC":"/client"}`, wantErr: ErrMissingClientID},
-		{name: "missing clientIPC", input: `{"clientId":"client"}`, wantErr: ErrMissingClientIPC},
-		{name: "null clientIPC", input: `{"clientId":"client","clientIPC":null}`, wantErr: ErrMissingClientIPC},
+		{name: "missing fields", input: `{}`, wantErr: ErrMissingClientIPC},
+		{name: "missing clientIPC with legacy clientId", input: `{"clientId":"client-1"}`, wantErr: ErrMissingClientIPC},
+		{name: "null clientIPC with legacy clientId", input: `{"clientId":"client-1","clientIPC":null}`, wantErr: ErrMissingClientIPC},
+		{name: "missing clientIPC", input: `{}`, wantErr: ErrMissingClientIPC},
+		{name: "null clientIPC", input: `{"clientIPC":null}`, wantErr: ErrMissingClientIPC},
 		{name: "missing clientIPC with invalid clientId", input: `{"clientId":""}`, wantErr: ErrMissingClientIPC},
 		{name: "null clientIPC with invalid clientId", input: `{"clientId":"","clientIPC":null}`, wantErr: ErrMissingClientIPC},
 	}

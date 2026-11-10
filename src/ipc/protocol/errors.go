@@ -42,7 +42,7 @@ var (
 	ErrUnknownOpcode = errors.New("unknown opcode")
 	// ErrUnknownEmitter indicates that a sender type is unsupported.
 	ErrUnknownEmitter = errors.New("unknown emitter")
-	// ErrMissingClientID indicates that client metadata has no client ID.
+	// ErrMissingClientID indicates that a consumer request payload has no client ID.
 	ErrMissingClientID = errors.New("missing clientId")
 	// ErrMissingClientIPC indicates that client metadata has no IPC endpoint.
 	ErrMissingClientIPC = errors.New("missing clientIPC")

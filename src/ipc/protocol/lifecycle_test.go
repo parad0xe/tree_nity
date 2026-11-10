@@ -31,7 +31,7 @@ func TestServerShutdownPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsInvalidLifecyclePayloads checks that lifecycle messages require empty JSON objects.
+// TestDecodeRejectsInvalidLifecyclePayloads checks lifecycle payload types and unexpected fields.
 func TestDecodeRejectsInvalidLifecyclePayloads(t *testing.T) {
 	operations := []struct {
 		name     string
@@ -39,8 +39,8 @@ func TestDecodeRejectsInvalidLifecyclePayloads(t *testing.T) {
 		opcode   Opcode
 		metadata string
 	}{
-		{name: "disconnect", emitter: Client, opcode: ConsumerDisconnect, metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`},
-		{name: "heartbeat", emitter: Client, opcode: ConsumerHeartbeat, metadata: `{"clientId":"client-1","clientIPC":"/client-1"}`},
+		{name: "disconnect", emitter: Client, opcode: ConsumerDisconnect, metadata: `{"clientIPC":"/client-1"}`},
+		{name: "heartbeat", emitter: Client, opcode: ConsumerHeartbeat, metadata: `{"clientIPC":"/client-1"}`},
 		{name: "shutdown", emitter: Server, opcode: ServerShutdown, metadata: `{}`},
 	}
 	tests := []struct {
@@ -48,7 +48,7 @@ func TestDecodeRejectsInvalidLifecyclePayloads(t *testing.T) {
 		payload string
 		wantErr error
 	}{
-		{name: "subscriber field", payload: `{"clientId":"client-1"}`},
+		{name: "subscriber field", payload: `{"subscriber":"client-1"}`},
 		{name: "offset field", payload: `{"offset":0}`},
 		{name: "reason field", payload: `{"reason":"shutdown"}`},
 		{name: "large unknown field", payload: `{"extra":"` + strings.Repeat("x", 4096) + `"}`},

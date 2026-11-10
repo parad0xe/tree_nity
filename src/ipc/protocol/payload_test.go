@@ -20,9 +20,9 @@ func TestClientPayloadDecoding(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{subscriber: "consumer-1"}},
-		{name: "topic subscription", opcode: TopicSubscription, input: `{"topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{topic: "orders"}},
-		{name: "acknowledgement", opcode: Acknowledgement, input: `{"offset":0}`, want: &AcknowledgementPayload{}},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"clientId":"client-1","subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{clientID: "client-1", subscriber: "consumer-1"}},
+		{name: "topic subscription", opcode: TopicSubscription, input: `{"clientId":"client-1","topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}},
+		{name: "acknowledgement", opcode: Acknowledgement, input: `{"clientId":"client-1","offset":0}`, want: &AcknowledgementPayload{clientID: "client-1"}},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
 		{
 			name:   "produce message",
@@ -36,14 +36,14 @@ func TestClientPayloadDecoding(t *testing.T) {
 			input:  `{"topic":"orders","message":{"key":"","value":""}}`,
 			want:   &ProduceMessagePayload{topic: "orders", message: Message{}},
 		},
-		{name: "consumer disconnect", opcode: ConsumerDisconnect, input: `{}`, want: &ConsumerDisconnectPayload{}},
-		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, input: `{}`, want: &ConsumerHeartbeatPayload{}},
+		{name: "consumer disconnect", opcode: ConsumerDisconnect, input: `{"clientId":"client-1"}`, want: &ConsumerDisconnectPayload{clientID: "client-1"}},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, input: `{"clientId":"client-1"}`, want: &ConsumerHeartbeatPayload{clientID: "client-1"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			emitter := Client
-			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			metadata := json.RawMessage(`{"clientIPC":"/client-1"}`)
 			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
@@ -63,18 +63,18 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{"unexpected":true}`},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders","unexpected":true}`},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1","unexpected":true}`},
-		{name: "topic subscription", opcode: TopicSubscription, input: `{"topic":"orders","prefix":"","unexpected":true}`},
-		{name: "acknowledgement", opcode: Acknowledgement, input: `{"offset":0,"unexpected":true}`},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"clientId":"client-1","subscriber":"consumer-1","unexpected":true}`},
+		{name: "topic subscription", opcode: TopicSubscription, input: `{"clientId":"client-1","topic":"orders","prefix":"","unexpected":true}`},
+		{name: "acknowledgement", opcode: Acknowledgement, input: `{"clientId":"client-1","offset":0,"unexpected":true}`},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders","unexpected":true}`},
 		{name: "produce message", opcode: ProduceMessage, input: `{"topic":"orders","message":{"key":"aw==","value":"dg=="},"unexpected":true}`},
-		{name: "consumer disconnect", opcode: ConsumerDisconnect, input: `{"unexpected":true}`},
-		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, input: `{"unexpected":true}`},
+		{name: "consumer disconnect", opcode: ConsumerDisconnect, input: `{"clientId":"client-1","unexpected":true}`},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, input: `{"clientId":"client-1","unexpected":true}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			emitter := Client
-			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			metadata := json.RawMessage(`{"clientIPC":"/client-1"}`)
 			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
@@ -108,9 +108,12 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			metadata := json.RawMessage(`{}`)
 			if tt.emitter == Client {
-				metadata = json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+				metadata = json.RawMessage(`{"clientIPC":"/client-1"}`)
 			}
 			payload := json.RawMessage(`{}`)
+			if tt.emitter == Client && tt.opcode == TopicSubscription {
+				payload = json.RawMessage(`{"clientId":"client-1"}`)
+			}
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &tt.emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
 			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, Data{}) {
@@ -152,7 +155,7 @@ func TestClientPayloadDecodingRejectsInvalidInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			emitter := Client
-			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			metadata := json.RawMessage(`{"clientIPC":"/client-1"}`)
 			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &tt.opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
@@ -185,7 +188,7 @@ func TestCreateTopicPayloadJSONRejectsInvalidTopic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opcode := CreateTopic
 			emitter := Client
-			metadata := json.RawMessage(`{"clientId":"client-1","clientIPC":"/client-1"}`)
+			metadata := json.RawMessage(`{"clientIPC":"/client-1"}`)
 			payload := json.RawMessage(tt.input)
 			input := dataJSON{Opcode: &opcode, Emitter: &emitter, Metadata: &metadata, Payload: &payload}
 			got, err := input.toData()
@@ -230,7 +233,7 @@ func TestCheckTopicPayloadJSONRejectsInvalidInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame := `{"opcode":5,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.payload + `}`
+			frame := `{"opcode":5,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":` + tt.payload + `}`
 			got, err := Decode([]byte(frame))
 			if err == nil || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)
@@ -253,11 +256,11 @@ func TestTopicSubscriptionPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "nil payload", emitter: Client, opcode: TopicSubscription, wantErr: ErrMissingPayload},
 		{name: "zero value", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{}, wantErr: ErrInvalidPayload},
-		{name: "long topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: strings.Repeat("t", 33)}, wantErr: ErrInvalidPayload},
-		{name: "invalid topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "user/events"}, wantErr: ErrInvalidPayload},
-		{name: "invalid UTF-8 prefix", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{topic: "orders", prefix: "\xff"}, wantErr: ErrInvalidPayload},
-		{name: "wrong opcode", emitter: Client, opcode: CreateTopic, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
-		{name: "server emitter", emitter: Server, opcode: TopicSubscriptionReply, payload: &TopicSubscriptionPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
+		{name: "long topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: strings.Repeat("t", 33)}, wantErr: ErrInvalidPayload},
+		{name: "invalid topic", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "user/events"}, wantErr: ErrInvalidPayload},
+		{name: "invalid UTF-8 prefix", emitter: Client, opcode: TopicSubscription, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders", prefix: "\xff"}, wantErr: ErrInvalidPayload},
+		{name: "wrong opcode", emitter: Client, opcode: CreateTopic, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}, wantErr: ErrInvalidPayload},
+		{name: "server emitter", emitter: Server, opcode: TopicSubscriptionReply, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}, wantErr: ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -277,36 +280,36 @@ func TestDecodeRejectsInvalidTopicSubscription(t *testing.T) {
 		wantErr       error
 		wantTypeError bool
 	}{
-		{name: "empty object", payload: `{}`, wantErr: ErrMissingTopic},
-		{name: "missing topic", payload: `{"prefix":""}`, wantErr: ErrMissingTopic},
-		{name: "null topic", payload: `{"topic":null,"prefix":""}`, wantErr: ErrMissingTopic},
-		{name: "empty topic", payload: `{"topic":"","prefix":""}`, wantErr: ErrInvalidPayload},
-		{name: "long topic", payload: `{"topic":"` + strings.Repeat("t", 33) + `","prefix":""}`, wantErr: ErrInvalidPayload},
-		{name: "invalid topic", payload: `{"topic":"user/events","prefix":""}`, wantErr: ErrInvalidPayload},
-		{name: "non-ASCII topic", payload: `{"topic":"événements","prefix":""}`, wantErr: ErrInvalidPayload},
-		{name: "numeric topic", payload: `{"topic":1,"prefix":""}`},
-		{name: "missing prefix", payload: `{"topic":"orders"}`, wantErr: ErrMissingPrefix},
-		{name: "null prefix", payload: `{"topic":"orders","prefix":null}`, wantErr: ErrMissingPrefix},
-		{name: "numeric prefix", payload: `{"topic":"orders","prefix":1}`},
-		{name: "boolean prefix", payload: `{"topic":"orders","prefix":false}`},
-		{name: "array prefix", payload: `{"topic":"orders","prefix":[]}`},
-		{name: "object prefix", payload: `{"topic":"orders","prefix":{}}`},
-		{name: "negative offset", payload: `{"topic":"orders","prefix":"","offset":-1}`, wantTypeError: true},
-		{name: "large negative offset", payload: `{"topic":"orders","prefix":"","offset":-2147483648}`, wantTypeError: true},
-		{name: "overflow offset", payload: `{"topic":"orders","prefix":"","offset":4294967296}`, wantTypeError: true},
-		{name: "underflow offset", payload: `{"topic":"orders","prefix":"","offset":-2147483649}`, wantTypeError: true},
-		{name: "fractional offset", payload: `{"topic":"orders","prefix":"","offset":0.5}`},
-		{name: "string offset", payload: `{"topic":"orders","prefix":"","offset":"0"}`},
-		{name: "boolean offset", payload: `{"topic":"orders","prefix":"","offset":false}`},
-		{name: "array offset", payload: `{"topic":"orders","prefix":"","offset":[]}`},
-		{name: "object offset", payload: `{"topic":"orders","prefix":"","offset":{}}`},
-		{name: "unknown field", payload: `{"topic":"orders","prefix":"","extra":true}`},
+		{name: "missing topic and prefix", payload: `{"clientId":"client-1"}`, wantErr: ErrMissingTopic},
+		{name: "missing topic", payload: `{"clientId":"client-1","prefix":""}`, wantErr: ErrMissingTopic},
+		{name: "null topic", payload: `{"clientId":"client-1","topic":null,"prefix":""}`, wantErr: ErrMissingTopic},
+		{name: "empty topic", payload: `{"clientId":"client-1","topic":"","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "long topic", payload: `{"clientId":"client-1","topic":"` + strings.Repeat("t", 33) + `","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "invalid topic", payload: `{"clientId":"client-1","topic":"user/events","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "non-ASCII topic", payload: `{"clientId":"client-1","topic":"événements","prefix":""}`, wantErr: ErrInvalidPayload},
+		{name: "numeric topic", payload: `{"clientId":"client-1","topic":1,"prefix":""}`},
+		{name: "missing prefix", payload: `{"clientId":"client-1","topic":"orders"}`, wantErr: ErrMissingPrefix},
+		{name: "null prefix", payload: `{"clientId":"client-1","topic":"orders","prefix":null}`, wantErr: ErrMissingPrefix},
+		{name: "numeric prefix", payload: `{"clientId":"client-1","topic":"orders","prefix":1}`},
+		{name: "boolean prefix", payload: `{"clientId":"client-1","topic":"orders","prefix":false}`},
+		{name: "array prefix", payload: `{"clientId":"client-1","topic":"orders","prefix":[]}`},
+		{name: "object prefix", payload: `{"clientId":"client-1","topic":"orders","prefix":{}}`},
+		{name: "negative offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":-1}`, wantTypeError: true},
+		{name: "large negative offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":-2147483648}`, wantTypeError: true},
+		{name: "overflow offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":4294967296}`, wantTypeError: true},
+		{name: "underflow offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":-2147483649}`, wantTypeError: true},
+		{name: "fractional offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":0.5}`},
+		{name: "string offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":"0"}`},
+		{name: "boolean offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":false}`},
+		{name: "array offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":[]}`},
+		{name: "object offset", payload: `{"clientId":"client-1","topic":"orders","prefix":"","offset":{}}`},
+		{name: "unknown field", payload: `{"clientId":"client-1","topic":"orders","prefix":"","extra":true}`},
 		{name: "null payload", payload: `null`, wantErr: ErrMissingPayload},
 		{name: "array payload", payload: `[]`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			frame := `{"opcode":3,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":` + tt.payload + `}`
+			frame := `{"opcode":3,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":` + tt.payload + `}`
 			got, err := Decode([]byte(frame))
 			if err == nil || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)

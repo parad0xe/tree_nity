@@ -24,14 +24,14 @@ func TestAcknowledgementRoundTrip(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := protocol.NewAcknowledgementPayload(tt.offset)
-			data, err := protocol.NewData(protocol.Acknowledgement, protocol.NewClientMetadata("client-1", "/client-1"), payload)
+			payload := protocol.NewAcknowledgementPayload("client-1", tt.offset)
+			data, err := protocol.NewData(protocol.Acknowledgement, protocol.NewClientMetadata("/client-1"), payload)
 			if err != nil {
 				t.Errorf("NewData(Acknowledgement, client, offset=%d) error = %v, want nil", tt.offset, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":4,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"offset":%d}}`, tt.offset)
+			wantFrame := fmt.Sprintf(`{"opcode":4,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1","offset":%d}}`, tt.offset)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -52,16 +52,16 @@ func TestAcknowledgementRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAcknowledgementZeroValue checks that zero is encoded as an explicit offset.
-func TestAcknowledgementZeroValue(t *testing.T) {
-	payload := &protocol.AcknowledgementPayload{}
-	data, err := protocol.NewData(protocol.Acknowledgement, protocol.NewClientMetadata("client-1", "/client-1"), payload)
+// TestAcknowledgementZeroOffset checks that zero is encoded as an explicit offset.
+func TestAcknowledgementZeroOffset(t *testing.T) {
+	payload := protocol.NewAcknowledgementPayload("client-1", 0)
+	data, err := protocol.NewData(protocol.Acknowledgement, protocol.NewClientMetadata("/client-1"), payload)
 	if err != nil {
 		t.Errorf("NewData(Acknowledgement, client, %#v) error = %v, want nil", payload, err)
 		return
 	}
 	frame, err := protocol.Encode(data)
-	wantFrame := `{"opcode":4,"emitter":0,"metadata":{"clientId":"client-1","clientIPC":"/client-1"},"payload":{"offset":0}}`
+	wantFrame := `{"opcode":4,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1","offset":0}}`
 	if err != nil || string(frame) != wantFrame {
 		t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 	}
@@ -75,9 +75,9 @@ func TestNewDataRejectsInvalidAcknowledgement(t *testing.T) {
 		payload  protocol.Payload
 		wantErr  error
 	}{
-		{name: "nil payload", metadata: protocol.NewClientMetadata("client-1", "/client-1"), wantErr: protocol.ErrMissingPayload},
-		{name: "nil payload pointer", metadata: protocol.NewClientMetadata("client-1", "/client-1"), payload: (*protocol.AcknowledgementPayload)(nil), wantErr: protocol.ErrMissingPayload},
-		{name: "server metadata", metadata: protocol.NewServerMetadata(), payload: protocol.NewAcknowledgementPayload(43), wantErr: protocol.ErrInvalidPayload},
+		{name: "nil payload", metadata: protocol.NewClientMetadata("/client-1"), wantErr: protocol.ErrMissingPayload},
+		{name: "nil payload pointer", metadata: protocol.NewClientMetadata("/client-1"), payload: (*protocol.AcknowledgementPayload)(nil), wantErr: protocol.ErrMissingPayload},
+		{name: "server metadata", metadata: protocol.NewServerMetadata(), payload: protocol.NewAcknowledgementPayload("client-1", 43), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
