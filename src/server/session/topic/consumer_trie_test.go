@@ -205,8 +205,45 @@ func TestConsumerTrieSearch(t *testing.T) {
 	}
 }
 
-// TestConsumerTrieUnsubscribe checks removal scope and missing subscriptions.
+// TestConsumerTrieUnsubscribe checks successful subscription removal.
 func TestConsumerTrieUnsubscribe(t *testing.T) {
+	first, second := id.ID("first"), id.ID("second")
+	tests := []struct {
+		name       string
+		entries    map[string][]id.ID
+		prefix     string
+		subscriber id.ID
+		key        string
+		want       []id.ID
+	}{
+		{name: "only subscription", entries: map[string][]id.ID{"a": {first}}, prefix: "a", subscriber: first, key: "a"},
+		{name: "other consumer remains", entries: map[string][]id.ID{"a": {first, second}}, prefix: "a", subscriber: first, key: "a", want: []id.ID{second}},
+		{name: "descendant remains", entries: map[string][]id.ID{"a": {first}, "ab": {second}}, prefix: "a", subscriber: first, key: "abc", want: []id.ID{second}},
+		{name: "ancestor remains", entries: map[string][]id.ID{"a": {first}, "ab": {second}}, prefix: "ab", subscriber: second, key: "abc", want: []id.ID{first}},
+		{name: "same consumer at another prefix", entries: map[string][]id.ID{"a": {first}, "ab": {first}}, prefix: "a", subscriber: first, key: "abc", want: []id.ID{first}},
+		{name: "root subscription", entries: map[string][]id.ID{"": {first}, "a": {second}}, subscriber: first, key: "a", want: []id.ID{second}},
+		{name: "root only", entries: map[string][]id.ID{"": {first}}, subscriber: first},
+		{name: "UTF-8", entries: map[string][]id.ID{"é": {first}, "é/猫": {second}}, prefix: "é", subscriber: first, key: "é/猫", want: []id.ID{second}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trie := newTestConsumerTrie(t, tt.entries)
+			if trie == nil {
+				return
+			}
+			if err := trie.Unsubscribe(tt.prefix, tt.subscriber); err != nil {
+				t.Errorf("Unsubscribe(%q, %q) with subscriptions %v error = %v, want nil", tt.prefix, tt.subscriber, tt.entries, err)
+			}
+			got, err := trie.Search(tt.key)
+			if err != nil || !maps.Equal(countConsumers(got), countConsumers(tt.want)) {
+				t.Errorf("Search(%q) after Unsubscribe(%q, %q) = %v, error = %v, want consumers %v and nil error", tt.key, tt.prefix, tt.subscriber, got, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestConsumerTrieUnsubscribeRejectsMissingSubscriptions checks errors without changing other subscriptions.
+func TestConsumerTrieUnsubscribeRejectsMissingSubscriptions(t *testing.T) {
 	first, second := id.ID("first"), id.ID("second")
 	tests := []struct {
 		name       string
@@ -217,13 +254,6 @@ func TestConsumerTrieUnsubscribe(t *testing.T) {
 		want       []id.ID
 		wantErr    string
 	}{
-		{name: "only subscription", entries: map[string][]id.ID{"a": {first}}, prefix: "a", subscriber: first, key: "a"},
-		{name: "other consumer remains", entries: map[string][]id.ID{"a": {first, second}}, prefix: "a", subscriber: first, key: "a", want: []id.ID{second}},
-		{name: "descendant remains", entries: map[string][]id.ID{"a": {first}, "ab": {second}}, prefix: "a", subscriber: first, key: "abc", want: []id.ID{second}},
-		{name: "ancestor remains", entries: map[string][]id.ID{"a": {first}, "ab": {second}}, prefix: "ab", subscriber: second, key: "abc", want: []id.ID{first}},
-		{name: "same consumer at another prefix", entries: map[string][]id.ID{"a": {first}, "ab": {first}}, prefix: "a", subscriber: first, key: "abc", want: []id.ID{first}},
-		{name: "root subscription", entries: map[string][]id.ID{"": {first}, "a": {second}}, subscriber: first, key: "a", want: []id.ID{second}},
-		{name: "root only", entries: map[string][]id.ID{"": {first}}, subscriber: first},
 		{
 			name: "missing prefix", entries: map[string][]id.ID{"a": {first}}, prefix: "missing", subscriber: first,
 			key: "a", want: []id.ID{first}, wantErr: `prefix "missing" not found in trie`,
@@ -233,7 +263,6 @@ func TestConsumerTrieUnsubscribe(t *testing.T) {
 			key: "a", want: []id.ID{first}, wantErr: "value not found in trie",
 		},
 		{name: "empty trie", prefix: "a", subscriber: first, key: "a", wantErr: `prefix "a" not found in trie`},
-		{name: "UTF-8", entries: map[string][]id.ID{"é": {first}, "é/猫": {second}}, prefix: "é", subscriber: first, key: "é/猫", want: []id.ID{second}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -242,12 +271,8 @@ func TestConsumerTrieUnsubscribe(t *testing.T) {
 				return
 			}
 			err := trie.Unsubscribe(tt.prefix, tt.subscriber)
-			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Errorf("Unsubscribe(%q, %q) with subscriptions %v error = %v, want %q", tt.prefix, tt.subscriber, tt.entries, err, tt.wantErr)
-				}
-			} else if err != nil {
-				t.Errorf("Unsubscribe(%q, %q) with subscriptions %v error = %v, want nil", tt.prefix, tt.subscriber, tt.entries, err)
+			if err == nil || err.Error() != tt.wantErr {
+				t.Errorf("Unsubscribe(%q, %q) with subscriptions %v error = %v, want %q", tt.prefix, tt.subscriber, tt.entries, err, tt.wantErr)
 			}
 			got, err := trie.Search(tt.key)
 			if err != nil || !maps.Equal(countConsumers(got), countConsumers(tt.want)) {
