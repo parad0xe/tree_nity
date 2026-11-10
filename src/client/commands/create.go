@@ -2,11 +2,11 @@ package commands
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc/id"
+	"tree_nity/src/ipc/protocol"
 )
 
 type createCommand struct {
@@ -31,6 +31,29 @@ func ParseCreate(args []string) (Command, error) {
 	return &createCommand{topic: topicID}, nil
 }
 
+// Execute asks the server to create the topic.
 func (cmd *createCommand) Execute(ctx context.Context, env Env) (int, error) {
-	return exitcode.General, fmt.Errorf("create: %w", errors.ErrUnsupported)
+	data, err := protocol.NewData(
+		protocol.CreateTopic,
+		protocol.NewClientMetadata(env.Inbound.IPCPath()),
+		protocol.NewCreateTopicPayload(string(cmd.topic)),
+	)
+	if err != nil {
+		return exitcode.General, fmt.Errorf("create: %w", err)
+	}
+
+	if code, err := env.send(ctx, data); err != nil {
+		return code, fmt.Errorf("create: %w", err)
+	}
+
+	_, code, err := env.recv[*protocol.CreateTopicReplyPayload](ctx, protocol.CreateTopicReply)
+	if err != nil {
+		return code, fmt.Errorf("create: %w", err)
+	}
+
+	if err := env.println("topic created"); err != nil {
+		return exitcode.General, fmt.Errorf("create: %w", err)
+	}
+
+	return exitcode.Success, nil
 }
