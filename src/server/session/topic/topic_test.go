@@ -16,7 +16,7 @@ import (
 	"tree_nity/src/server/utils/trie"
 )
 
-func waitTopicWorkers(t *testing.T, topic *Topic) {
+func waitTopicWorkers(t *testing.T, topic *Topic) bool {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
@@ -25,8 +25,10 @@ func waitTopicWorkers(t *testing.T, topic *Topic) {
 	}()
 	select {
 	case <-done:
+		return true
 	case <-time.After(5 * time.Second):
 		t.Errorf("topic workers after cancellation did not stop within 5s, want all workers stopped")
+		return false
 	}
 }
 
@@ -109,7 +111,9 @@ func TestTopicConsumerShutdown(t *testing.T) {
 				t.Errorf("%s for consumer-1 error = %v, want nil", tt.name, err)
 				return
 			}
-			waitTopicWorkers(t, topic)
+			if !waitTopicWorkers(t, topic) {
+				return
+			}
 			topic.mu.Lock()
 			count := topic.consumerMap.Len()
 			topic.mu.Unlock()
@@ -132,10 +136,11 @@ func TestTopicConsumerShutdown(t *testing.T) {
 // TestTopicConsumerReplacement checks that stale removal cannot detach the replacement connection.
 func TestTopicConsumerReplacement(t *testing.T) {
 	tests := []struct {
-		name   string
-		prefix string
+		name               string
+		prefix             string
+		wantOldPrefixCount int
 	}{
-		{name: "same prefix", prefix: "events/"},
+		{name: "same prefix", prefix: "events/", wantOldPrefixCount: 1},
 		{name: "changed prefix", prefix: "orders/"},
 	}
 	for _, tt := range tests {
@@ -167,6 +172,11 @@ func TestTopicConsumerReplacement(t *testing.T) {
 			got, err := topic.consumerTrie.Search(tt.prefix + "item")
 			if err != nil || len(got) != 1 || got[0] != current.Info.ID() {
 				t.Errorf("Search(%q) after replacement = %v, error = %v, want [consumer-1] and nil error", tt.prefix+"item", got, err)
+			}
+			oldKey := previous.Info.Prefix() + "item"
+			got, err = topic.consumerTrie.Search(oldKey)
+			if err != nil || len(got) != tt.wantOldPrefixCount {
+				t.Errorf("Search(%q) after replacement with prefix %q = %v, error = %v, want %d subscribers and nil error", oldKey, tt.prefix, got, err, tt.wantOldPrefixCount)
 			}
 			select {
 			case <-previous.Connection().Done():
@@ -297,7 +307,9 @@ func TestTopicUpsertRejectsStoppedContext(t *testing.T) {
 			if err := topic.UpsertConsumer(tt.ctx, c); !errors.Is(err, tt.wantErr) {
 				t.Errorf("UpsertConsumer(consumer-1) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
 			}
-			waitTopicWorkers(t, topic)
+			if !waitTopicWorkers(t, topic) {
+				return
+			}
 			if got := topic.consumerMap.Len(); got != 0 {
 				t.Errorf("consumer index after %s request has %d entries, want 0", tt.name, got)
 			}
