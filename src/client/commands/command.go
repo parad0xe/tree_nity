@@ -3,10 +3,21 @@ package commands
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
+	"time"
 
+	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
+	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
+)
+
+const (
+	// DefaultRecvTimeout is the longest a command waits for the server reply.
+	DefaultRecvTimeout = 2 * time.Second
+	// DefaultSendTimeout is the longest a request waits while the server queue is full.
+	DefaultSendTimeout = 2 * time.Second
 )
 
 // Env holds what every command can use while it runs.
@@ -17,6 +28,84 @@ type Env struct {
 	Inbound *ipc.Inbound
 	// Outbound sends the requests of the client to the server.
 	Outbound *ipc.Outbound
+	// Stdout receives the non-error output of the command.
+	Stdout io.Writer
+	// RecvTimeout is the longest a command waits for the server reply.
+	RecvTimeout time.Duration
+	// SendTimeout is the longest a request waits while the server queue is full.
+	SendTimeout time.Duration
+}
+
+// createData returns a client request.
+func (env *Env) createData(opcode protocol.Opcode, payload protocol.Payload) (protocol.Data, error) {
+	return protocol.NewData(opcode, protocol.NewClientMetadata(env.Inbound.IPCPath()), payload)
+}
+
+// send sends data to the server.
+func (env *Env) send(ctx context.Context, data protocol.Data) (int, error) {
+	sendCtx, sendCancel := context.WithTimeout(ctx, env.SendTimeout)
+	defer sendCancel()
+
+	if err := env.Outbound.Send(sendCtx, data); err != nil {
+		return exitcode.IPC, fmt.Errorf("send: %w", err)
+	}
+
+	return exitcode.Success, nil
+}
+
+// recv returns the payload of the server reply with expectedOpcode.
+func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode protocol.Opcode) (P, int, error) {
+	var zero P
+
+	recvCtx, recvCancel := context.WithTimeout(ctx, env.RecvTimeout)
+	defer recvCancel()
+
+	data, recvErr := env.Inbound.Recv(recvCtx)
+	if recvErr != nil {
+		return zero, exitcode.IPC, fmt.Errorf("recv: %w", recvErr)
+	}
+
+	if data.Emitter() != protocol.Server {
+		return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedEmitter)
+	}
+
+	if data.Opcode() == protocol.ErrorReply {
+		reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+		if !ok {
+			return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
+		}
+
+		var code int
+		switch reply.Kind() {
+		case protocol.InvalidRequest:
+			code = exitcode.General
+		default:
+			code = exitcode.Topic
+		}
+		return zero, code, fmt.Errorf("recv: %w: %s", errRequestRejected, reply.Reason())
+	}
+
+	if data.Opcode() != expectedOpcode {
+		return zero, exitcode.General, fmt.Errorf("recv: %w: %d", errUnexpectedOpcode, data.Opcode())
+	}
+
+	reply, ok := data.Payload().(P)
+	if !ok {
+		return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
+	}
+	return reply, exitcode.Success, nil
+}
+
+// print writes raw bytes to the command output.
+func (env *Env) print(b []byte) error {
+	_, err := env.Stdout.Write(b)
+	return err
+}
+
+// println writes a line of text to the command output.
+func (env *Env) println(s string) error {
+	_, err := io.WriteString(env.Stdout, s+"\n")
+	return err
 }
 
 // Command is a client command parsed from the command line, ready to run.
