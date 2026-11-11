@@ -339,6 +339,29 @@ func TestRunPassesStdoutToCommand(t *testing.T) {
 	}
 }
 
+func TestRunPassesDefaultTimeoutsToCommand(t *testing.T) {
+	app := &application{
+		inbound:  &ipc.Inbound{},
+		outbound: &ipc.Outbound{},
+	}
+	var got commands.Env
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		got = env
+		return exitcode.Success, nil
+	})
+
+	if _, err := app.run(context.Background(), command); err != nil {
+		t.Errorf("run() error = %v, want nil", err)
+	}
+
+	if got.RecvTimeout != commands.DefaultRecvTimeout {
+		t.Errorf("run() env.RecvTimeout = %v, want %v", got.RecvTimeout, commands.DefaultRecvTimeout)
+	}
+	if got.SendTimeout != commands.DefaultSendTimeout {
+		t.Errorf("run() env.SendTimeout = %v, want %v", got.SendTimeout, commands.DefaultSendTimeout)
+	}
+}
+
 func TestRunDoesNotRequestShutdownWithoutSignal(t *testing.T) {
 	app := &application{}
 	var requested bool

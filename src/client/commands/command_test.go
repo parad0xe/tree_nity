@@ -13,11 +13,18 @@ import (
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
+	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
 )
 
-// testTimeout is the longest a test waits for an event before it fails.
-const testTimeout = 5 * time.Second
+const (
+	// testTimeout is the longest a test waits for an event before it fails.
+	testTimeout = 5 * time.Second
+	// shortSendTimeout is a send timeout short enough to wait for in a test.
+	shortSendTimeout = 20 * time.Millisecond
+	// shortRecvTimeout is a receive timeout short enough to wait for in a test.
+	shortRecvTimeout = 20 * time.Millisecond
+)
 
 // errTestWrite is the error that failingWriter returns.
 var errTestWrite = errors.New("test write failure")
@@ -64,6 +71,30 @@ func newTestOutbound(t *testing.T, ipcPath string) *ipc.Outbound {
 		}
 	})
 	return out
+}
+
+// fillTestQueue sends frames to the queue until it is full.
+func fillTestQueue(t *testing.T, ipcPath string) {
+	t.Helper()
+	sender, err := mqueue.NewSender(ipcPath)
+	if err != nil {
+		t.Fatalf("NewSender(%q) error = %v, want nil", ipcPath, err)
+	}
+	defer func() {
+		if err := sender.Close(); err != nil {
+			t.Errorf("Close() error = %v, want nil", err)
+		}
+	}()
+	frame := []byte("frame")
+	for {
+		err := sender.TimedSend(frame, time.Now())
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("TimedSend(%q) error = %v, want nil", frame, err)
+		}
+	}
 }
 
 // newClientData returns a frame sent by a client.
@@ -170,6 +201,23 @@ func TestSendReturnsIPCCodeOnFailure(t *testing.T) {
 	}
 }
 
+func TestSendReturnsIPCCodeWhenQueueStaysFull(t *testing.T) {
+	server := newTestInbound(t, testIPCPath(t, "server"))
+	fillTestQueue(t, server.IPCPath())
+	env := Env{Outbound: newTestOutbound(t, server.IPCPath()), SendTimeout: shortSendTimeout}
+	data := newClientData(t, protocol.CreateTopic, protocol.NewCreateTopicPayload("orders"))
+
+	start := time.Now()
+	code, err := env.send(context.Background(), data)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("send(%d) to a full queue = %d, %v, want %d, %v", data.Opcode(), code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+	if elapsed := time.Since(start); elapsed < shortSendTimeout/2 {
+		t.Errorf("send(%d) to a full queue returned after %v, want at least %v", data.Opcode(), elapsed, shortSendTimeout/2)
+	}
+}
+
 func TestRecvReturnsExpectedReply(t *testing.T) {
 	want := protocol.NewCreateTopicReplyPayload()
 	env := newReplyEnv(t, newServerData(t, protocol.CreateTopicReply, want))
@@ -256,6 +304,20 @@ func TestRecvReturnsIPCCodeWithoutReply(t *testing.T) {
 
 	if code != exitcode.IPC || !errors.Is(err, context.Canceled) {
 		t.Errorf("recv(%d) with a cancelled context = %d, %v, want %d, %v", protocol.CreateTopicReply, code, err, exitcode.IPC, context.Canceled)
+	}
+}
+
+func TestRecvReturnsIPCCodeWhenReplyTimesOut(t *testing.T) {
+	env := Env{Inbound: newTestInbound(t, testIPCPath(t, "client")), RecvTimeout: shortRecvTimeout}
+
+	start := time.Now()
+	_, code, err := env.recv[*protocol.CreateTopicReplyPayload](context.Background(), protocol.CreateTopicReply)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("recv(%d) without a reply = %d, %v, want %d, %v", protocol.CreateTopicReply, code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+	if elapsed := time.Since(start); elapsed < shortRecvTimeout/2 {
+		t.Errorf("recv(%d) without a reply returned after %v, want at least %v", protocol.CreateTopicReply, elapsed, shortRecvTimeout/2)
 	}
 }
 
