@@ -11,6 +11,7 @@ import (
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
+	"tree_nity/src/server/session/topic"
 )
 
 const (
@@ -22,7 +23,8 @@ const (
 
 // application holds the resources the server owns while it runs.
 type application struct {
-	inbound *ipc.Inbound
+	inbound      *ipc.Inbound
+	topicManager *topic.Manager
 }
 
 // newApplication creates the server inbound queue, named after the process ID.
@@ -83,11 +85,14 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 	return exitcode.Success, nil
 }
 
-// listen receives frames until the server is asked to stop and is ready to.
-// Invalid frames are logged and skipped. The returned error matches
+// listen initializes topic state and receives requests until the server can stop.
+// Invalid frames and handler errors are logged and skipped. The returned error matches
 // context.Canceled or context.DeadlineExceeded when ctx is done first, and is
 // the error of Recv, with exitcode.IPC, when receiving fails.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
+	// The manager shares the listener's lifetime so shutdown also cancels IPC replies.
+	app.topicManager = topic.NewManager(ctx)
+
 	for {
 		if shutdown.IsRequested() && app.readyToFinish() {
 			return exitcode.Success, nil
@@ -112,13 +117,51 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 			return exitcode.IPC, err
 		}
 
-		switch data {
-		// TODO: dispatch each opcode to its handler
-		default:
-			// TODO: reply to the client with an error once the server answers requests
-			logError("server:", errUnhandledOpcode)
+		if err := app.dispatch(ctx, data); err != nil {
+			if ctx.Err() != nil {
+				return exitcode.Success, ctx.Err()
+			}
+			logError("server:", err)
 		}
 	}
+}
+
+// dispatch routes validated client requests to the topic manager.
+func (app *application) dispatch(ctx context.Context, data protocol.Data) error {
+	metadata, ok := data.Metadata().(*protocol.ClientMetadata)
+	if !ok {
+		return errUnhandledOpcode
+	}
+
+	// Decoding guarantees that the payload type matches the opcode.
+	switch payload := data.Payload().(type) {
+	case *protocol.ListTopicPayload:
+		app.topicManager.ListTopics(*metadata, *payload)
+	case *protocol.CreateTopicPayload:
+		return app.topicManager.CreateTopic(*metadata, *payload)
+	case *protocol.TopicSubscriptionPayload:
+		app.topicManager.NewSubscription(*metadata, *payload)
+	case *protocol.CheckTopicPayload:
+		app.topicManager.CheckTopic(*metadata, *payload)
+	case *protocol.ProduceMessagePayload:
+		app.topicManager.ProduceMessage(*metadata, *payload)
+	default:
+		reply, err := protocol.NewData(
+			protocol.ErrorReply,
+			protocol.NewServerMetadata(),
+			protocol.NewErrorReplyPayload(protocol.InvalidRequest, errUnhandledOpcode.Error()),
+		)
+		if err != nil {
+			return errors.Join(errUnhandledOpcode, err)
+		}
+		outbound, err := ipc.NewOutbound(metadata.ClientIPC(), protocol.Encode)
+		if err != nil {
+			return errors.Join(errUnhandledOpcode, err)
+		}
+		sendErr := outbound.Send(ctx, reply)
+		return errors.Join(errUnhandledOpcode, sendErr, outbound.Close())
+	}
+	return nil
 }
 
 // readyToFinish reports whether the server can stop cleanly.
