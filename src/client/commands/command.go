@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	// sendTimeout is the longest a request waits while the server queue is full.
-	sendTimeout = time.Second * 2
-	// recvTimeout is the longest a command waits for the server reply.
-	recvTimeout = time.Second * 2
+	// DefaultRecvTimeout is the longest a command waits for the server reply.
+	DefaultRecvTimeout = 2 * time.Second
+	// DefaultSendTimeout is the longest a request waits while the server queue is full.
+	DefaultSendTimeout = 2 * time.Second
 )
 
 // Env holds what every command can use while it runs.
@@ -30,6 +30,10 @@ type Env struct {
 	Outbound *ipc.Outbound
 	// Stdout receives the non-error output of the command.
 	Stdout io.Writer
+	// RecvTimeout is the longest a command waits for the server reply.
+	RecvTimeout time.Duration
+	// SendTimeout is the longest a request waits while the server queue is full.
+	SendTimeout time.Duration
 }
 
 // createData returns a client request.
@@ -39,7 +43,7 @@ func (env *Env) createData(opcode protocol.Opcode, payload protocol.Payload) (pr
 
 // send sends data to the server.
 func (env *Env) send(ctx context.Context, data protocol.Data) (int, error) {
-	sendCtx, sendCancel := context.WithTimeout(ctx, sendTimeout)
+	sendCtx, sendCancel := context.WithTimeout(ctx, env.SendTimeout)
 	defer sendCancel()
 
 	if err := env.Outbound.Send(sendCtx, data); err != nil {
@@ -53,7 +57,7 @@ func (env *Env) send(ctx context.Context, data protocol.Data) (int, error) {
 func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode protocol.Opcode) (P, int, error) {
 	var zero P
 
-	recvCtx, recvCancel := context.WithTimeout(ctx, recvTimeout)
+	recvCtx, recvCancel := context.WithTimeout(ctx, env.RecvTimeout)
 	defer recvCancel()
 
 	data, recvErr := env.Inbound.Recv(recvCtx)

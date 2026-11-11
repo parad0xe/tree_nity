@@ -94,7 +94,7 @@ func newReplyEnv(t *testing.T, reply protocol.Data) Env {
 	if err := server.Send(context.Background(), reply); err != nil {
 		t.Fatalf("Send(%d) error = %v, want nil", reply.Opcode(), err)
 	}
-	return Env{Inbound: inbound}
+	return Env{Inbound: inbound, RecvTimeout: testTimeout, SendTimeout: testTimeout}
 }
 
 // recvTestData returns the next frame of the queue, waiting at most testTimeout.
@@ -145,7 +145,7 @@ func TestCreateDataRejectsInvalidPayload(t *testing.T) {
 
 func TestSendDeliversData(t *testing.T) {
 	server := newTestInbound(t, testIPCPath(t, "server"))
-	env := Env{Outbound: newTestOutbound(t, server.IPCPath())}
+	env := Env{Outbound: newTestOutbound(t, server.IPCPath()), SendTimeout: testTimeout}
 	data := newClientData(t, protocol.CreateTopic, protocol.NewCreateTopicPayload("orders"))
 
 	code, err := env.send(context.Background(), data)
@@ -160,7 +160,7 @@ func TestSendDeliversData(t *testing.T) {
 
 func TestSendReturnsIPCCodeOnFailure(t *testing.T) {
 	server := newTestInbound(t, testIPCPath(t, "server"))
-	env := Env{Outbound: newTestOutbound(t, server.IPCPath())}
+	env := Env{Outbound: newTestOutbound(t, server.IPCPath()), SendTimeout: testTimeout}
 	data := newClientData(t, protocol.CreateTopic, protocol.NewCreateTopicPayload("orders"))
 
 	code, err := env.send(cancelledContext(), data)
@@ -250,7 +250,7 @@ func TestRecvRejectsUnexpectedPayload(t *testing.T) {
 }
 
 func TestRecvReturnsIPCCodeWithoutReply(t *testing.T) {
-	env := Env{Inbound: newTestInbound(t, testIPCPath(t, "client"))}
+	env := Env{Inbound: newTestInbound(t, testIPCPath(t, "client")), RecvTimeout: testTimeout}
 
 	_, code, err := env.recv[*protocol.CreateTopicReplyPayload](cancelledContext(), protocol.CreateTopicReply)
 

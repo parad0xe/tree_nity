@@ -77,10 +77,12 @@ func newApplication(config appConfig) (*application, error) {
 // not stop, run returns errCommandNotStopped.
 func (app *application) run(sigCtx context.Context, command commands.Command) (int, error) {
 	env := commands.Env{
-		Shutdown: lifecycle.NewGracefulShutdown(sigCtx.Done()),
-		Inbound:  app.inbound,
-		Outbound: app.outbound,
-		Stdout:   os.Stdout,
+		Shutdown:    lifecycle.NewGracefulShutdown(sigCtx.Done()),
+		Inbound:     app.inbound,
+		Outbound:    app.outbound,
+		RecvTimeout: commands.DefaultRecvTimeout,
+		SendTimeout: commands.DefaultSendTimeout,
+		Stdout:      os.Stdout,
 	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())
