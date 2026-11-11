@@ -1,29 +1,15 @@
 package commands
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"reflect"
 	"testing"
 
 	"tree_nity/src/exitcode"
-	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
 )
-
-// newCreateEnv returns an Env whose inbound already holds the reply, with the
-// queue of the server and the standard output of the command.
-func newCreateEnv(t *testing.T, reply protocol.Data) (Env, *ipc.Inbound, *bytes.Buffer) {
-	t.Helper()
-	server := newTestInbound(t, testIPCPath(t, "server"))
-	env := newReplyEnv(t, reply)
-	env.Outbound = newTestOutbound(t, server.IPCPath())
-	stdout := &bytes.Buffer{}
-	env.Stdout = stdout
-	return env, server, stdout
-}
 
 func TestParseCreateReadsTopic(t *testing.T) {
 	args := []string{"orders"}
@@ -68,7 +54,7 @@ func TestParseCreateRejectsExtraArgument(t *testing.T) {
 
 func TestCreateExecuteSendsCreateTopicRequest(t *testing.T) {
 	cmd := &createCommand{topic: "orders"}
-	env, server, _ := newCreateEnv(t, newServerData(t, protocol.CreateTopicReply, protocol.NewCreateTopicReplyPayload()))
+	env, server, _ := newCommandEnv(t, newServerData(t, protocol.CreateTopicReply, protocol.NewCreateTopicReplyPayload()))
 
 	if code, err := cmd.Execute(context.Background(), env); err != nil {
 		t.Fatalf("Execute() for topic %q = %d, %v, want %d, nil", cmd.topic, code, err, exitcode.Success)
@@ -89,7 +75,7 @@ func TestCreateExecuteSendsCreateTopicRequest(t *testing.T) {
 
 func TestCreateExecutePrintsConfirmation(t *testing.T) {
 	cmd := &createCommand{topic: "orders"}
-	env, _, stdout := newCreateEnv(t, newServerData(t, protocol.CreateTopicReply, protocol.NewCreateTopicReplyPayload()))
+	env, _, stdout := newCommandEnv(t, newServerData(t, protocol.CreateTopicReply, protocol.NewCreateTopicReplyPayload()))
 
 	code, err := cmd.Execute(context.Background(), env)
 
@@ -104,7 +90,7 @@ func TestCreateExecutePrintsConfirmation(t *testing.T) {
 func TestCreateExecuteReturnsTopicCodeWhenTopicExists(t *testing.T) {
 	cmd := &createCommand{topic: "orders"}
 	reply := protocol.NewErrorReplyPayload(protocol.TopicExists, "topic exists")
-	env, _, stdout := newCreateEnv(t, newServerData(t, protocol.ErrorReply, reply))
+	env, _, stdout := newCommandEnv(t, newServerData(t, protocol.ErrorReply, reply))
 
 	code, err := cmd.Execute(context.Background(), env)
 
