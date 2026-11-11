@@ -1,6 +1,8 @@
 package topic
 
-import "errors"
+import (
+	"errors"
+)
 
 var (
 	// ErrUninitialized indicates that a topic has not been initialized.
