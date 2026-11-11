@@ -11,4 +11,6 @@ var (
 	ErrConsumerTrieUninitialized = errors.New("consumer trie is not initialized")
 	// ErrEmptyConsumerID indicates that a subscription has no consumer identifier.
 	ErrEmptyConsumerID = errors.New("consumer ID is empty")
+	// ErrMessageOffsetTrieUninitialized indicates an uninitialized message offset trie.
+	ErrMessageOffsetTrieUninitialized = errors.New("message offset trie is not initialized")
 )
