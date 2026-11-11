@@ -1,6 +1,7 @@
 package topic
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -46,11 +47,11 @@ func TestMessageOffsetTrieUninitialized(t *testing.T) {
 	tests := []struct {
 		name    string
 		trie    *MessageOffsetTrie
-		wantErr string
+		wantErr error
 	}{
-		{name: "nil receiver", wantErr: "message offset trie is not initialized"},
-		{name: "zero value", trie: &MessageOffsetTrie{}, wantErr: "message offset trie is not initialized"},
-		{name: "uninitialized inner trie", trie: &MessageOffsetTrie{trie: &trie.Trie[int32]{}}, wantErr: "trie is not initialized"},
+		{name: "nil receiver", wantErr: ErrMessageOffsetTrieUninitialized},
+		{name: "zero value", trie: &MessageOffsetTrie{}, wantErr: ErrMessageOffsetTrieUninitialized},
+		{name: "uninitialized inner trie", trie: &MessageOffsetTrie{trie: &trie.Trie[int32]{}}, wantErr: trie.ErrUninitialized},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -68,8 +69,8 @@ func TestMessageOffsetTrieUninitialized(t *testing.T) {
 			for _, operation := range operations {
 				t.Run(operation.name, func(t *testing.T) {
 					got, err := operation.run()
-					if err == nil || err.Error() != tt.wantErr {
-						t.Errorf("%s(%q, %d) on %s error = %v, want %q", operation.name, "a", 1, tt.name, err, tt.wantErr)
+					if !errors.Is(err, tt.wantErr) {
+						t.Errorf("%s(%q, %d) on %s error = %v, want %v", operation.name, "a", 1, tt.name, err, tt.wantErr)
 					}
 					if got != nil {
 						t.Errorf("%s(%q, %d) on %s returned %v, want nil", operation.name, "a", 1, tt.name, got)
@@ -80,20 +81,17 @@ func TestMessageOffsetTrieUninitialized(t *testing.T) {
 	}
 }
 
-// TestMessageOffsetTrieInsert checks keys, integer limits, and duplicate rejection.
+// TestMessageOffsetTrieInsert checks successful insertion across keys and integer limits.
 func TestMessageOffsetTrieInsert(t *testing.T) {
 	tests := []struct {
-		name      string
-		key       string
-		offsets   []int32
-		want      []int32
-		wantErrAt map[int]bool
+		name    string
+		key     string
+		offsets []int32
+		want    []int32
 	}{
 		{name: "empty key", offsets: []int32{0}, want: []int32{0}},
 		{name: "single byte", key: "a", offsets: []int32{1}, want: []int32{1}},
 		{name: "sort offsets", key: "topic", offsets: []int32{3, 1, 2}, want: []int32{1, 2, 3}},
-		{name: "duplicate zero", offsets: []int32{0, 0}, want: []int32{0}, wantErrAt: map[int]bool{1: true}},
-		{name: "duplicates", key: "topic", offsets: []int32{2, 2, 1, 2}, want: []int32{1, 2}, wantErrAt: map[int]bool{1: true, 3: true}},
 		{name: "int32 limits", key: "bounds", offsets: []int32{highestMessageOffset, lowestMessageOffset, 0}, want: []int32{lowestMessageOffset, 0, highestMessageOffset}},
 		{name: "UTF-8", key: "é/猫", offsets: []int32{1}, want: []int32{1}},
 		{name: "binary bytes", key: "\x00\xff", offsets: []int32{1}, want: []int32{1}},
@@ -103,10 +101,39 @@ func TestMessageOffsetTrieInsert(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			trie := NewMessageOffsetTrie()
 			for i, offset := range tt.offsets {
+				if err := trie.Insert(tt.key, offset); err != nil {
+					t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want nil", tt.key, offset, i, tt.offsets, err)
+				}
+			}
+			got, err := trie.Search(tt.key, lowestMessageOffset)
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Errorf("Search(%q, %d) after inserting %v = %v, error = %v, want %v and nil error", tt.key, lowestMessageOffset, tt.offsets, got, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestMessageOffsetTrieInsertRejectsDuplicates checks that duplicate offsets leave the index unchanged.
+func TestMessageOffsetTrieInsertRejectsDuplicates(t *testing.T) {
+	wantErr := trie.ErrValueExists
+	tests := []struct {
+		name      string
+		key       string
+		offsets   []int32
+		want      []int32
+		wantErrAt map[int]bool
+	}{
+		{name: "duplicate zero", offsets: []int32{0, 0}, want: []int32{0}, wantErrAt: map[int]bool{1: true}},
+		{name: "duplicates", key: "topic", offsets: []int32{2, 2, 1, 2}, want: []int32{1, 2}, wantErrAt: map[int]bool{1: true, 3: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			trie := NewMessageOffsetTrie()
+			for i, offset := range tt.offsets {
 				err := trie.Insert(tt.key, offset)
 				if tt.wantErrAt[i] {
-					if err == nil || err.Error() != "value already exists" {
-						t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want %q", tt.key, offset, i, tt.offsets, err, "value already exists")
+					if !errors.Is(err, wantErr) {
+						t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want %v", tt.key, offset, i, tt.offsets, err, wantErr)
 					}
 				} else if err != nil {
 					t.Errorf("Insert(%q, %d) at index %d in %v error = %v, want nil", tt.key, offset, i, tt.offsets, err)

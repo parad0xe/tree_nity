@@ -1,7 +1,6 @@
 package topic
 
 import (
-	"errors"
 	"slices"
 
 	"tree_nity/src/server/utils/trie"
@@ -56,7 +55,7 @@ func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error)
 
 func (t *MessageOffsetTrie) validate() error {
 	if t == nil || t.trie == nil {
-		return errors.New("message offset trie is not initialized")
+		return ErrMessageOffsetTrieUninitialized
 	}
 	return nil
 }
