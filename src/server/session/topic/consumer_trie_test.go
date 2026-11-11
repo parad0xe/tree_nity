@@ -1,6 +1,7 @@
 package topic
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -50,11 +51,11 @@ func TestConsumerTrieUninitialized(t *testing.T) {
 	tests := []struct {
 		name    string
 		trie    *ConsumerTrie
-		wantErr string
+		wantErr error
 	}{
-		{name: "nil receiver", wantErr: "consumer trie is not initialized"},
-		{name: "zero value", trie: &ConsumerTrie{}, wantErr: "consumer trie is not initialized"},
-		{name: "uninitialized inner trie", trie: &ConsumerTrie{trie: &trie.Trie[id.ID]{}}, wantErr: "trie is not initialized"},
+		{name: "nil receiver", wantErr: ErrConsumerTrieUninitialized},
+		{name: "zero value", trie: &ConsumerTrie{}, wantErr: ErrConsumerTrieUninitialized},
+		{name: "uninitialized inner trie", trie: &ConsumerTrie{trie: &trie.Trie[id.ID]{}}, wantErr: trie.ErrUninitialized},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -76,8 +77,8 @@ func TestConsumerTrieUninitialized(t *testing.T) {
 			for _, operation := range operations {
 				t.Run(operation.name, func(t *testing.T) {
 					got, err := operation.run()
-					if err == nil || err.Error() != tt.wantErr {
-						t.Errorf("%s with prefix %q and fixture consumer %q on %s error = %v, want %q", operation.name, "a", subscriber, tt.name, err, tt.wantErr)
+					if !errors.Is(err, tt.wantErr) {
+						t.Errorf("%s with prefix %q and fixture consumer %q on %s error = %v, want %v", operation.name, "a", subscriber, tt.name, err, tt.wantErr)
 					}
 					if got != nil {
 						t.Errorf("%s with prefix %q on %s returned %v, want nil", operation.name, "a", tt.name, got)
@@ -104,8 +105,8 @@ func TestConsumerTrieEmptyID(t *testing.T) {
 			if trie == nil {
 				return
 			}
-			if err := operation.run(trie, "a", ""); err == nil || err.Error() != "consumer ID is empty" {
-				t.Errorf("%s(%q, \"\") error = %v, want %q", operation.name, "a", err, "consumer ID is empty")
+			if err := operation.run(trie, "a", ""); !errors.Is(err, ErrEmptyConsumerID) {
+				t.Errorf("%s(%q, \"\") error = %v, want %v", operation.name, "a", err, ErrEmptyConsumerID)
 			}
 			got, err := trie.Search("a")
 			if err != nil || !maps.Equal(countConsumers(got), countConsumers([]id.ID{subscriber})) {
@@ -117,6 +118,7 @@ func TestConsumerTrieEmptyID(t *testing.T) {
 
 // TestConsumerTrieSubscribe checks identity by ID and duplicate rejection per prefix.
 func TestConsumerTrieSubscribe(t *testing.T) {
+	wantErr := trie.ErrValueExists
 	tests := []struct {
 		name   string
 		prefix string
@@ -135,8 +137,8 @@ func TestConsumerTrieSubscribe(t *testing.T) {
 				t.Errorf("Subscribe(%q, %q) error = %v, want nil", tt.prefix, first, err)
 				return
 			}
-			if err := trie.Subscribe(tt.prefix, first); err == nil || err.Error() != "value already exists" {
-				t.Errorf("Subscribe(%q, %q) a second time error = %v, want %q", tt.prefix, first, err, "value already exists")
+			if err := trie.Subscribe(tt.prefix, first); !errors.Is(err, wantErr) {
+				t.Errorf("Subscribe(%q, %q) a second time error = %v, want %v", tt.prefix, first, err, wantErr)
 			}
 			if err := trie.Subscribe(tt.prefix, second); err != nil {
 				t.Errorf("Subscribe(%q, %q) after subscribing %q error = %v, want nil", tt.prefix, second, first, err)
@@ -252,17 +254,17 @@ func TestConsumerTrieUnsubscribeRejectsMissingSubscriptions(t *testing.T) {
 		subscriber id.ID
 		key        string
 		want       []id.ID
-		wantErr    string
+		wantErr    error
 	}{
 		{
 			name: "missing prefix", entries: map[string][]id.ID{"a": {first}}, prefix: "missing", subscriber: first,
-			key: "a", want: []id.ID{first}, wantErr: `prefix "missing" not found in trie`,
+			key: "a", want: []id.ID{first}, wantErr: trie.ErrPrefixNotFound,
 		},
 		{
 			name: "missing consumer", entries: map[string][]id.ID{"a": {first}}, prefix: "a", subscriber: second,
-			key: "a", want: []id.ID{first}, wantErr: "value not found in trie",
+			key: "a", want: []id.ID{first}, wantErr: trie.ErrValueNotFound,
 		},
-		{name: "empty trie", prefix: "a", subscriber: first, key: "a", wantErr: `prefix "a" not found in trie`},
+		{name: "empty trie", prefix: "a", subscriber: first, key: "a", wantErr: trie.ErrPrefixNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -271,8 +273,8 @@ func TestConsumerTrieUnsubscribeRejectsMissingSubscriptions(t *testing.T) {
 				return
 			}
 			err := trie.Unsubscribe(tt.prefix, tt.subscriber)
-			if err == nil || err.Error() != tt.wantErr {
-				t.Errorf("Unsubscribe(%q, %q) with subscriptions %v error = %v, want %q", tt.prefix, tt.subscriber, tt.entries, err, tt.wantErr)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("Unsubscribe(%q, %q) with subscriptions %v error = %v, want %v", tt.prefix, tt.subscriber, tt.entries, err, tt.wantErr)
 			}
 			got, err := trie.Search(tt.key)
 			if err != nil || !maps.Equal(countConsumers(got), countConsumers(tt.want)) {

@@ -7,4 +7,8 @@ var (
 	ErrUninitialized = errors.New("topic is not initialized")
 	// ErrInvalidConsumer indicates that a consumer, its ID, or its connection is invalid.
 	ErrInvalidConsumer = errors.New("consumer is invalid")
+	// ErrConsumerTrieUninitialized indicates that a consumer trie has not been initialized.
+	ErrConsumerTrieUninitialized = errors.New("consumer trie is not initialized")
+	// ErrEmptyConsumerID indicates that a subscription has no consumer identifier.
+	ErrEmptyConsumerID = errors.New("consumer ID is empty")
 )

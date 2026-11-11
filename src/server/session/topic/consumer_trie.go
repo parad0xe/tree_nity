@@ -1,7 +1,6 @@
 package topic
 
 import (
-	"errors"
 	"sync"
 
 	"tree_nity/src/ipc/id"
@@ -27,7 +26,7 @@ func (t *ConsumerTrie) Subscribe(prefix string, consumer id.ID) error {
 		return err
 	}
 	if consumer == "" {
-		return errors.New("consumer ID is empty")
+		return ErrEmptyConsumerID
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -40,7 +39,7 @@ func (t *ConsumerTrie) Unsubscribe(prefix string, consumer id.ID) error {
 		return err
 	}
 	if consumer == "" {
-		return errors.New("consumer ID is empty")
+		return ErrEmptyConsumerID
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -76,7 +75,7 @@ func (t *ConsumerTrie) Search(key string) ([]id.ID, error) {
 
 func (t *ConsumerTrie) validate() error {
 	if t == nil || t.trie == nil {
-		return errors.New("consumer trie is not initialized")
+		return ErrConsumerTrieUninitialized
 	}
 	return nil
 }
