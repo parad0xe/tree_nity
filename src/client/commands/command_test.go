@@ -128,6 +128,18 @@ func newReplyEnv(t *testing.T, reply protocol.Data) Env {
 	return Env{Inbound: inbound, RecvTimeout: testTimeout, SendTimeout: testTimeout}
 }
 
+// newCommandEnv returns an Env whose inbound already holds the reply, with the
+// queue of the server and the standard output of the command.
+func newCommandEnv(t *testing.T, reply protocol.Data) (Env, *ipc.Inbound, *bytes.Buffer) {
+	t.Helper()
+	server := newTestInbound(t, testIPCPath(t, "server"))
+	env := newReplyEnv(t, reply)
+	env.Outbound = newTestOutbound(t, server.IPCPath())
+	stdout := &bytes.Buffer{}
+	env.Stdout = stdout
+	return env, server, stdout
+}
+
 // recvTestData returns the next frame of the queue, waiting at most testTimeout.
 func recvTestData(t *testing.T, in *ipc.Inbound) protocol.Data {
 	t.Helper()
