@@ -62,7 +62,7 @@ func receiveTopicManagerReply(t *testing.T, ctx context.Context, inbound *ipc.In
 
 // TestNewManagerInitializesState checks that both indexes are ready for use.
 func TestNewManagerInitializesState(t *testing.T) {
-	manager := NewManager(topicManagerContext(t))
+	manager := NewManager()
 	if topics, err := manager.topicMap.Values(); err != nil || len(topics) != 0 {
 		t.Errorf("NewManager() topics = %v, error = %v, want no topics and nil error", topics, err)
 	}
@@ -88,13 +88,13 @@ func TestManagerCreateTopics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := topicManagerContext(t)
-			manager := NewManager(ctx)
+			manager := NewManager()
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 			registered := make(map[*Topic]id.ID)
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%d", i))
-				if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
+				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
 					t.Errorf("CreateTopic(%q) error = %v, want nil", topicID, err)
 					return
 				}
@@ -137,14 +137,14 @@ func TestManagerCreateTopicRejectsInvalidIDs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := topicManagerContext(t)
-			manager := NewManager(ctx)
+			manager := NewManager()
 			original := NewTopic(ctx)
 			if err := manager.topicMap.Insert("events", original); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload(tt.topic)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(tt.topic)); err != nil {
 				t.Errorf("CreateTopic(%q) error = %v, want nil after sending rejection", tt.topic, err)
 				return
 			}
@@ -168,11 +168,11 @@ func TestManagerCreateTopicRejectsInvalidIDs(t *testing.T) {
 // TestManagerCreateTopicRejectsDuplicates checks that a duplicate preserves the original topic.
 func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 	ctx := topicManagerContext(t)
-	manager := NewManager(ctx)
+	manager := NewManager()
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	payload := *protocol.NewCreateTopicPayload("events")
-	if err := manager.CreateTopic(metadata, payload); err != nil {
+	if err := manager.CreateTopic(ctx, ctx, metadata, payload); err != nil {
 		t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
@@ -180,7 +180,7 @@ func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 	if !exists || original == nil {
 		t.Fatalf("Get(events) during setup = %p, exists = %t, want an initialized topic and true", original, exists)
 	}
-	if err := manager.CreateTopic(metadata, payload); err != nil {
+	if err := manager.CreateTopic(ctx, ctx, metadata, payload); err != nil {
 		t.Errorf("CreateTopic(events) on a duplicate error = %v, want nil after sending rejection", err)
 		return
 	}
@@ -201,10 +201,11 @@ func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 
 // TestManagerCreateTopicPropagatesIndexErrors checks that insertion failures reach the caller.
 func TestManagerCreateTopicPropagatesIndexErrors(t *testing.T) {
-	manager := NewManager(topicManagerContext(t))
+	ctx := topicManagerContext(t)
+	manager := NewManager()
 	manager.topicMap = nil
 	metadata := *protocol.NewClientMetadata("/unused")
-	if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, hashmap.ErrUninitialized) {
+	if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, hashmap.ErrUninitialized) {
 		t.Errorf("CreateTopic(events) with an uninitialized index error = %v, want %v", err, hashmap.ErrUninitialized)
 	}
 }
@@ -221,32 +222,87 @@ func TestManagerCreateTopicPropagatesQueueErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := NewManager(topicManagerContext(t))
+			ctx := topicManagerContext(t)
+			manager := NewManager()
 			metadata := *protocol.NewClientMetadata(tt.ipcPath)
-			if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, tt.wantErr) {
+			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, tt.wantErr) {
 				t.Errorf("CreateTopic(events) with queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
 			}
 		})
 	}
 }
 
-// TestManagerCreateTopicPropagatesCancellation checks canceled reply delivery.
-func TestManagerCreateTopicPropagatesCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(topicManagerContext(t))
-	manager := NewManager(ctx)
+// TestManagerCreateTopicPropagatesStoppedContexts checks canceled and expired reply delivery.
+func TestManagerCreateTopicPropagatesStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		topic     string
+		wantErr   error
+		wantCount uint64
+	}{
+		{name: "canceled creation", ctx: canceled, topic: "orders", wantErr: context.Canceled, wantCount: 2},
+		{name: "expired creation", ctx: expired, topic: "orders", wantErr: context.DeadlineExceeded, wantCount: 2},
+		{name: "canceled duplicate rejection", ctx: canceled, topic: "events", wantErr: context.Canceled, wantCount: 1},
+		{name: "expired duplicate rejection", ctx: expired, topic: "events", wantErr: context.DeadlineExceeded, wantCount: 1},
+		{name: "canceled invalid ID rejection", ctx: canceled, topic: "bad/topic", wantErr: context.Canceled, wantCount: 1},
+		{name: "expired invalid ID rejection", ctx: expired, topic: "bad/topic", wantErr: context.DeadlineExceeded, wantCount: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topicCtx := topicManagerContext(t)
+			manager := NewManager()
+			original := NewTopic(topicCtx)
+			if err := manager.topicMap.Insert("events", original); err != nil {
+				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+			}
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.CreateTopic(tt.ctx, topicCtx, metadata, *protocol.NewCreateTopicPayload(tt.topic)); !errors.Is(err, tt.wantErr) {
+				t.Errorf("CreateTopic(%q) with %s error = %v, want %v", tt.topic, tt.name, err, tt.wantErr)
+			}
+			if got := manager.topicMap.Len(); got != tt.wantCount {
+				t.Errorf("topic count after CreateTopic(%q) with %s = %d, want %d", tt.topic, tt.name, got, tt.wantCount)
+			}
+			if stored, exists := manager.topicMap.Get("events"); !exists || stored != original {
+				t.Errorf("Get(events) after CreateTopic(%q) with %s = %p, exists = %t, want %p and true", tt.topic, tt.name, stored, exists, original)
+			}
+		})
+	}
+}
+
+// TestManagerCreateTopicUsesEachRequestContext checks recovery after a canceled reply.
+func TestManagerCreateTopicUsesEachRequestContext(t *testing.T) {
+	topicCtx := topicManagerContext(t)
+	ctx, cancel := context.WithCancel(topicCtx)
+	defer cancel()
+	manager := NewManager()
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	cancel()
-	if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, context.Canceled) {
+	if err := manager.CreateTopic(ctx, topicCtx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, context.Canceled) {
 		t.Errorf("CreateTopic(events) with a canceled context error = %v, want %v", err, context.Canceled)
+	}
+	if err := manager.CreateTopic(topicCtx, topicCtx, metadata, *protocol.NewCreateTopicPayload("orders")); err != nil {
+		t.Errorf("CreateTopic(orders) with a live context after a canceled request error = %v, want nil", err)
+		return
+	}
+	data := receiveTopicManagerReply(t, topicCtx, inbound, protocol.CreateTopicReply)
+	if _, ok := data.Payload().(*protocol.CreateTopicReplyPayload); !ok {
+		t.Errorf("CreateTopic(orders) after a canceled request reply payload = %T, want *protocol.CreateTopicReplyPayload", data.Payload())
 	}
 }
 
 // TestManagerReplyRejectsInvalidPayloads checks validation before opening a client queue.
 func TestManagerReplyRejectsInvalidPayloads(t *testing.T) {
-	manager := NewManager(topicManagerContext(t))
+	ctx := topicManagerContext(t)
+	manager := NewManager()
 	metadata := *protocol.NewClientMetadata("/missing")
-	if err := manager.reply(metadata, protocol.CreateTopicReply, nil); !errors.Is(err, protocol.ErrMissingPayload) {
+	if err := manager.reply(ctx, metadata, protocol.CreateTopicReply, nil); !errors.Is(err, protocol.ErrMissingPayload) {
 		t.Errorf("reply(CreateTopicReply, nil) error = %v, want %v", err, protocol.ErrMissingPayload)
 	}
 }
@@ -255,7 +311,7 @@ func TestManagerReplyRejectsInvalidPayloads(t *testing.T) {
 func createTopicsConcurrently(t *testing.T, topicIDs []id.ID) (*Manager, []protocol.Data) {
 	t.Helper()
 	ctx := topicManagerContext(t)
-	manager := NewManager(ctx)
+	manager := NewManager()
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	start := make(chan struct{})
@@ -267,7 +323,7 @@ func createTopicsConcurrently(t *testing.T, topicIDs []id.ID) (*Manager, []proto
 		go func() {
 			defer workers.Done()
 			<-start
-			if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", topicID, err)
 			}
 		}()

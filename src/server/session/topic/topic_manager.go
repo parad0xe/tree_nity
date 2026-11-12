@@ -17,15 +17,13 @@ type Manager struct {
 	mu              sync.RWMutex
 	consumerManager *consumer.Manager
 	topicMap        *hashmap.HashMap[id.ID, *Topic]
-	context         context.Context
 }
 
-// NewManager initializes topic and consumer state; ctx must be non-nil.
-func NewManager(ctx context.Context) *Manager {
+// NewManager initializes topic and consumer state.
+func NewManager() *Manager {
 	return &Manager{
 		consumerManager: consumer.NewManager(),
 		topicMap:        hashmap.NewHashMap[id.ID, *Topic](),
-		context:         ctx,
 	}
 }
 
@@ -36,10 +34,12 @@ func (m *Manager) ListTopics(metadata protocol.ClientMetadata, payload protocol.
 }
 
 // CreateTopic replies with creation or rejection status and returns internal or IPC errors.
-func (m *Manager) CreateTopic(metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
+// ctx bounds the reply; topicCtx must cover the topic's lifetime. Both must be non-nil.
+func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
 	topicID := id.ID(payload.Topic())
 	if err := topicID.Validate(); err != nil {
 		return m.reply(
+			ctx,
 			metadata,
 			protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.InvalidRequest, err.Error()),
@@ -47,12 +47,13 @@ func (m *Manager) CreateTopic(metadata protocol.ClientMetadata, payload protocol
 	}
 
 	m.mu.Lock()
-	err := m.topicMap.Insert(topicID, NewTopic(m.context))
+	err := m.topicMap.Insert(topicID, NewTopic(topicCtx))
 	m.mu.Unlock()
 
 	if err != nil {
 		if errors.Is(err, hashmap.ErrKeyExists) {
 			return m.reply(
+				ctx,
 				metadata,
 				protocol.ErrorReply,
 				protocol.NewErrorReplyPayload(protocol.TopicExists, "topic already exists"),
@@ -62,6 +63,7 @@ func (m *Manager) CreateTopic(metadata protocol.ClientMetadata, payload protocol
 	}
 
 	return m.reply(
+		ctx,
 		metadata,
 		protocol.CreateTopicReply,
 		protocol.NewCreateTopicReplyPayload(),
@@ -87,7 +89,7 @@ func (m *Manager) ProduceMessage(metadata protocol.ClientMetadata, payload proto
 }
 
 // reply sends a response to the client's IPC queue and closes the outbound handle.
-func (m *Manager) reply(metadata protocol.ClientMetadata, opcode protocol.Opcode, payload protocol.Payload) error {
+func (m *Manager) reply(ctx context.Context, metadata protocol.ClientMetadata, opcode protocol.Opcode, payload protocol.Payload) error {
 	data, err := protocol.NewData(
 		opcode,
 		protocol.NewServerMetadata(),
@@ -102,7 +104,7 @@ func (m *Manager) reply(metadata protocol.ClientMetadata, opcode protocol.Opcode
 		return err
 	}
 
-	sendErr := outbound.Send(m.context, data)
+	sendErr := outbound.Send(ctx, data)
 	closeErr := outbound.Close()
 
 	return errors.Join(sendErr, closeErr)
