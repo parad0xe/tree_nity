@@ -63,7 +63,7 @@ func receiveTopicManagerReply(t *testing.T, ctx context.Context, inbound *ipc.In
 // TestNewManagerInitializesState checks that both indexes are ready for use.
 func TestNewManagerInitializesState(t *testing.T) {
 	manager := NewManager(topicManagerContext(t))
-	if topics, err := manager.topicMap.ToList(); err != nil || len(topics) != 0 {
+	if topics, err := manager.topicMap.Values(); err != nil || len(topics) != 0 {
 		t.Errorf("NewManager() topics = %v, error = %v, want no topics and nil error", topics, err)
 	}
 	if manager.consumerManager == nil {

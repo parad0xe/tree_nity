@@ -42,11 +42,11 @@ func checkHashMapMissing(t *testing.T, m *HashMap[testKey, int], keys []testKey,
 	}
 }
 
-func checkHashMapList(t *testing.T, m *HashMap[testKey, int], want map[testKey]int, phase string) {
+func checkHashMapValues(t *testing.T, m *HashMap[testKey, int], want map[testKey]int, phase string) {
 	t.Helper()
-	got, err := m.ToList()
+	got, err := m.Values()
 	if err != nil {
-		t.Errorf("ToList() %s with entries %#v error = %v, want nil", phase, want, err)
+		t.Errorf("Values() %s with entries %#v error = %v, want nil", phase, want, err)
 		return
 	}
 	wantValues := make([]int, 0, len(want))
@@ -56,7 +56,32 @@ func checkHashMapList(t *testing.T, m *HashMap[testKey, int], want map[testKey]i
 	slices.Sort(got)
 	slices.Sort(wantValues)
 	if !slices.Equal(got, wantValues) {
-		t.Errorf("ToList() %s with entries %#v = %v, want values %v in any order", phase, want, got, wantValues)
+		t.Errorf("Values() %s with entries %#v = %v, want values %v in any order", phase, want, got, wantValues)
+	}
+	checkHashMapContents(t, m, want, phase)
+}
+
+func checkHashMapKeys(t *testing.T, m *HashMap[testKey, int], want map[testKey]int, phase string) {
+	t.Helper()
+	got, err := m.Keys()
+	if err != nil {
+		t.Errorf("Keys() %s with entries %#v error = %v, want nil", phase, want, err)
+		return
+	}
+	if len(got) != len(want) {
+		t.Errorf("Keys() %s with entries %#v = %v, want %d keys", phase, want, got, len(want))
+	}
+	counts := make(map[testKey]int, len(got))
+	for _, key := range got {
+		counts[key]++
+		if _, exists := want[key]; !exists {
+			t.Errorf("Keys() %s with entries %#v contains unexpected key %#v, want only stored keys", phase, want, key)
+		}
+	}
+	for key := range want {
+		if counts[key] != 1 {
+			t.Errorf("Keys() %s with entries %#v contains key %#v %d times, want once", phase, want, key, counts[key])
+		}
 	}
 	checkHashMapContents(t, m, want, phase)
 }
@@ -101,9 +126,13 @@ func TestHashMapUninitialized(t *testing.T) {
 			if err := tt.m.Remove(key); !errors.Is(err, ErrUninitialized) {
 				t.Errorf("Remove(%#v) on %s error = %v, want %v", key, tt.name, err, ErrUninitialized)
 			}
-			values, err := tt.m.ToList()
+			values, err := tt.m.Values()
 			if !errors.Is(err, ErrUninitialized) || len(values) != 0 {
-				t.Errorf("ToList() on %s = %v, error = %v, want an empty slice and %v", tt.name, values, err, ErrUninitialized)
+				t.Errorf("Values() on %s = %v, error = %v, want an empty slice and %v", tt.name, values, err, ErrUninitialized)
+			}
+			keys, err := tt.m.Keys()
+			if !errors.Is(err, ErrUninitialized) || len(keys) != 0 {
+				t.Errorf("Keys() on %s = %v, error = %v, want an empty slice and %v", tt.name, keys, err, ErrUninitialized)
 			}
 			if got := tt.m.Len(); got != 0 {
 				t.Errorf("Len() on %s after rejected operations = %d, want 0", tt.name, got)
@@ -314,8 +343,8 @@ func TestHashMapNilValue(t *testing.T) {
 	}
 }
 
-// TestHashMapToList checks empty, minimal, colliding, and large sets of values.
-func TestHashMapToList(t *testing.T) {
+// TestHashMapValues checks empty, minimal, colliding, and large sets of values.
+func TestHashMapValues(t *testing.T) {
 	large := make([]testEntry, 1024)
 	for id := range large {
 		large[id] = testEntry{key: testKey{id: id, hash: uint64(id)}, value: id % 17}
@@ -364,13 +393,13 @@ func TestHashMapToList(t *testing.T) {
 				}
 				want[entry.key] = entry.value
 			}
-			checkHashMapList(t, m, want, "after insertion")
+			checkHashMapValues(t, m, want, "after insertion")
 		})
 	}
 }
 
-// TestHashMapToListAfterChanges checks deleted slots, reinsertion, growth, and shrinking.
-func TestHashMapToListAfterChanges(t *testing.T) {
+// TestHashMapValuesAfterChanges checks deleted slots, reinsertion, growth, and shrinking.
+func TestHashMapValuesAfterChanges(t *testing.T) {
 	tests := []struct {
 		name  string
 		count int
@@ -393,7 +422,7 @@ func TestHashMapToListAfterChanges(t *testing.T) {
 				}
 				want[key] = id
 			}
-			checkHashMapList(t, m, want, "after insertion")
+			checkHashMapValues(t, m, want, "after insertion")
 
 			key := testKey{id: tt.count / 2, hash: tt.hash}
 			if err := m.Remove(key); err != nil {
@@ -401,13 +430,13 @@ func TestHashMapToListAfterChanges(t *testing.T) {
 				return
 			}
 			delete(want, key)
-			checkHashMapList(t, m, want, "after removing a colliding key")
+			checkHashMapValues(t, m, want, "after removing a colliding key")
 			if err := m.Insert(key, -1); err != nil {
 				t.Errorf("Insert(%#v, -1) after removal error = %v, want nil", key, err)
 				return
 			}
 			want[key] = -1
-			checkHashMapList(t, m, want, "after reinsertion with a new value")
+			checkHashMapValues(t, m, want, "after reinsertion with a new value")
 
 			for id := 0; id < tt.count; id++ {
 				key := testKey{id: id, hash: tt.hash}
@@ -416,53 +445,143 @@ func TestHashMapToListAfterChanges(t *testing.T) {
 					return
 				}
 				delete(want, key)
-				checkHashMapList(t, m, want, "while shrinking and emptying the hashmap")
+				checkHashMapValues(t, m, want, "while shrinking and emptying the hashmap")
 			}
 		})
 	}
 }
 
-// TestHashMapToListCopyIsolation checks independence from the hashmap and other results.
-func TestHashMapToListCopyIsolation(t *testing.T) {
+// TestHashMapValuesCopyIsolation checks independence from the hashmap and other results.
+func TestHashMapValuesCopyIsolation(t *testing.T) {
 	m := NewHashMap[testKey, int]()
 	key := testKey{id: 1}
 	if err := m.Insert(key, 10); err != nil {
 		t.Errorf("Insert(%#v, 10) during setup error = %v, want nil", key, err)
 		return
 	}
-	first, err := m.ToList()
+	first, err := m.Values()
 	if err != nil || !slices.Equal(first, []int{10}) {
-		t.Errorf("ToList() with entries {%#v: 10} = %v, error = %v, want [10] and nil", key, first, err)
+		t.Errorf("Values() with entries {%#v: 10} = %v, error = %v, want [10] and nil", key, first, err)
 		return
 	}
-	second, err := m.ToList()
+	second, err := m.Values()
 	if err != nil || !slices.Equal(second, []int{10}) {
-		t.Errorf("ToList() a second time with entries {%#v: 10} = %v, error = %v, want [10] and nil", key, second, err)
+		t.Errorf("Values() a second time with entries {%#v: 10} = %v, error = %v, want [10] and nil", key, second, err)
 		return
 	}
 	first[0] = -1
 	if got, exists := m.Get(key); !exists || got != 10 {
-		t.Errorf("Get(%#v) after modifying the first ToList() result = (%d, %t), want (10, true)", key, got, exists)
+		t.Errorf("Get(%#v) after modifying the first Values() result = (%d, %t), want (10, true)", key, got, exists)
 	}
 	if second[0] != 10 {
-		t.Errorf("second ToList() result after setting the first result to [-1] = %v, want [10]", second)
+		t.Errorf("second Values() result after setting the first result to [-1] = %v, want [10]", second)
 	}
 	if err := m.Remove(key); err != nil {
-		t.Errorf("Remove(%#v) after ToList() error = %v, want nil", key, err)
+		t.Errorf("Remove(%#v) after Values() error = %v, want nil", key, err)
 		return
 	}
 	if err := m.Insert(key, 20); err != nil {
-		t.Errorf("Insert(%#v, 20) after ToList() error = %v, want nil", key, err)
+		t.Errorf("Insert(%#v, 20) after Values() error = %v, want nil", key, err)
 		return
 	}
 	if !slices.Equal(second, []int{10}) {
-		t.Errorf("ToList() result after replacing value at key %#v with 20 = %v, want [10]", key, second)
+		t.Errorf("Values() result after replacing value at key %#v with 20 = %v, want [10]", key, second)
 	}
-	checkHashMapList(t, m, map[testKey]int{key: 20}, "after replacing a value")
+	checkHashMapValues(t, m, map[testKey]int{key: 20}, "after replacing a value")
 }
 
-// TestHashMapToListPointerValues checks nil values, repeated pointers, and shallow copies.
-func TestHashMapToListPointerValues(t *testing.T) {
+// TestHashMapKeys checks snapshots through insertions, removals, and resizing.
+func TestHashMapKeys(t *testing.T) {
+	tests := []struct {
+		name     string
+		count    int
+		hashStep uint64
+	}{
+		{name: "empty"},
+		{name: "zero key", count: 1},
+		{name: "collisions", count: 8},
+		{name: "large input", count: 1024, hashStep: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewHashMap[testKey, int]()
+			want := make(map[testKey]int, tt.count)
+			for i := 0; i < tt.count; i++ {
+				key := testKey{id: i, hash: uint64(i) * tt.hashStep}
+				if err := m.Insert(key, i%3); err != nil {
+					t.Errorf("Insert(%#v, %d) during setup error = %v, want nil", key, i%3, err)
+					return
+				}
+				want[key] = i % 3
+			}
+			checkHashMapKeys(t, m, want, "after insertion")
+
+			for i := 0; i < tt.count; i += 2 {
+				key := testKey{id: i, hash: uint64(i) * tt.hashStep}
+				if err := m.Remove(key); err != nil {
+					t.Errorf("Remove(%#v) from %d entries error = %v, want nil", key, tt.count, err)
+					return
+				}
+				delete(want, key)
+			}
+			checkHashMapKeys(t, m, want, "after removing alternating keys")
+
+			for i := 0; i < tt.count; i += 2 {
+				key := testKey{id: i, hash: uint64(i) * tt.hashStep}
+				if err := m.Insert(key, -1); err != nil {
+					t.Errorf("Insert(%#v, -1) after removal error = %v, want nil", key, err)
+					return
+				}
+				want[key] = -1
+			}
+			checkHashMapKeys(t, m, want, "after reinsertion")
+
+			for key := range want {
+				if err := m.Remove(key); err != nil {
+					t.Errorf("Remove(%#v) while emptying %d entries error = %v, want nil", key, tt.count, err)
+					return
+				}
+				delete(want, key)
+				checkHashMapKeys(t, m, want, "while shrinking and emptying the hashmap")
+			}
+		})
+	}
+}
+
+// TestHashMapKeysCopyIsolation checks independence from the map and other snapshots.
+func TestHashMapKeysCopyIsolation(t *testing.T) {
+	m := NewHashMap[testKey, int]()
+	key := testKey{id: 1}
+	if err := m.Insert(key, 10); err != nil {
+		t.Errorf("Insert(%#v, 10) during setup error = %v, want nil", key, err)
+		return
+	}
+	first, err := m.Keys()
+	if err != nil || !slices.Equal(first, []testKey{key}) {
+		t.Errorf("Keys() with key %#v = %v, error = %v, want [%#v] and nil", key, first, err, key)
+		return
+	}
+	second, err := m.Keys()
+	if err != nil || !slices.Equal(second, []testKey{key}) {
+		t.Errorf("Keys() again with key %#v = %v, error = %v, want [%#v] and nil", key, second, err, key)
+		return
+	}
+	first[0] = testKey{id: -1}
+	if !slices.Equal(second, []testKey{key}) {
+		t.Errorf("second Keys() after changing the first snapshot = %v, want [%#v]", second, key)
+	}
+	checkHashMapContents(t, m, map[testKey]int{key: 10}, "after changing a key snapshot")
+	if err := m.Remove(key); err != nil {
+		t.Errorf("Remove(%#v) after Keys() error = %v, want nil", key, err)
+		return
+	}
+	if !slices.Equal(second, []testKey{key}) {
+		t.Errorf("Keys() snapshot after Remove(%#v) = %v, want [%#v]", key, second, key)
+	}
+}
+
+// TestHashMapValuesPointerValues checks nil values, repeated pointers, and shallow copies.
+func TestHashMapValuesPointerValues(t *testing.T) {
 	m := NewHashMap[testKey, *int]()
 	value := 10
 	values := []*int{nil, &value, &value}
@@ -473,9 +592,9 @@ func TestHashMapToListPointerValues(t *testing.T) {
 			return
 		}
 	}
-	got, err := m.ToList()
+	got, err := m.Values()
 	if err != nil {
-		t.Errorf("ToList() with values %v error = %v, want nil", values, err)
+		t.Errorf("Values() with values %v error = %v, want nil", values, err)
 		return
 	}
 	wantCounts := map[*int]int{nil: 1, &value: 2}
@@ -484,11 +603,11 @@ func TestHashMapToListPointerValues(t *testing.T) {
 		counts[pointer]++
 	}
 	if len(got) != len(values) || len(counts) != len(wantCounts) {
-		t.Errorf("ToList() with values %v = %v with counts %v, want counts %v", values, got, counts, wantCounts)
+		t.Errorf("Values() with values %v = %v with counts %v, want counts %v", values, got, counts, wantCounts)
 	}
 	for pointer, wantCount := range wantCounts {
 		if counts[pointer] != wantCount {
-			t.Errorf("ToList() with values %v contains pointer %p %d times, want %d", values, pointer, counts[pointer], wantCount)
+			t.Errorf("Values() with values %v contains pointer %p %d times, want %d", values, pointer, counts[pointer], wantCount)
 		}
 	}
 }
