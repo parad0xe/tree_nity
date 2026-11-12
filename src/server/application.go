@@ -150,7 +150,7 @@ func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, 
 	case *protocol.AcknowledgementPayload, *protocol.ConsumerHeartbeatPayload,
 		*protocol.ConsumerDisconnectPayload:
 		// TODO: route notifications to consumer handlers once they are implemented.
-		return exitcode.Success, nil
+		return exitcode.General, errUnhandledOpcode
 	default:
 		err = ipc.Reply(
 			sendCtx,

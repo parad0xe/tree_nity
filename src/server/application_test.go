@@ -647,8 +647,8 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.Success || err != nil {
-				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and nil", tt.opcode, inbound.IPCPath(), code, err, exitcode.Success)
+			if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
+				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, errUnhandledOpcode)
 			}
 			// A marker sent after dispatch must be the first frame in the client queue.
 			if err := ipc.Reply(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
