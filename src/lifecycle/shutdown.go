@@ -13,6 +13,11 @@ func NewGracefulShutdown(requestedChan <-chan struct{}) GracefulShutdown {
 	}
 }
 
+// Requested returns a channel that is closed when the shutdown is requested.
+func (s GracefulShutdown) Requested() <-chan struct{} {
+	return s.requestedChan
+}
+
 // IsRequested reports, without waiting, whether the shutdown was requested.
 func (s GracefulShutdown) IsRequested() bool {
 	select {
