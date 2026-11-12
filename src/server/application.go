@@ -137,11 +137,11 @@ func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, 
 	var err error
 	// Decoding guarantees that the payload type matches the opcode.
 	switch payload := data.Payload().(type) {
-	// TODO: enable request routes when their handlers can send a response.
-	// case *protocol.ListTopicPayload:
-	// 	app.topicManager.ListTopics(*metadata, *payload)
+	case *protocol.ListTopicPayload:
+		err = app.topicManager.ListTopics(sendCtx, *metadata, *payload)
 	case *protocol.CreateTopicPayload:
 		err = app.topicManager.CreateTopic(sendCtx, ctx, *metadata, *payload)
+	// TODO: enable request routes when their handlers can send a response.
 	// case *protocol.TopicSubscriptionPayload:
 	// 	app.topicManager.NewSubscription(*metadata, *payload)
 	// case *protocol.CheckTopicPayload:

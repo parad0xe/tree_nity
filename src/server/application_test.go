@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -561,6 +562,58 @@ func receiveServerReply(t *testing.T, inbound *ipc.Inbound, opcode protocol.Opco
 	return data
 }
 
+// TestDispatchListsTopics checks the names returned for empty and populated registries.
+func TestDispatchListsTopics(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+	}{
+		{name: "empty"},
+		{name: "single topic", count: 1},
+		{name: "many topics", count: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+			defer cancel()
+			app := &application{topicManager: topic.NewManager()}
+			inbound := newServerClientInbox(t)
+			metadata := protocol.NewClientMetadata(inbound.IPCPath())
+			want := make([]string, tt.count)
+			for i := range want {
+				want[i] = fmt.Sprintf("topic-%03d", i)
+				data, err := protocol.NewData(protocol.CreateTopic, metadata, protocol.NewCreateTopicPayload(want[i]))
+				if err != nil {
+					t.Fatalf("NewData(CreateTopic, %q) during setup error = %v, want nil", want[i], err)
+				}
+				if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+					t.Fatalf("dispatch(CreateTopic, %q) during setup = %d, %v, want %d and nil", want[i], code, err, exitcode.Success)
+				}
+				receiveServerReply(t, inbound, protocol.CreateTopicReply)
+			}
+			data, err := protocol.NewData(protocol.ListTopic, metadata, protocol.NewListTopicPayload())
+			if err != nil {
+				t.Fatalf("NewData(ListTopic) during setup error = %v, want nil", err)
+			}
+			if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+				t.Errorf("dispatch(ListTopic) with %d topics = %d, %v, want %d and nil", tt.count, code, err, exitcode.Success)
+				return
+			}
+			data = receiveServerReply(t, inbound, protocol.ListTopicReply)
+			reply, ok := data.Payload().(*protocol.ListTopicReplyPayload)
+			if !ok {
+				t.Errorf("dispatch(ListTopic) with %d topics reply payload = %T, want *protocol.ListTopicReplyPayload", tt.count, data.Payload())
+				return
+			}
+			got := reply.Topics()
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("dispatch(ListTopic) with topics %q = %q, want the same names in any order", want, got)
+			}
+		})
+	}
+}
+
 // TestDispatchRejectsUnimplementedTopicRequests checks responses for commented-out routes.
 func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
 	tests := []struct {
@@ -568,7 +621,6 @@ func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
 		opcode  protocol.Opcode
 		payload protocol.Payload
 	}{
-		{name: "list", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload()},
 		{name: "subscribe", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "events", "", nil)},
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 		{name: "produce", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("value")))},
@@ -711,6 +763,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 	}{
 		{name: "canceled creation", ctx: cancelledContext(), opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events"), wantErr: context.Canceled},
 		{name: "expired creation", ctx: expired, opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events"), wantErr: context.DeadlineExceeded},
+		{name: "canceled listing", ctx: cancelledContext(), opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: context.Canceled},
+		{name: "expired listing", ctx: expired, opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: context.DeadlineExceeded},
 		{name: "canceled rejection", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled, wantUnhandled: true},
 		{name: "expired rejection", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded, wantUnhandled: true},
 	}
@@ -772,6 +826,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 		payload protocol.Payload
 	}{
 		{name: "creation", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events")},
+		{name: "listing", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload()},
 		{name: "rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
 	}
 	for _, tt := range tests {
