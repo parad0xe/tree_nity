@@ -28,7 +28,8 @@ func NewManager() *Manager {
 }
 
 // ListTopics replies with topic names in unspecified order and returns internal or IPC errors.
-func (m *Manager) ListTopics(metadata protocol.ClientMetadata, payload protocol.ListTopicPayload) error {
+// ctx bounds reply delivery and must be non-nil.
+func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ListTopicPayload) error {
 	m.mu.RLock()
 	topicIDs, err := m.topicMap.Keys()
 	m.mu.RUnlock()
@@ -43,6 +44,7 @@ func (m *Manager) ListTopics(metadata protocol.ClientMetadata, payload protocol.
 	}
 
 	return m.reply(
+		ctx,
 		metadata,
 		protocol.ListTopicReply,
 		protocol.NewListTopicReplyPayload(topics),

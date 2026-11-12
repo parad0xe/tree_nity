@@ -89,18 +89,18 @@ func TestManagerListTopics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := topicManagerContext(t)
-			manager := NewManager(ctx)
+			manager := NewManager()
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 			want := make([]string, tt.count)
 			for i := range want {
 				want[i] = fmt.Sprintf("topic-%03d", i)
-				if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
+				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
 					t.Fatalf("CreateTopic(%q) during setup error = %v, want nil", want[i], err)
 				}
 				receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
 			}
-			if err := manager.ListTopics(metadata, *protocol.NewListTopicPayload()); err != nil {
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); err != nil {
 				t.Errorf("ListTopics() with %d topics error = %v, want nil", tt.count, err)
 				return
 			}
@@ -133,10 +133,11 @@ func TestManagerListTopicsPropagatesIndexErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := NewManager(topicManagerContext(t))
+			ctx := topicManagerContext(t)
+			manager := NewManager()
 			manager.topicMap = tt.index
 			metadata := *protocol.NewClientMetadata("/unused")
-			if err := manager.ListTopics(metadata, *protocol.NewListTopicPayload()); !errors.Is(err, hashmap.ErrUninitialized) {
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, hashmap.ErrUninitialized) {
 				t.Errorf("ListTopics() with %s error = %v, want %v", tt.name, err, hashmap.ErrUninitialized)
 			}
 		})
@@ -155,32 +156,76 @@ func TestManagerListTopicsPropagatesQueueErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := NewManager(topicManagerContext(t))
+			ctx := topicManagerContext(t)
+			manager := NewManager()
 			metadata := *protocol.NewClientMetadata(tt.ipcPath)
-			if err := manager.ListTopics(metadata, *protocol.NewListTopicPayload()); !errors.Is(err, tt.wantErr) {
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ListTopics() with queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
 			}
 		})
 	}
 }
 
-// TestManagerListTopicsPropagatesCancellation checks canceled reply delivery.
-func TestManagerListTopicsPropagatesCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(topicManagerContext(t))
+// TestManagerListTopicsPropagatesStoppedContexts checks canceled and expired reply delivery.
+func TestManagerListTopicsPropagatesStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.ListTopics(tt.ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ListTopics() with a %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerListTopicsUsesEachRequestContext checks recovery after a canceled listing.
+func TestManagerListTopicsUsesEachRequestContext(t *testing.T) {
+	topicCtx := topicManagerContext(t)
+	ctx, cancel := context.WithCancel(topicCtx)
 	defer cancel()
-	manager := NewManager(ctx)
+	manager := NewManager()
+	if err := manager.topicMap.Insert("events", NewTopic(topicCtx)); err != nil {
+		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+	}
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	cancel()
-	if err := manager.ListTopics(metadata, *protocol.NewListTopicPayload()); !errors.Is(err, context.Canceled) {
+	if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, context.Canceled) {
 		t.Errorf("ListTopics() with a canceled context error = %v, want %v", err, context.Canceled)
+	}
+	if err := manager.ListTopics(topicCtx, metadata, *protocol.NewListTopicPayload()); err != nil {
+		t.Errorf("ListTopics() with a live context after a canceled listing error = %v, want nil", err)
+		return
+	}
+	data := receiveTopicManagerReply(t, topicCtx, inbound, protocol.ListTopicReply)
+	reply, ok := data.Payload().(*protocol.ListTopicReplyPayload)
+	if !ok {
+		t.Errorf("ListTopics() after a canceled listing reply payload = %T, want *protocol.ListTopicReplyPayload", data.Payload())
+		return
+	}
+	if got := reply.Topics(); !slices.Equal(got, []string{"events"}) {
+		t.Errorf("ListTopics() with [events] after a canceled listing = %q, want [events]", got)
 	}
 }
 
 // TestManagerListTopicsPropagatesSendErrors checks replies exceeding the queue frame size.
 func TestManagerListTopicsPropagatesSendErrors(t *testing.T) {
 	ctx := topicManagerContext(t)
-	manager := NewManager(ctx)
+	manager := NewManager()
 	for i := 0; i < 512; i++ {
 		topicID := id.ID(fmt.Sprintf("topic-%03d", i))
 		if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
@@ -189,7 +234,7 @@ func TestManagerListTopicsPropagatesSendErrors(t *testing.T) {
 	}
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-	if err := manager.ListTopics(metadata, *protocol.NewListTopicPayload()); !errors.Is(err, mqueue.ErrFrameTooLarge) {
+	if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, mqueue.ErrFrameTooLarge) {
 		t.Errorf("ListTopics() with 512 topics error = %v, want %v", err, mqueue.ErrFrameTooLarge)
 	}
 }
@@ -197,7 +242,7 @@ func TestManagerListTopicsPropagatesSendErrors(t *testing.T) {
 // TestManagerListTopicsDuringCreation checks complete snapshots while topics are created.
 func TestManagerListTopicsDuringCreation(t *testing.T) {
 	ctx, cancel := context.WithCancel(topicManagerContext(t))
-	manager := NewManager(ctx)
+	manager := NewManager()
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	const count = 128
@@ -214,7 +259,7 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		<-start
 		for i := 0; i < count; i++ {
 			name := fmt.Sprintf("topic-%03d", i)
-			if err := manager.CreateTopic(metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
 				return
 			}
@@ -225,7 +270,7 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		defer workers.Done()
 		<-start
 		for i := 0; i < count; i++ {
-			if err := manager.ListTopics(metadata, *protocol.NewListTopicPayload()); err != nil {
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); err != nil {
 				results <- fmt.Errorf("ListTopics() request %d: %w", i, err)
 				return
 			}
