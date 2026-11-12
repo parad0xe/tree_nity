@@ -11,6 +11,8 @@ import (
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
+	"tree_nity/src/server/response"
+	"tree_nity/src/server/session/topic"
 )
 
 const (
@@ -18,20 +20,23 @@ const (
 	gracePeriod = 5 * time.Second
 	// shutdownPollInterval is how often listen checks for a shutdown request.
 	shutdownPollInterval = 200 * time.Millisecond
+	// replyTimeout is the longest a response waits while the client queue is full.
+	replyTimeout = 2 * time.Second
 )
 
 // application holds the resources the server owns while it runs.
 type application struct {
-	inbound *ipc.Inbound
+	inbound      *ipc.Inbound
+	topicManager *topic.Manager
 }
 
-// newApplication creates the server inbound queue, named after the process ID.
+// newApplication initializes topic state and creates the server queue, named after the process ID.
 // The returned error matches os.ErrExist when the queue already exists.
 func newApplication() (*application, error) {
 	pid := os.Getpid()
 	ipcPath := fmt.Sprintf("/operator.server.%d", pid)
 
-	app := &application{}
+	app := &application{topicManager: topic.NewManager()}
 
 	inbound, err := ipc.NewInbound(ipcPath, protocol.Decode)
 	if err != nil {
@@ -42,19 +47,17 @@ func newApplication() (*application, error) {
 	return app, nil
 }
 
-// run listens for frames until sigCtx is done, then for at most gracePeriod.
-// The returned error matches context.Canceled when sigCtx is done before run
-// starts, and is the error of Recv, with exitcode.IPC, when receiving fails.
-func (app *application) run(sigCtx context.Context) (int, error) {
-	if sigCtx.Err() != nil {
-		return exitcode.Success, sigCtx.Err()
+// run serves requests until shutdown is requested, then for at most gracePeriod.
+// Canceling ctx interrupts IPC; receive failures return exitcode.IPC.
+func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
+	if ctx.Err() != nil {
+		return exitcode.Success, ctx.Err()
 	}
 
-	shutdown := lifecycle.NewGracefulShutdown(sigCtx.Done())
 	done := make(chan lifecycle.ExitResult, 1)
 
-	// runCtx does not derive from sigCtx: a signal must not stop listen.
-	runCtx, runCancel := context.WithCancel(context.Background())
+	// A shutdown request leaves runCtx active during the grace period.
+	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
 	go func() {
@@ -65,7 +68,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 	select {
 	case res := <-done:
 		return res.Code(), res.Err()
-	case <-sigCtx.Done():
+	case <-shutdown.Requested():
 	}
 
 	select {
@@ -76,17 +79,17 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 
 	// The inbound must not be dropped while Recv is running.
 	runCancel()
-	if res := <-done; !errors.Is(res.Err(), context.Canceled) {
-		return res.Code(), res.Err()
+	res := <-done
+	if errors.Is(res.Err(), context.Canceled) && ctx.Err() == nil {
+		return exitcode.Success, nil
 	}
 
-	return exitcode.Success, nil
+	return res.Code(), res.Err()
 }
 
-// listen receives frames until the server is asked to stop and is ready to.
-// Invalid frames are logged and skipped. The returned error matches
-// context.Canceled or context.DeadlineExceeded when ctx is done first, and is
-// the error of Recv, with exitcode.IPC, when receiving fails.
+// listen receives requests until the server can stop.
+// Invalid frames and recoverable handler errors are logged and skipped.
+// Receive failures return exitcode.IPC; canceled handlers retain their dispatch code.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
 	for {
 		if shutdown.IsRequested() && app.readyToFinish() {
@@ -112,13 +115,61 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 			return exitcode.IPC, err
 		}
 
-		switch data {
-		// TODO: dispatch each opcode to its handler
-		default:
-			// TODO: reply to the client with an error once the server answers requests
-			logError("server:", errUnhandledOpcode)
+		if code, err := app.dispatch(ctx, data); err != nil {
+			if ctx.Err() != nil {
+				return code, err
+			}
+			logError("server:", err)
 		}
 	}
+}
+
+// dispatch routes validated client requests and returns their exit status.
+func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, error) {
+	metadata, ok := data.Metadata().(*protocol.ClientMetadata)
+	if !ok {
+		return exitcode.General, errUnhandledOpcode
+	}
+
+	sendCtx, sendCancel := context.WithTimeout(ctx, replyTimeout)
+	defer sendCancel()
+
+	var err error
+	// Decoding guarantees that the payload type matches the opcode.
+	switch payload := data.Payload().(type) {
+	// TODO: enable request routes when their handlers can send a response.
+	// case *protocol.ListTopicPayload:
+	// 	app.topicManager.ListTopics(*metadata, *payload)
+	case *protocol.CreateTopicPayload:
+		err = app.topicManager.CreateTopic(sendCtx, ctx, *metadata, *payload)
+	// case *protocol.TopicSubscriptionPayload:
+	// 	app.topicManager.NewSubscription(*metadata, *payload)
+	// case *protocol.CheckTopicPayload:
+	// 	app.topicManager.CheckTopic(*metadata, *payload)
+	// case *protocol.ProduceMessagePayload:
+	// 	app.topicManager.ProduceMessage(*metadata, *payload)
+	case *protocol.AcknowledgementPayload, *protocol.ConsumerHeartbeatPayload,
+		*protocol.ConsumerDisconnectPayload:
+		// TODO: route notifications to consumer handlers once they are implemented.
+		return exitcode.General, errUnhandledOpcode
+	default:
+		err = response.SendToClient(
+			sendCtx,
+			*metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.InvalidRequest, errUnhandledOpcode.Error()),
+		)
+		if err != nil {
+			err = errors.Join(errUnhandledOpcode, err)
+		}
+	}
+	if err != nil {
+		if errors.Is(err, response.ErrReply) && !errors.Is(err, ipc.ErrInvalidData) {
+			return exitcode.IPC, err
+		}
+		return exitcode.General, err
+	}
+	return exitcode.Success, nil
 }
 
 // readyToFinish reports whether the server can stop cleanly.
