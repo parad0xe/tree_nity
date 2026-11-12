@@ -13,8 +13,8 @@ func NewGracefulShutdown(requestedChan <-chan struct{}) GracefulShutdown {
 	}
 }
 
-// Requested reports, without waiting, whether the shutdown was requested.
-func (s GracefulShutdown) Requested() bool {
+// IsRequested reports, without waiting, whether the shutdown was requested.
+func (s GracefulShutdown) IsRequested() bool {
 	select {
 	case <-s.requestedChan:
 		return true

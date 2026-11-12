@@ -366,7 +366,7 @@ func TestRunDoesNotRequestShutdownWithoutSignal(t *testing.T) {
 	app := &application{}
 	var requested bool
 	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
-		requested = env.Shutdown.Requested()
+		requested = env.Shutdown.IsRequested()
 		return exitcode.Success, nil
 	})
 
@@ -383,7 +383,7 @@ func TestRunRequestsShutdownAfterSignal(t *testing.T) {
 	app := &application{gracePeriod: testTimeout}
 	var requested bool
 	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
-		requested = env.Shutdown.Requested()
+		requested = env.Shutdown.IsRequested()
 		return exitcode.Success, nil
 	})
 
