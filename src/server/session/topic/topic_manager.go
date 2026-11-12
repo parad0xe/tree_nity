@@ -5,9 +5,9 @@ import (
 	"errors"
 	"sync"
 
-	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/server/response"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
 )
@@ -38,7 +38,7 @@ func (m *Manager) ListTopics(metadata protocol.ClientMetadata, payload protocol.
 func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
 	topicID := id.ID(payload.Topic())
 	if err := topicID.Validate(); err != nil {
-		return ipc.Reply(
+		return response.SendToClient(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -52,7 +52,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 
 	if err != nil {
 		if errors.Is(err, hashmap.ErrKeyExists) {
-			return ipc.Reply(
+			return response.SendToClient(
 				ctx,
 				metadata,
 				protocol.ErrorReply,
@@ -62,7 +62,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 		return err
 	}
 
-	return ipc.Reply(
+	return response.SendToClient(
 		ctx,
 		metadata,
 		protocol.CreateTopicReply,

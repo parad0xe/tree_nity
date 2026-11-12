@@ -11,6 +11,4 @@ var (
 	ErrNilDecoder = errors.New("nil decoder")
 	// ErrNilEncoder reports an outbound requested without an encoder.
 	ErrNilEncoder = errors.New("nil encoder")
-	// ErrReply reports a failure sending a reply or closing its outbound handle.
-	ErrReply = errors.New("reply communication failed")
 )

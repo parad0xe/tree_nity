@@ -1,15 +1,16 @@
-package ipc
+package response
 
 import (
 	"context"
 	"errors"
 
+	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/protocol"
 )
 
-// Reply sends a server response to the client's IPC queue and closes the outbound handle.
+// SendToClient sends a server response to the client's IPC queue and closes the outbound handle.
 // Validation and queue-opening errors are returned directly; communication failures match ErrReply.
-func Reply(ctx context.Context, metadata protocol.ClientMetadata, opcode protocol.Opcode, payload protocol.Payload) error {
+func SendToClient(ctx context.Context, metadata protocol.ClientMetadata, opcode protocol.Opcode, payload protocol.Payload) error {
 	data, err := protocol.NewData(
 		opcode,
 		protocol.NewServerMetadata(),
@@ -19,7 +20,7 @@ func Reply(ctx context.Context, metadata protocol.ClientMetadata, opcode protoco
 		return err
 	}
 
-	outbound, err := NewOutbound(metadata.ClientIPC(), protocol.Encode)
+	outbound, err := ipc.NewOutbound(metadata.ClientIPC(), protocol.Encode)
 	if err != nil {
 		return err
 	}

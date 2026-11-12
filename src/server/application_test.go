@@ -16,6 +16,7 @@ import (
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
+	"tree_nity/src/server/response"
 	"tree_nity/src/server/session/topic"
 )
 
@@ -651,8 +652,8 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, errUnhandledOpcode)
 			}
 			// A marker sent after dispatch must be the first frame in the client queue.
-			if err := ipc.Reply(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
-				t.Fatalf("Reply(ServerShutdown) after dispatch(%v) error = %v, want nil", tt.opcode, err)
+			if err := response.SendToClient(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+				t.Fatalf("SendToClient(ServerShutdown) after dispatch(%v) error = %v, want nil", tt.opcode, err)
 			}
 			receiveServerReply(t, inbound, protocol.ServerShutdown)
 		})
@@ -722,8 +723,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
 			code, err := app.dispatch(tt.ctx, data)
-			if code != exitcode.IPC || !errors.Is(err, tt.wantErr) || !errors.Is(err, ipc.ErrReply) {
-				t.Errorf("dispatch(%v) with %s = %d, %v, want %d, %v and %v", tt.opcode, tt.name, code, err, exitcode.IPC, tt.wantErr, ipc.ErrReply)
+			if code != exitcode.IPC || !errors.Is(err, tt.wantErr) || !errors.Is(err, response.ErrReply) {
+				t.Errorf("dispatch(%v) with %s = %d, %v, want %d, %v and %v", tt.opcode, tt.name, code, err, exitcode.IPC, tt.wantErr, response.ErrReply)
 			}
 			if got := errors.Is(err, errUnhandledOpcode); got != tt.wantUnhandled {
 				t.Errorf("dispatch(%v) with %s matches %v = %t, want %t", tt.opcode, tt.name, errUnhandledOpcode, got, tt.wantUnhandled)

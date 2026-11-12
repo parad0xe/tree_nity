@@ -11,6 +11,7 @@ import (
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
+	"tree_nity/src/server/response"
 	"tree_nity/src/server/session/topic"
 )
 
@@ -152,7 +153,7 @@ func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, 
 		// TODO: route notifications to consumer handlers once they are implemented.
 		return exitcode.General, errUnhandledOpcode
 	default:
-		err = ipc.Reply(
+		err = response.SendToClient(
 			sendCtx,
 			*metadata,
 			protocol.ErrorReply,
@@ -163,7 +164,7 @@ func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, 
 		}
 	}
 	if err != nil {
-		if errors.Is(err, ipc.ErrReply) && !errors.Is(err, ipc.ErrInvalidData) {
+		if errors.Is(err, response.ErrReply) && !errors.Is(err, ipc.ErrInvalidData) {
 			return exitcode.IPC, err
 		}
 		return exitcode.General, err
