@@ -43,7 +43,7 @@ func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetada
 		topics[i] = string(topicID)
 	}
 
-	return m.reply(
+	return response.SendToClient(
 		ctx,
 		metadata,
 		protocol.ListTopicReply,
