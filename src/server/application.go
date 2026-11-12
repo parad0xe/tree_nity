@@ -89,7 +89,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 // the error of Recv, with exitcode.IPC, when receiving fails.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
 	for {
-		if shutdown.Requested() && app.readyToFinish() {
+		if shutdown.IsRequested() && app.readyToFinish() {
 			return exitcode.Success, nil
 		}
 
