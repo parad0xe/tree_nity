@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"tree_nity/src/exitcode"
+	"tree_nity/src/lifecycle"
 )
 
 func main() {
@@ -23,6 +24,7 @@ func main() {
 func run(ctx context.Context) (code int) {
 	sigCtx, sigCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer sigCancel()
+	shutdown := lifecycle.NewGracefulShutdown(sigCtx.Done())
 
 	app, err := newApplication()
 	if err != nil {
@@ -42,7 +44,7 @@ func run(ctx context.Context) (code int) {
 		return exitcode.General
 	}
 
-	if c, err := app.run(sigCtx); err != nil {
+	if c, err := app.run(ctx, shutdown); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			logError("server:", err)
 			return c

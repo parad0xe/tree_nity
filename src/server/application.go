@@ -44,19 +44,17 @@ func newApplication() (*application, error) {
 	return app, nil
 }
 
-// run listens for frames until sigCtx is done, then for at most gracePeriod.
-// The returned error matches context.Canceled when sigCtx is done before run
-// starts, and is the error of Recv, with exitcode.IPC, when receiving fails.
-func (app *application) run(sigCtx context.Context) (int, error) {
-	if sigCtx.Err() != nil {
-		return exitcode.Success, sigCtx.Err()
+// run serves requests until shutdown is requested, then for at most gracePeriod.
+// Canceling ctx interrupts IPC; receive failures return exitcode.IPC.
+func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
+	if ctx.Err() != nil {
+		return exitcode.Success, ctx.Err()
 	}
 
-	shutdown := lifecycle.NewGracefulShutdown(sigCtx.Done())
 	done := make(chan lifecycle.ExitResult, 1)
 
-	// runCtx does not derive from sigCtx: a signal must not stop listen.
-	runCtx, runCancel := context.WithCancel(context.Background())
+	// A shutdown request leaves runCtx active during the grace period.
+	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 
 	go func() {
@@ -67,7 +65,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 	select {
 	case res := <-done:
 		return res.Code(), res.Err()
-	case <-sigCtx.Done():
+	case <-shutdown.Requested():
 	}
 
 	select {
@@ -78,11 +76,12 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 
 	// The inbound must not be dropped while Recv is running.
 	runCancel()
-	if res := <-done; !errors.Is(res.Err(), context.Canceled) {
-		return res.Code(), res.Err()
+	res := <-done
+	if errors.Is(res.Err(), context.Canceled) && ctx.Err() == nil {
+		return exitcode.Success, nil
 	}
 
-	return exitcode.Success, nil
+	return res.Code(), res.Err()
 }
 
 // listen initializes topic state and receives requests until the server can stop.
@@ -90,7 +89,7 @@ func (app *application) run(sigCtx context.Context) (int, error) {
 // context.Canceled or context.DeadlineExceeded when ctx is done first, and is
 // the error of Recv, with exitcode.IPC, when receiving fails.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
-	// The manager shares the listener's lifetime so shutdown also cancels IPC replies.
+	// The manager shares the listener's context, including forced cancellation.
 	app.topicManager = topic.NewManager(ctx)
 
 	for {
