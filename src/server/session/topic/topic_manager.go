@@ -27,10 +27,28 @@ func NewManager() *Manager {
 	}
 }
 
-// ListTopics is reserved for requests to list available topics.
-func (m *Manager) ListTopics(metadata protocol.ClientMetadata, payload protocol.ListTopicPayload) {
-	// TODO: collect topic IDs from topicMap and reply to the client with a
-	// comma-separated list of topic names.
+// ListTopics replies with topic names in unspecified order and returns internal or IPC errors.
+// ctx bounds reply delivery and must be non-nil.
+func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ListTopicPayload) error {
+	m.mu.RLock()
+	topicIDs, err := m.topicMap.Keys()
+	m.mu.RUnlock()
+
+	if err != nil {
+		return err
+	}
+
+	topics := make([]string, len(topicIDs))
+	for i, topicID := range topicIDs {
+		topics[i] = string(topicID)
+	}
+
+	return m.reply(
+		ctx,
+		metadata,
+		protocol.ListTopicReply,
+		protocol.NewListTopicReplyPayload(topics),
+	)
 }
 
 // CreateTopic replies with creation or rejection status and returns internal or IPC errors.

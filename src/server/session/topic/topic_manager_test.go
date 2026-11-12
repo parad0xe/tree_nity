@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -72,6 +73,255 @@ func TestNewManagerInitializesState(t *testing.T) {
 	}
 	if err := manager.consumerManager.AddConsumer("consumer-1", "events", 0, "", "/client"); err != nil {
 		t.Errorf("AddConsumer(consumer-1, events, 0, empty prefix, /client) after NewManager() error = %v, want nil", err)
+	}
+}
+
+// TestManagerListTopics checks the names returned for empty, minimal, and large registries.
+func TestManagerListTopics(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+	}{
+		{name: "empty"},
+		{name: "single topic", count: 1},
+		{name: "many topics", count: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			want := make([]string, tt.count)
+			for i := range want {
+				want[i] = fmt.Sprintf("topic-%03d", i)
+				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
+					t.Fatalf("CreateTopic(%q) during setup error = %v, want nil", want[i], err)
+				}
+				receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
+			}
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); err != nil {
+				t.Errorf("ListTopics() with %d topics error = %v, want nil", tt.count, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ListTopicReply)
+			reply, ok := data.Payload().(*protocol.ListTopicReplyPayload)
+			if !ok {
+				t.Errorf("ListTopics() with %d topics reply payload = %T, want *protocol.ListTopicReplyPayload", tt.count, data.Payload())
+				return
+			}
+			got := reply.Topics()
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("ListTopics() with topics %q = %q, want the same names in any order", want, got)
+			}
+			if got := manager.topicMap.Len(); got != uint64(tt.count) {
+				t.Errorf("topic count after ListTopics() with %d topics = %d, want %d", tt.count, got, tt.count)
+			}
+		})
+	}
+}
+
+// TestManagerListTopicsPropagatesIndexErrors checks failures reading topic keys.
+func TestManagerListTopicsPropagatesIndexErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		index *hashmap.HashMap[id.ID, *Topic]
+	}{
+		{name: "nil index"},
+		{name: "zero index", index: &hashmap.HashMap[id.ID, *Topic]{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			manager.topicMap = tt.index
+			metadata := *protocol.NewClientMetadata("/unused")
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, hashmap.ErrUninitialized) {
+				t.Errorf("ListTopics() with %s error = %v, want %v", tt.name, err, hashmap.ErrUninitialized)
+			}
+		})
+	}
+}
+
+// TestManagerListTopicsPropagatesQueueErrors checks failures opening the client queue.
+func TestManagerListTopicsPropagatesQueueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid queue name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/topic-manager.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			metadata := *protocol.NewClientMetadata(tt.ipcPath)
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ListTopics() with queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerListTopicsPropagatesStoppedContexts checks canceled and expired reply delivery.
+func TestManagerListTopicsPropagatesStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.ListTopics(tt.ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ListTopics() with a %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerListTopicsUsesEachRequestContext checks recovery after a canceled listing.
+func TestManagerListTopicsUsesEachRequestContext(t *testing.T) {
+	topicCtx := topicManagerContext(t)
+	ctx, cancel := context.WithCancel(topicCtx)
+	defer cancel()
+	manager := NewManager()
+	if err := manager.topicMap.Insert("events", NewTopic(topicCtx)); err != nil {
+		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+	}
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	cancel()
+	if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, context.Canceled) {
+		t.Errorf("ListTopics() with a canceled context error = %v, want %v", err, context.Canceled)
+	}
+	if err := manager.ListTopics(topicCtx, metadata, *protocol.NewListTopicPayload()); err != nil {
+		t.Errorf("ListTopics() with a live context after a canceled listing error = %v, want nil", err)
+		return
+	}
+	data := receiveTopicManagerReply(t, topicCtx, inbound, protocol.ListTopicReply)
+	reply, ok := data.Payload().(*protocol.ListTopicReplyPayload)
+	if !ok {
+		t.Errorf("ListTopics() after a canceled listing reply payload = %T, want *protocol.ListTopicReplyPayload", data.Payload())
+		return
+	}
+	if got := reply.Topics(); !slices.Equal(got, []string{"events"}) {
+		t.Errorf("ListTopics() with [events] after a canceled listing = %q, want [events]", got)
+	}
+}
+
+// TestManagerListTopicsPropagatesSendErrors checks replies exceeding the queue frame size.
+func TestManagerListTopicsPropagatesSendErrors(t *testing.T) {
+	ctx := topicManagerContext(t)
+	manager := NewManager()
+	for i := 0; i < 512; i++ {
+		topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+		if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+			t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+		}
+	}
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); !errors.Is(err, mqueue.ErrFrameTooLarge) {
+		t.Errorf("ListTopics() with 512 topics error = %v, want %v", err, mqueue.ErrFrameTooLarge)
+	}
+}
+
+// TestManagerListTopicsDuringCreation checks complete snapshots while topics are created.
+func TestManagerListTopicsDuringCreation(t *testing.T) {
+	ctx, cancel := context.WithCancel(topicManagerContext(t))
+	manager := NewManager()
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	const count = 128
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	workers.Add(2)
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for i := 0; i < count; i++ {
+			name := fmt.Sprintf("topic-%03d", i)
+			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
+				return
+			}
+		}
+		results <- nil
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for i := 0; i < count; i++ {
+			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); err != nil {
+				results <- fmt.Errorf("ListTopics() request %d: %w", i, err)
+				return
+			}
+		}
+		results <- nil
+	}()
+	close(start)
+	creations, listings := 0, 0
+	for i := 0; i < 2*count; i++ {
+		data, err := inbound.Recv(ctx)
+		if err != nil {
+			t.Errorf("Recv(%q) during %d creations and listings at reply %d error = %v, want nil", inbound.IPCPath(), count, i, err)
+			break
+		}
+		switch reply := data.Payload().(type) {
+		case *protocol.CreateTopicReplyPayload:
+			creations++
+			if data.Opcode() != protocol.CreateTopicReply {
+				t.Errorf("concurrent CreateTopic() reply opcode = %v, want %v", data.Opcode(), protocol.CreateTopicReply)
+			}
+		case *protocol.ListTopicReplyPayload:
+			listings++
+			if data.Opcode() != protocol.ListTopicReply {
+				t.Errorf("concurrent ListTopics() reply opcode = %v, want %v", data.Opcode(), protocol.ListTopicReply)
+			}
+			got := reply.Topics()
+			if len(got) > count {
+				t.Errorf("ListTopics() during %d creations returned %d topics, want at most %d", count, len(got), count)
+				continue
+			}
+			want := make([]string, len(got))
+			for j := range want {
+				want[j] = fmt.Sprintf("topic-%03d", j)
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("ListTopics() during sequential creation = %q, want a complete snapshot %q in any order", got, want)
+			}
+		default:
+			t.Errorf("reply %d during concurrent creation and listing payload = %T, want creation or listing payload", i, data.Payload())
+		}
+	}
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Errorf("concurrent creation and listing error = %v, want nil", err)
+		}
+	}
+	if creations != count || listings != count {
+		t.Errorf("concurrent creation and listing received %d confirmations and %d lists, want %d each", creations, listings, count)
 	}
 }
 
