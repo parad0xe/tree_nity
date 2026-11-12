@@ -38,7 +38,7 @@ func (m *Manager) ListTopics(metadata protocol.ClientMetadata, payload protocol.
 func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
 	topicID := id.ID(payload.Topic())
 	if err := topicID.Validate(); err != nil {
-		return m.reply(
+		return ipc.Reply(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -52,7 +52,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 
 	if err != nil {
 		if errors.Is(err, hashmap.ErrKeyExists) {
-			return m.reply(
+			return ipc.Reply(
 				ctx,
 				metadata,
 				protocol.ErrorReply,
@@ -62,7 +62,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 		return err
 	}
 
-	return m.reply(
+	return ipc.Reply(
 		ctx,
 		metadata,
 		protocol.CreateTopicReply,
@@ -86,26 +86,4 @@ func (m *Manager) CheckTopic(metadata protocol.ClientMetadata, payload protocol.
 func (m *Manager) ProduceMessage(metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) {
 	// TODO: reject missing topics, forward the message to the topic for storage
 	// and indexing, and notify its subscribed consumers.
-}
-
-// reply sends a response to the client's IPC queue and closes the outbound handle.
-func (m *Manager) reply(ctx context.Context, metadata protocol.ClientMetadata, opcode protocol.Opcode, payload protocol.Payload) error {
-	data, err := protocol.NewData(
-		opcode,
-		protocol.NewServerMetadata(),
-		payload,
-	)
-	if err != nil {
-		return err
-	}
-
-	outbound, err := ipc.NewOutbound(metadata.ClientIPC(), protocol.Encode)
-	if err != nil {
-		return err
-	}
-
-	sendErr := outbound.Send(ctx, data)
-	closeErr := outbound.Close()
-
-	return errors.Join(sendErr, closeErr)
 }

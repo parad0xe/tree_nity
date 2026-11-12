@@ -297,16 +297,6 @@ func TestManagerCreateTopicUsesEachRequestContext(t *testing.T) {
 	}
 }
 
-// TestManagerReplyRejectsInvalidPayloads checks validation before opening a client queue.
-func TestManagerReplyRejectsInvalidPayloads(t *testing.T) {
-	ctx := topicManagerContext(t)
-	manager := NewManager()
-	metadata := *protocol.NewClientMetadata("/missing")
-	if err := manager.reply(ctx, metadata, protocol.CreateTopicReply, nil); !errors.Is(err, protocol.ErrMissingPayload) {
-		t.Errorf("reply(CreateTopicReply, nil) error = %v, want %v", err, protocol.ErrMissingPayload)
-	}
-}
-
 // createTopicsConcurrently starts a bounded batch and collects replies after all calls return.
 func createTopicsConcurrently(t *testing.T, topicIDs []id.ID) (*Manager, []protocol.Data) {
 	t.Helper()
