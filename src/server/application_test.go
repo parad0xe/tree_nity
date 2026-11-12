@@ -371,9 +371,11 @@ func TestListenReportsReceiveFailure(t *testing.T) {
 	}
 }
 
-func TestRunReturnsWhenAlreadySignalled(t *testing.T) {
+func TestRunReturnsWhenAlreadyCancelled(t *testing.T) {
 	app := newTestApplication(t)
-	c := startCall(t, cancelledContext(), "run()", app.run)
+	c := startCall(t, cancelledContext(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.GracefulShutdown{})
+	})
 
 	res := c.wait(t)
 	if res.Code() != exitcode.Success {
@@ -384,16 +386,32 @@ func TestRunReturnsWhenAlreadySignalled(t *testing.T) {
 	}
 }
 
+// TestRunReturnsWhenShutdownAlreadyRequested checks shutdown independently of cancellation.
+func TestRunReturnsWhenShutdownAlreadyRequested(t *testing.T) {
+	app := newTestApplication(t)
+	c := startCall(t, t.Context(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, requestedShutdown())
+	})
+
+	res := c.wait(t)
+	if res.Code() != exitcode.Success || res.Err() != nil {
+		t.Errorf("run() with shutdown already requested = %d, %v, want %d and nil", res.Code(), res.Err(), exitcode.Success)
+	}
+}
+
 func TestRunStopsAfterSignal(t *testing.T) {
 	app := newTestApplication(t)
 	stderr := captureStderr(t)
-	c := startCall(t, context.Background(), "run()", app.run)
+	requestedChan := make(chan struct{})
+	c := startCall(t, t.Context(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.NewGracefulShutdown(requestedChan))
+	})
 
 	// The frame shows that listen is running before the signal arrives.
 	send(t, app.inbound.IPCPath(), validFrame)
 	stderr.waitFor(t, errUnhandledOpcode.Error())
-	// Cancelling the context of run plays the role of SIGINT.
-	c.cancel()
+	// Requesting shutdown plays the role of SIGINT without canceling run's context.
+	close(requestedChan)
 
 	res := c.wait(t)
 	if res.Code() != exitcode.Success {
@@ -404,9 +422,83 @@ func TestRunStopsAfterSignal(t *testing.T) {
 	}
 }
 
+// TestRunStopsWhenCancelled checks interruption without a graceful shutdown request.
+func TestRunStopsWhenCancelled(t *testing.T) {
+	app := newTestApplication(t)
+	stderr := captureStderr(t)
+	c := startCall(t, t.Context(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.GracefulShutdown{})
+	})
+
+	send(t, app.inbound.IPCPath(), validFrame)
+	stderr.waitFor(t, errUnhandledOpcode.Error())
+	c.cancel()
+
+	res := c.wait(t)
+	if res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("run() with a canceled context and no shutdown request = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+// TestRunFinishesReceivedRequestAfterShutdown checks that a signal leaves IPC active.
+func TestRunFinishesReceivedRequestAfterShutdown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	received := make(chan struct{})
+	resume := make(chan struct{})
+	ipcPath := serverIPCPath(os.Getpid())
+	inbound, err := ipc.NewInbound(ipcPath, func(frame []byte) (protocol.Data, error) {
+		data, err := protocol.Decode(frame)
+		if err != nil {
+			return data, err
+		}
+		close(received)
+		select {
+		case <-resume:
+			return data, nil
+		case <-ctx.Done():
+			return protocol.Data{}, ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewInbound(%q) during setup error = %v, want nil", ipcPath, err)
+	}
+	app := &application{inbound: inbound}
+	t.Cleanup(func() {
+		if err := app.drop(); err != nil {
+			t.Errorf("drop() after a request and shutdown error = %v, want nil", err)
+		}
+	})
+	client := newServerClientInbox(t)
+	requestedChan := make(chan struct{})
+	c := startCall(t, ctx, "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.NewGracefulShutdown(requestedChan))
+	})
+
+	sendCreateRequest(t, app, client.IPCPath(), "events")
+	select {
+	case <-received:
+	case <-ctx.Done():
+		t.Fatalf("run() did not receive CreateTopic(events) before shutdown: error = %v, want a received request", ctx.Err())
+	}
+	close(requestedChan)
+	close(resume)
+
+	data := receiveServerReply(t, client, protocol.CreateTopicReply)
+	if _, ok := data.Payload().(*protocol.CreateTopicReplyPayload); !ok {
+		t.Errorf("CreateTopic(events) after shutdown reply payload = %T, want *protocol.CreateTopicReplyPayload", data.Payload())
+	}
+	res := c.wait(t)
+	if res.Code() != exitcode.Success || res.Err() != nil {
+		t.Errorf("run() after receiving CreateTopic(events) then shutdown = %d, %v, want %d and nil", res.Code(), res.Err(), exitcode.Success)
+	}
+}
+
 func TestRunReportsReceiveFailure(t *testing.T) {
 	app := newBrokenApplication(t)
-	c := startCall(t, context.Background(), "run()", app.run)
+	c := startCall(t, context.Background(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.GracefulShutdown{})
+	})
 
 	res := c.wait(t)
 	if res.Code() != exitcode.IPC {
