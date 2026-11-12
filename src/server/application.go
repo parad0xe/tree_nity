@@ -19,6 +19,8 @@ const (
 	gracePeriod = 5 * time.Second
 	// shutdownPollInterval is how often listen checks for a shutdown request.
 	shutdownPollInterval = 200 * time.Millisecond
+	// replyTimeout is the longest a response waits while the client queue is full.
+	replyTimeout = 2 * time.Second
 )
 
 // application holds the resources the server owns while it runs.
@@ -27,13 +29,13 @@ type application struct {
 	topicManager *topic.Manager
 }
 
-// newApplication creates the server inbound queue, named after the process ID.
+// newApplication initializes topic state and creates the server queue, named after the process ID.
 // The returned error matches os.ErrExist when the queue already exists.
 func newApplication() (*application, error) {
 	pid := os.Getpid()
 	ipcPath := fmt.Sprintf("/operator.server.%d", pid)
 
-	app := &application{}
+	app := &application{topicManager: topic.NewManager()}
 
 	inbound, err := ipc.NewInbound(ipcPath, protocol.Decode)
 	if err != nil {
@@ -84,14 +86,10 @@ func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShut
 	return res.Code(), res.Err()
 }
 
-// listen initializes topic state and receives requests until the server can stop.
-// Invalid frames and handler errors are logged and skipped. The returned error matches
-// context.Canceled or context.DeadlineExceeded when ctx is done first, and is
-// the error of Recv, with exitcode.IPC, when receiving fails.
+// listen receives requests until the server can stop.
+// Invalid frames and recoverable handler errors are logged and skipped.
+// Receive failures return exitcode.IPC; canceled handlers retain their dispatch code.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
-	// The manager shares the listener's context, including forced cancellation.
-	app.topicManager = topic.NewManager(ctx)
-
 	for {
 		if shutdown.IsRequested() && app.readyToFinish() {
 			return exitcode.Success, nil
@@ -116,51 +114,61 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 			return exitcode.IPC, err
 		}
 
-		if err := app.dispatch(ctx, data); err != nil {
+		if code, err := app.dispatch(ctx, data); err != nil {
 			if ctx.Err() != nil {
-				return exitcode.Success, ctx.Err()
+				return code, err
 			}
 			logError("server:", err)
 		}
 	}
 }
 
-// dispatch routes validated client requests to the topic manager.
-func (app *application) dispatch(ctx context.Context, data protocol.Data) error {
+// dispatch routes validated client requests and returns their exit status.
+func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, error) {
 	metadata, ok := data.Metadata().(*protocol.ClientMetadata)
 	if !ok {
-		return errUnhandledOpcode
+		return exitcode.General, errUnhandledOpcode
 	}
 
+	sendCtx, sendCancel := context.WithTimeout(ctx, replyTimeout)
+	defer sendCancel()
+
+	var err error
 	// Decoding guarantees that the payload type matches the opcode.
 	switch payload := data.Payload().(type) {
-	case *protocol.ListTopicPayload:
-		app.topicManager.ListTopics(*metadata, *payload)
+	// TODO: enable request routes when their handlers can send a response.
+	// case *protocol.ListTopicPayload:
+	// 	app.topicManager.ListTopics(*metadata, *payload)
 	case *protocol.CreateTopicPayload:
-		return app.topicManager.CreateTopic(*metadata, *payload)
-	case *protocol.TopicSubscriptionPayload:
-		app.topicManager.NewSubscription(*metadata, *payload)
-	case *protocol.CheckTopicPayload:
-		app.topicManager.CheckTopic(*metadata, *payload)
-	case *protocol.ProduceMessagePayload:
-		app.topicManager.ProduceMessage(*metadata, *payload)
+		err = app.topicManager.CreateTopic(sendCtx, ctx, *metadata, *payload)
+	// case *protocol.TopicSubscriptionPayload:
+	// 	app.topicManager.NewSubscription(*metadata, *payload)
+	// case *protocol.CheckTopicPayload:
+	// 	app.topicManager.CheckTopic(*metadata, *payload)
+	// case *protocol.ProduceMessagePayload:
+	// 	app.topicManager.ProduceMessage(*metadata, *payload)
+	case *protocol.AcknowledgementPayload, *protocol.ConsumerHeartbeatPayload,
+		*protocol.ConsumerDisconnectPayload:
+		// TODO: route notifications to consumer handlers once they are implemented.
+		return exitcode.Success, nil
 	default:
-		reply, err := protocol.NewData(
+		err = ipc.Reply(
+			sendCtx,
+			*metadata,
 			protocol.ErrorReply,
-			protocol.NewServerMetadata(),
 			protocol.NewErrorReplyPayload(protocol.InvalidRequest, errUnhandledOpcode.Error()),
 		)
 		if err != nil {
-			return errors.Join(errUnhandledOpcode, err)
+			err = errors.Join(errUnhandledOpcode, err)
 		}
-		outbound, err := ipc.NewOutbound(metadata.ClientIPC(), protocol.Encode)
-		if err != nil {
-			return errors.Join(errUnhandledOpcode, err)
-		}
-		sendErr := outbound.Send(ctx, reply)
-		return errors.Join(errUnhandledOpcode, sendErr, outbound.Close())
 	}
-	return nil
+	if err != nil {
+		if errors.Is(err, ipc.ErrReply) && !errors.Is(err, ipc.ErrInvalidData) {
+			return exitcode.IPC, err
+		}
+		return exitcode.General, err
+	}
+	return exitcode.Success, nil
 }
 
 // readyToFinish reports whether the server can stop cleanly.
