@@ -325,6 +325,253 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 	}
 }
 
+// TestManagerCheckTopicConfirmsExistingTopics checks exact lookups without mutation.
+func TestManagerCheckTopicConfirmsExistingTopics(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+		topic string
+	}{
+		{name: "single topic", count: 1, topic: "topic-000"},
+		{name: "many topics", count: 128, topic: "topic-127"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			for i := 0; i < tt.count; i++ {
+				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+				}
+			}
+			original, _ := manager.topicMap.Get(id.ID(tt.topic))
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.CheckTopic(ctx, metadata, *protocol.NewCheckTopicPayload(tt.topic)); err != nil {
+				t.Errorf("CheckTopic(%q) with %d topics error = %v, want nil", tt.topic, tt.count, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.CheckTopicReply)
+			if _, ok := data.Payload().(*protocol.CheckTopicReplyPayload); !ok {
+				t.Errorf("CheckTopic(%q) payload = %T, want *protocol.CheckTopicReplyPayload", tt.topic, data.Payload())
+			}
+			if got := manager.topicMap.Len(); got != uint64(tt.count) {
+				t.Errorf("topic count after CheckTopic(%q) = %d, want %d", tt.topic, got, tt.count)
+			}
+			if got, exists := manager.topicMap.Get(id.ID(tt.topic)); !exists || got != original {
+				t.Errorf("Get(%q) after CheckTopic() = %p, %t, want %p and true", tt.topic, got, exists, original)
+			}
+		})
+	}
+}
+
+// TestManagerCheckTopicRejectsMissingTopics checks empty and populated registries.
+func TestManagerCheckTopicRejectsMissingTopics(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+		topic string
+	}{
+		{name: "empty registry", topic: "topic-000"},
+		{name: "single topic", count: 1, topic: "missing"},
+		{name: "many topics", count: 128, topic: "missing"},
+		{name: "prefix", count: 1, topic: "topic"},
+		{name: "case sensitive", count: 1, topic: "Topic-000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			for i := 0; i < tt.count; i++ {
+				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+				}
+			}
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.CheckTopic(ctx, metadata, *protocol.NewCheckTopicPayload(tt.topic)); err != nil {
+				t.Errorf("CheckTopic(%q) error = %v, want nil after rejection", tt.topic, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("CheckTopic(%q) payload = %T, want *protocol.ErrorReplyPayload", tt.topic, data.Payload())
+			} else if reply.Kind() != protocol.TopicNotFound || reply.Reason() == "" {
+				t.Errorf("CheckTopic(%q) rejection = %v, %q, want %v and a nonempty reason", tt.topic, reply.Kind(), reply.Reason(), protocol.TopicNotFound)
+			}
+			if got := manager.topicMap.Len(); got != uint64(tt.count) {
+				t.Errorf("topic count after CheckTopic(%q) = %d, want %d", tt.topic, got, tt.count)
+			}
+		})
+	}
+}
+
+// TestManagerCheckTopicRejectsInvalidIDs checks validation before lookup.
+func TestManagerCheckTopicRejectsInvalidIDs(t *testing.T) {
+	tests := []struct {
+		name  string
+		topic string
+	}{
+		{name: "empty"},
+		{name: "space", topic: "bad topic"},
+		{name: "slash", topic: "bad/topic"},
+		{name: "non-ASCII", topic: "événements"},
+		{name: "too long", topic: strings.Repeat("a", 33)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.CheckTopic(ctx, metadata, *protocol.NewCheckTopicPayload(tt.topic)); err != nil {
+				t.Errorf("CheckTopic(%q) error = %v, want nil after rejection", tt.topic, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("CheckTopic(%q) payload = %T, want *protocol.ErrorReplyPayload", tt.topic, data.Payload())
+			} else if reply.Kind() != protocol.InvalidRequest || reply.Reason() == "" {
+				t.Errorf("CheckTopic(%q) rejection = %v, %q, want %v and a nonempty reason", tt.topic, reply.Kind(), reply.Reason(), protocol.InvalidRequest)
+			}
+			if got := manager.topicMap.Len(); got != 0 {
+				t.Errorf("topic count after CheckTopic(%q) = %d, want 0", tt.topic, got)
+			}
+		})
+	}
+}
+
+// TestManagerCheckTopicPropagatesQueueErrors checks failed reply connections.
+func TestManagerCheckTopicPropagatesQueueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid queue name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/topic-check.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			metadata := *protocol.NewClientMetadata(tt.ipcPath)
+			if err := manager.CheckTopic(topicManagerContext(t), metadata, *protocol.NewCheckTopicPayload("events")); !errors.Is(err, tt.wantErr) {
+				t.Errorf("CheckTopic(events) with queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerCheckTopicPropagatesStoppedContexts checks canceled reply delivery.
+func TestManagerCheckTopicPropagatesStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		topic   string
+		wantErr error
+	}{
+		{name: "canceled confirmation", ctx: canceled, topic: "events", wantErr: context.Canceled},
+		{name: "expired confirmation", ctx: expired, topic: "events", wantErr: context.DeadlineExceeded},
+		{name: "canceled missing topic", ctx: canceled, topic: "missing", wantErr: context.Canceled},
+		{name: "expired missing topic", ctx: expired, topic: "missing", wantErr: context.DeadlineExceeded},
+		{name: "canceled invalid topic", ctx: canceled, topic: "bad/topic", wantErr: context.Canceled},
+		{name: "expired invalid topic", ctx: expired, topic: "bad/topic", wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+			}
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.CheckTopic(tt.ctx, metadata, *protocol.NewCheckTopicPayload(tt.topic)); !errors.Is(err, tt.wantErr) {
+				t.Errorf("CheckTopic(%q) with %s error = %v, want %v", tt.topic, tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerCheckTopicDuringCreation checks lookups alongside registry growth.
+func TestManagerCheckTopicDuringCreation(t *testing.T) {
+	ctx, cancel := context.WithCancel(topicManagerContext(t))
+	manager := NewManager()
+	if err := manager.topicMap.Insert("events", NewTopic(ctx)); err != nil {
+		cancel()
+		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+	}
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	const count = 128
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	workers.Add(2)
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for i := 0; i < count; i++ {
+			name := fmt.Sprintf("topic-%03d", i)
+			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
+				return
+			}
+		}
+		results <- nil
+	}()
+	go func() {
+		defer workers.Done()
+		<-start
+		for i := 0; i < count; i++ {
+			if err := manager.CheckTopic(ctx, metadata, *protocol.NewCheckTopicPayload("events")); err != nil {
+				results <- fmt.Errorf("CheckTopic(events) request %d: %w", i, err)
+				return
+			}
+		}
+		results <- nil
+	}()
+	close(start)
+	creations, checks := 0, 0
+	for i := 0; i < 2*count; i++ {
+		data, err := inbound.Recv(ctx)
+		if err != nil {
+			t.Errorf("Recv(%q) during creation and checks at reply %d error = %v, want nil", inbound.IPCPath(), i, err)
+			cancel()
+			break
+		}
+		switch data.Payload().(type) {
+		case *protocol.CreateTopicReplyPayload:
+			creations++
+		case *protocol.CheckTopicReplyPayload:
+			checks++
+		default:
+			t.Errorf("reply %d during creation and checks payload = %T, want creation or check payload", i, data.Payload())
+		}
+	}
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Errorf("concurrent creation and checks error = %v, want nil", err)
+		}
+	}
+	if creations != count || checks != count {
+		t.Errorf("concurrent creation and checks received %d creations and %d checks, want %d each", creations, checks, count)
+	}
+}
+
 // TestManagerCreateTopics checks registration and confirmation for increasing topic counts.
 func TestManagerCreateTopics(t *testing.T) {
 	tests := []struct {

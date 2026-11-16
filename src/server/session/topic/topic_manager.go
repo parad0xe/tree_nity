@@ -94,10 +94,37 @@ func (m *Manager) NewSubscription(metadata protocol.ClientMetadata, payload prot
 	// detach any previous topic subscription, then call Topic.UpsertConsumer.
 }
 
-// CheckTopic is reserved for topic existence checks.
-func (m *Manager) CheckTopic(metadata protocol.ClientMetadata, payload protocol.CheckTopicPayload) {
-	// TODO: look up the requested topic in topicMap and reply to the client
-	// with its existence status before message production begins.
+// CheckTopic replies with existence or rejection status; ctx bounds delivery.
+func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.CheckTopicPayload) error {
+	topicID := id.ID(payload.Topic())
+	if err := topicID.Validate(); err != nil {
+		return response.SendToClient(
+			ctx,
+			metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.InvalidRequest, err.Error()),
+		)
+	}
+
+	m.mu.RLock()
+	_, exists := m.topicMap.Get(topicID)
+	m.mu.RUnlock()
+
+	if !exists {
+		return response.SendToClient(
+			ctx,
+			metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic does not exist"),
+		)
+	}
+
+	return response.SendToClient(
+		ctx,
+		metadata,
+		protocol.CheckTopicReply,
+		protocol.NewCheckTopicReplyPayload(),
+	)
 }
 
 // ProduceMessage is reserved for requests to publish messages to a topic.
