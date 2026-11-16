@@ -22,7 +22,7 @@ type Topic struct {
 	messageOffsetTrie *MessageOffsetTrie
 	consumerTrie      *ConsumerTrie
 	consumerMap       *hashmap.HashMap[id.ID, *subscription]
-	newMessageCond    *sync.Cond
+	newMessageChan    chan protocol.Message
 }
 
 // NewTopic initializes the indexes without starting message processing.
@@ -32,8 +32,8 @@ func NewTopic(ctx context.Context) *Topic {
 		messageOffsetTrie: NewMessageOffsetTrie(),
 		consumerTrie:      NewConsumerTrie(),
 		consumerMap:       hashmap.NewHashMap[id.ID, *subscription](),
+		newMessageChan:    make(chan protocol.Message),
 	}
-	t.newMessageCond = sync.NewCond(&t.mu)
 	// TODO: start a single run goroutine when message processing is implemented.
 	return t
 }
@@ -253,10 +253,17 @@ func (t *Topic) unregisterConsumer(c *subscription) (*subscription, error) {
 	return storedConsumer, nil
 }
 
-// ProduceMessage is the entry point for submitting a new message to the topic loop.
-func (t *Topic) ProduceMessage(message protocol.Message) {
-	// TODO: enqueue the message while holding newMessageCond.L, then signal
-	// newMessageCond so run can process it.
+// ProduceMessage sends a message to the topic loop or returns ctx's error.
+func (t *Topic) ProduceMessage(ctx context.Context, message protocol.Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case t.newMessageChan <- message:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (t *Topic) validate() error {
@@ -269,11 +276,11 @@ func (t *Topic) validate() error {
 
 // run is the single topic goroutine's entry point for receiving new messages.
 func (t *Topic) run() {
-	// TODO: wait for pending messages on newMessageCond, store and index them,
+	// TODO: select between newMessageChan and shutdown, store and index messages,
 	// and select matching consumers with consumerTrie. Release shared-state
 	// locks before forwarding each message to their Connection.MessageChan.
-	// Wake condition waits on cancellation and make channel sends cancellable,
-	// then cancel every attached subscription and wait for both loops.
+	// Make channel sends cancellable, then cancel every attached subscription
+	// and wait for both loops.
 }
 
 // deliverMessages is the sending goroutine's entry point for one subscribed consumer.

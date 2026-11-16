@@ -1,16 +1,19 @@
 package topic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/mqueue"
+	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
 	"tree_nity/src/server/utils/trie"
@@ -77,6 +80,161 @@ func connectedTopicConsumer(t *testing.T, prefix, suffix string) *consumer.Consu
 		return nil
 	}
 	return c
+}
+
+// TestTopicProduceMessageSendsInOrder checks empty, minimal and large streams.
+func TestTopicProduceMessageSendsInOrder(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+	}{
+		{name: "empty"},
+		{name: "single message", count: 1},
+		{name: "many messages", count: 256},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			topic := NewTopic(ctx)
+			result := make(chan error, 1)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for i := 0; i < tt.count; i++ {
+					if err := topic.ProduceMessage(ctx, protocol.NewMessage([]byte{0, 255}, []byte{byte(i)})); err != nil {
+						result <- err
+						return
+					}
+				}
+				result <- nil
+			}()
+			defer func() {
+				cancel()
+				<-done
+			}()
+			for i := 0; i < tt.count; i++ {
+				select {
+				case message := <-topic.newMessageChan:
+					if !bytes.Equal(message.Key(), []byte{0, 255}) || !bytes.Equal(message.Value(), []byte{byte(i)}) {
+						t.Errorf("received message %d = key %x, value %x, want key %x, value %x", i, message.Key(), message.Value(), []byte{0, 255}, []byte{byte(i)})
+					}
+				case <-ctx.Done():
+					t.Errorf("receive message %d of %d error = %v, want a message", i, tt.count, ctx.Err())
+					return
+				}
+			}
+			if err := <-result; err != nil {
+				t.Errorf("ProduceMessage() for %d messages error = %v, want nil", tt.count, err)
+			}
+		})
+	}
+}
+
+// TestTopicProduceMessageRejectsStoppedContexts checks request cancellation.
+func TestTopicProduceMessageRejectsStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topic := NewTopic(t.Context())
+			if err := topic.ProduceMessage(tt.ctx, protocol.NewMessage(nil, nil)); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(empty) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestTopicProduceMessageCancelsWithoutReceiver checks that an unreceived send can stop.
+func TestTopicProduceMessageCancelsWithoutReceiver(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	topic := NewTopic(ctx)
+	ready := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(ready)
+		result <- topic.ProduceMessage(ctx, protocol.NewMessage(nil, nil))
+	}()
+	<-ready
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("ProduceMessage(empty) without a receiver after cancellation error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("ProduceMessage(empty) without a receiver did not return within 5s after cancellation, want returned")
+	}
+}
+
+// TestTopicProduceMessageSendsConcurrently checks each producer's message order.
+func TestTopicProduceMessageSendsConcurrently(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	topic := NewTopic(ctx)
+	const producers, count = 8, 32
+	start := make(chan struct{})
+	results := make(chan error, producers)
+	var workers sync.WaitGroup
+	for producer := 0; producer < producers; producer++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for i := 0; i < count; i++ {
+				if err := topic.ProduceMessage(ctx, protocol.NewMessage([]byte{byte(producer)}, []byte{byte(i)})); err != nil {
+					results <- fmt.Errorf("ProduceMessage(producer %d, message %d): %w", producer, i, err)
+					return
+				}
+			}
+			results <- nil
+		}()
+	}
+	close(start)
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
+	next := make([]int, producers)
+	for i := 0; i < producers*count; i++ {
+		select {
+		case message := <-topic.newMessageChan:
+			key, value := message.Key(), message.Value()
+			if len(key) != 1 || len(value) != 1 || int(key[0]) >= producers {
+				t.Errorf("received message %d = key %x, value %x, want a producer byte and a sequence byte", i, key, value)
+				continue
+			}
+			producer := int(key[0])
+			if int(value[0]) != next[producer] {
+				t.Errorf("received message %d for producer %d has sequence %d, want %d", i, producer, value[0], next[producer])
+			}
+			next[producer]++
+		case <-ctx.Done():
+			t.Errorf("receive message %d of %d from concurrent producers error = %v, want a message", i, producers*count, ctx.Err())
+			return
+		}
+	}
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Errorf("concurrent ProduceMessage() error = %v, want nil", err)
+		}
+	}
+	for producer, got := range next {
+		if got != count {
+			t.Errorf("received count for producer %d = %d, want %d", producer, got, count)
+		}
+	}
 }
 
 // TestTopicConsumerShutdown checks that each termination path stops workers and removes the subscription.

@@ -8,18 +8,18 @@ import (
 
 // MessageOffsetTrie indexes message offsets by key for prefix searches.
 type MessageOffsetTrie struct {
-	trie *trie.Trie[int32]
+	trie *trie.Trie[uint32]
 }
 
 // NewMessageOffsetTrie returns an initialized, empty message offset index.
 func NewMessageOffsetTrie() *MessageOffsetTrie {
 	return &MessageOffsetTrie{
-		trie: trie.NewTrie[int32](),
+		trie: trie.NewTrie[uint32](),
 	}
 }
 
 // Insert associates offset with key, rejecting duplicates for the same key.
-func (t *MessageOffsetTrie) Insert(key string, offset int32) error {
+func (t *MessageOffsetTrie) Insert(key string, offset uint32) error {
 	if err := t.validate(); err != nil {
 		return err
 	}
@@ -28,7 +28,7 @@ func (t *MessageOffsetTrie) Insert(key string, offset int32) error {
 }
 
 // Search returns sorted offsets >= offset for keys starting with prefix.
-func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error) {
+func (t *MessageOffsetTrie) Search(prefix string, offset uint32) ([]uint32, error) {
 	if err := t.validate(); err != nil {
 		return nil, err
 	}
@@ -38,12 +38,12 @@ func (t *MessageOffsetTrie) Search(prefix string, offset int32) ([]int32, error)
 		return nil, err
 	}
 
-	offsets := make([]int32, 0)
+	offsets := make([]uint32, 0)
 	if node == nil {
 		return offsets, nil
 	}
 
-	node.MapSubtree(func(value int32) {
+	node.MapSubtree(func(value uint32) {
 		if value >= offset {
 			offsets = append(offsets, value)
 		}
