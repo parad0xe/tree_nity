@@ -127,8 +127,34 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 	)
 }
 
-// ProduceMessage is reserved for requests to publish messages to a topic.
-func (m *Manager) ProduceMessage(metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) {
-	// TODO: reject missing topics, forward the message to the topic for storage
-	// and indexing, and notify its subscribed consumers.
+// ProduceMessage forwards a valid message to its topic, replying only on rejection.
+func (m *Manager) ProduceMessage(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
+	topicID := id.ID(payload.Topic())
+	message := payload.Message()
+	err := topicID.Validate()
+	if err == nil && len(message.Key())+len(message.Value()) > protocol.MessageSize {
+		err = protocol.ErrMessageTooLarge
+	}
+	if err != nil {
+		return response.SendToClient(
+			ctx,
+			metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.InvalidRequest, err.Error()),
+		)
+	}
+
+	m.mu.RLock()
+	topic, exists := m.topicMap.Get(topicID)
+	m.mu.RUnlock()
+	if !exists {
+		return response.SendToClient(
+			ctx,
+			metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic does not exist"),
+		)
+	}
+
+	return topic.ProduceMessage(ctx, message)
 }

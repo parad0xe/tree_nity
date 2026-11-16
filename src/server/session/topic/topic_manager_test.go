@@ -1,6 +1,7 @@
 package topic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -569,6 +570,160 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	}
 	if creations != count || checks != count {
 		t.Errorf("concurrent creation and checks received %d creations and %d checks, want %d each", creations, checks, count)
+	}
+}
+
+// TestManagerProduceMessageForwardsToTopic checks routing without a success reply.
+func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+		key   []byte
+		value []byte
+	}{
+		{name: "empty message", count: 1},
+		{name: "binary message", count: 1, key: []byte{0, 255}, value: []byte{255, 0}},
+		{name: "size limit", count: 1, key: []byte("k"), value: make([]byte, protocol.MessageSize-1)},
+		{name: "many topics", count: 128, key: []byte("key"), value: []byte("body")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			manager := NewManager()
+			var target *Topic
+			for i := 0; i < tt.count; i++ {
+				target = NewTopic(ctx)
+				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+				if err := manager.topicMap.Insert(topicID, target); err != nil {
+					cancel()
+					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+				}
+			}
+			topicName := fmt.Sprintf("topic-%03d", tt.count-1)
+			payload := *protocol.NewProduceMessagePayload(topicName, protocol.NewMessage(tt.key, tt.value))
+			// Successful production must not open a reply queue.
+			metadata := *protocol.NewClientMetadata("/invalid/queue")
+			result := make(chan error, 1)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				result <- manager.ProduceMessage(ctx, metadata, payload)
+			}()
+			defer func() {
+				cancel()
+				<-done
+			}()
+			select {
+			case message := <-target.newMessageChan:
+				if !bytes.Equal(message.Key(), tt.key) || !bytes.Equal(message.Value(), tt.value) {
+					t.Errorf("ProduceMessage(%q) forwarded key %x, value %x, want key %x, value %x", topicName, message.Key(), message.Value(), tt.key, tt.value)
+				}
+			case <-ctx.Done():
+				t.Errorf("ProduceMessage(%q) forwarding error = %v, want a message on the target channel", topicName, ctx.Err())
+				return
+			}
+			if err := <-result; err != nil {
+				t.Errorf("ProduceMessage(%q) error = %v, want nil without a reply", topicName, err)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessageRejectsRequests checks invalid and missing topics.
+func TestManagerProduceMessageRejectsRequests(t *testing.T) {
+	tests := []struct {
+		name     string
+		topic    string
+		count    int
+		value    []byte
+		wantKind protocol.ErrorKind
+	}{
+		{name: "empty name", wantKind: protocol.InvalidRequest},
+		{name: "invalid name", topic: "bad/topic", wantKind: protocol.InvalidRequest},
+		{name: "long name", topic: strings.Repeat("a", 33), wantKind: protocol.InvalidRequest},
+		{name: "oversized message", topic: "topic-000", count: 1, value: make([]byte, protocol.MessageSize+1), wantKind: protocol.InvalidRequest},
+		{name: "empty registry", topic: "missing", wantKind: protocol.TopicNotFound},
+		{name: "populated registry", topic: "missing", count: 128, wantKind: protocol.TopicNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			for i := 0; i < tt.count; i++ {
+				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+				}
+			}
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			payload := *protocol.NewProduceMessagePayload(tt.topic, protocol.NewMessage(nil, tt.value))
+			if err := manager.ProduceMessage(ctx, metadata, payload); err != nil {
+				t.Errorf("ProduceMessage(%q, %d bytes) error = %v, want nil after rejection", tt.topic, len(tt.value), err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("ProduceMessage(%q) payload = %T, want *protocol.ErrorReplyPayload", tt.topic, data.Payload())
+			} else if reply.Kind() != tt.wantKind || reply.Reason() == "" {
+				t.Errorf("ProduceMessage(%q) rejection = %v, %q, want %v and a nonempty reason", tt.topic, reply.Kind(), reply.Reason(), tt.wantKind)
+			}
+			if got := manager.topicMap.Len(); got != uint64(tt.count) {
+				t.Errorf("topic count after ProduceMessage(%q) = %d, want %d", tt.topic, got, tt.count)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessagePropagatesTopicCancellation checks stopped sends.
+func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+			}
+			metadata := *protocol.NewClientMetadata("/unused")
+			payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(tt.ctx, metadata, payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(events) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessagePropagatesQueueErrors checks failed rejection replies.
+func TestManagerProduceMessagePropagatesQueueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid queue name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/produce.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			metadata := *protocol.NewClientMetadata(tt.ipcPath)
+			payload := *protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(topicManagerContext(t), metadata, payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(missing) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+		})
 	}
 }
 
