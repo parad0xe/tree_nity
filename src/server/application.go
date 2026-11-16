@@ -141,11 +141,11 @@ func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, 
 		err = app.topicManager.ListTopics(sendCtx, *metadata, *payload)
 	case *protocol.CreateTopicPayload:
 		err = app.topicManager.CreateTopic(sendCtx, ctx, *metadata, *payload)
+	case *protocol.CheckTopicPayload:
+		err = app.topicManager.CheckTopic(sendCtx, *metadata, *payload)
 	// TODO: enable request routes when their handlers can send a response.
 	// case *protocol.TopicSubscriptionPayload:
 	// 	app.topicManager.NewSubscription(*metadata, *payload)
-	// case *protocol.CheckTopicPayload:
-	// 	app.topicManager.CheckTopic(*metadata, *payload)
 	// case *protocol.ProduceMessagePayload:
 	// 	app.topicManager.ProduceMessage(*metadata, *payload)
 	case *protocol.AcknowledgementPayload, *protocol.ConsumerHeartbeatPayload,

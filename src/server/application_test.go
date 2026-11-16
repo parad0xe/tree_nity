@@ -547,6 +547,20 @@ func sendCreateRequest(t *testing.T, app *application, clientIPC, topicID string
 	send(t, app.inbound.IPCPath(), string(frame))
 }
 
+// sendCheckRequest sends a topic check through the server queue.
+func sendCheckRequest(t *testing.T, app *application, clientIPC, topicID string) {
+	t.Helper()
+	data, err := protocol.NewData(protocol.CheckTopic, protocol.NewClientMetadata(clientIPC), protocol.NewCheckTopicPayload(topicID))
+	if err != nil {
+		t.Fatalf("NewData(CheckTopic, %q, %q) error = %v, want nil", clientIPC, topicID, err)
+	}
+	frame, err := protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(CheckTopic, %q, %q) error = %v, want nil", clientIPC, topicID, err)
+	}
+	send(t, app.inbound.IPCPath(), string(frame))
+}
+
 // receiveServerReply checks the opcode and emitter of a response from the running server.
 func receiveServerReply(t *testing.T, inbound *ipc.Inbound, opcode protocol.Opcode) protocol.Data {
 	t.Helper()
@@ -622,7 +636,6 @@ func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
 		payload protocol.Payload
 	}{
 		{name: "subscribe", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "events", "", nil)},
-		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 		{name: "produce", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("value")))},
 	}
 	for _, tt := range tests {
@@ -765,6 +778,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 		{name: "expired creation", ctx: expired, opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events"), wantErr: context.DeadlineExceeded},
 		{name: "canceled listing", ctx: cancelledContext(), opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: context.Canceled},
 		{name: "expired listing", ctx: expired, opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: context.DeadlineExceeded},
+		{name: "canceled check", ctx: cancelledContext(), opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events"), wantErr: context.Canceled},
+		{name: "expired check", ctx: expired, opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events"), wantErr: context.DeadlineExceeded},
 		{name: "canceled rejection", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled, wantUnhandled: true},
 		{name: "expired rejection", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded, wantUnhandled: true},
 	}
@@ -827,6 +842,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 	}{
 		{name: "creation", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events")},
 		{name: "listing", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload()},
+		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 		{name: "rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
 	}
 	for _, tt := range tests {
@@ -852,13 +868,56 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 
 // TestDispatchReturnsHandlerErrors checks connection failures and their general exit code.
 func TestDispatchReturnsHandlerErrors(t *testing.T) {
-	app := &application{topicManager: topic.NewManager()}
-	data, err := protocol.NewData(protocol.CreateTopic, protocol.NewClientMetadata("/invalid/queue"), protocol.NewCreateTopicPayload("events"))
-	if err != nil {
-		t.Fatalf("NewData(CreateTopic, /invalid/queue, events) during setup error = %v, want nil", err)
+	tests := []struct {
+		name    string
+		opcode  protocol.Opcode
+		payload protocol.Payload
+	}{
+		{name: "creation", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events")},
+		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 	}
-	if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
-		t.Errorf("dispatch(CreateTopic, /invalid/queue, events) = %d, %v, want %d and %v", code, err, exitcode.General, mqueue.ErrInvalidName)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &application{topicManager: topic.NewManager()}
+			data, err := protocol.NewData(tt.opcode, protocol.NewClientMetadata("/invalid/queue"), tt.payload)
+			if err != nil {
+				t.Fatalf("NewData(%v, /invalid/queue) during setup error = %v, want nil", tt.opcode, err)
+			}
+			if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
+				t.Errorf("dispatch(%v, /invalid/queue) = %d, %v, want %d and %v", tt.opcode, code, err, exitcode.General, mqueue.ErrInvalidName)
+			}
+		})
+	}
+}
+
+// TestListenChecksCurrentTopicState checks existence before and after creation over IPC.
+func TestListenChecksCurrentTopicState(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+
+	sendCheckRequest(t, app, inbound.IPCPath(), "events")
+	data := receiveServerReply(t, inbound, protocol.ErrorReply)
+	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+	if !ok {
+		t.Errorf("CheckTopic(events) before creation payload = %T, want *protocol.ErrorReplyPayload", data.Payload())
+	} else if reply.Kind() != protocol.TopicNotFound || reply.Reason() == "" {
+		t.Errorf("CheckTopic(events) before creation rejection = %v, %q, want %v and a nonempty reason", reply.Kind(), reply.Reason(), protocol.TopicNotFound)
+	}
+
+	sendCreateRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	sendCheckRequest(t, app, inbound.IPCPath(), "events")
+	data = receiveServerReply(t, inbound, protocol.CheckTopicReply)
+	if _, ok := data.Payload().(*protocol.CheckTopicReplyPayload); !ok {
+		t.Errorf("CheckTopic(events) after creation payload = %T, want *protocol.CheckTopicReplyPayload", data.Payload())
+	}
+
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after topic checks and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 
