@@ -1048,6 +1048,29 @@ func TestListenRejectsProductionForMissingTopic(t *testing.T) {
 	}
 }
 
+// TestDispatchForwardsSubscriptionShutdown checks signal transmission to the handler.
+func TestDispatchForwardsSubscriptionShutdown(t *testing.T) {
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	requested := make(chan struct{})
+	shutdown := lifecycle.NewGracefulShutdown(requested)
+	close(requested)
+	data, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata(inbound.IPCPath()),
+		protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil))
+	if err != nil {
+		t.Errorf("NewData(TopicSubscription, consumer-1, events) error = %v, want nil", err)
+		return
+	}
+	if code, err := app.dispatch(t.Context(), shutdown, data); code != exitcode.Success || err != nil {
+		t.Errorf("dispatch(TopicSubscription, consumer-1, events) during shutdown = %d, %v, want %d and nil", code, err, exitcode.Success)
+		return
+	}
+	data = receiveServerReply(t, inbound, protocol.ServerShutdown)
+	if _, ok := data.Payload().(*protocol.ServerShutdownPayload); !ok {
+		t.Errorf("subscription during shutdown payload = %T, want *protocol.ServerShutdownPayload", data.Payload())
+	}
+}
+
 // TestListenRejectsSubscriptionForMissingTopic checks subscription routing over IPC.
 func TestListenRejectsSubscriptionForMissingTopic(t *testing.T) {
 	app := newTestApplication(t)

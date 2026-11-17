@@ -98,9 +98,13 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 	)
 }
 
-// NewSubscription attaches a consumer and replies with confirmation or rejection.
+// NewSubscription attaches and confirms a consumer unless shutdown is requested.
 // ctx bounds the reply; consumerCtx covers the subscription's lifetime.
-func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) error {
+func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) error {
+	if shutdown.IsRequested() {
+		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+	}
+
 	if _, err := protocol.NewData(protocol.TopicSubscription, &metadata, &payload); err != nil {
 		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.InvalidRequest, err.Error()))

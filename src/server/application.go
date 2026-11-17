@@ -146,7 +146,7 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	case *protocol.ProduceMessagePayload:
 		err = app.topicManager.ProduceMessage(sendCtx, shutdown, *metadata, *payload)
 	case *protocol.TopicSubscriptionPayload:
-		err = app.topicManager.NewSubscription(sendCtx, ctx, *metadata, *payload)
+		err = app.topicManager.NewSubscription(sendCtx, ctx, shutdown, *metadata, *payload)
 	case *protocol.AcknowledgementPayload, *protocol.ConsumerHeartbeatPayload,
 		*protocol.ConsumerDisconnectPayload:
 		// TODO: route notifications to consumer handlers once they are implemented.
