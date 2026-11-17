@@ -628,38 +628,6 @@ func TestDispatchListsTopics(t *testing.T) {
 	}
 }
 
-// TestDispatchRejectsUnimplementedTopicRequests checks responses for commented-out routes.
-func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
-	tests := []struct {
-		name    string
-		opcode  protocol.Opcode
-		payload protocol.Payload
-	}{
-		{name: "subscribe", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "events", "", nil)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			app := &application{topicManager: topic.NewManager()}
-			inbound := newServerClientInbox(t)
-			data, err := protocol.NewData(tt.opcode, protocol.NewClientMetadata(inbound.IPCPath()), tt.payload)
-			if err != nil {
-				t.Fatalf("NewData(%v) during setup error = %v, want nil", tt.opcode, err)
-			}
-			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
-				t.Errorf("dispatch(%v, %T) = %d, %v, want %d and nil after rejection", tt.opcode, tt.payload, code, err, exitcode.Success)
-				return
-			}
-			data = receiveServerReply(t, inbound, protocol.ErrorReply)
-			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
-			if !ok {
-				t.Errorf("dispatch(%v) rejection payload = %T, want *protocol.ErrorReplyPayload", tt.opcode, data.Payload())
-			} else if reply.Kind() != protocol.InvalidRequest || reply.Reason() == "" {
-				t.Errorf("dispatch(%v) rejection = %v, %q, want %v and a nonempty reason", tt.opcode, reply.Kind(), reply.Reason(), protocol.InvalidRequest)
-			}
-		})
-	}
-}
-
 // TestDispatchRejectsUnhandledRequests checks error replies for unsupported client requests.
 func TestDispatchRejectsUnhandledRequests(t *testing.T) {
 	tests := []struct {
@@ -781,6 +749,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 		{name: "expired check", ctx: expired, opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events"), wantErr: context.DeadlineExceeded},
 		{name: "canceled production rejection", ctx: cancelledContext(), opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil)), wantErr: context.Canceled},
 		{name: "expired production rejection", ctx: expired, opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil)), wantErr: context.DeadlineExceeded},
+		{name: "canceled subscription rejection", ctx: cancelledContext(), opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil), wantErr: context.Canceled},
+		{name: "expired subscription rejection", ctx: expired, opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil), wantErr: context.DeadlineExceeded},
 		{name: "canceled rejection", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled, wantUnhandled: true},
 		{name: "expired rejection", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded, wantUnhandled: true},
 	}
@@ -845,6 +815,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 		{name: "listing", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload()},
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 		{name: "production rejection", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))},
+		{name: "subscription rejection", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil)},
 		{name: "rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
 	}
 	for _, tt := range tests {
@@ -903,6 +874,7 @@ func TestDispatchReturnsHandlerErrors(t *testing.T) {
 	}{
 		{name: "creation", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events")},
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
+		{name: "subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil)},
 		{name: "production", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))},
 	}
 	for _, tt := range tests {
@@ -1073,6 +1045,36 @@ func TestListenRejectsProductionForMissingTopic(t *testing.T) {
 	c.cancel()
 	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
 		t.Errorf("listen() after rejecting production, creating a topic and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+// TestListenRejectsSubscriptionForMissingTopic checks subscription routing over IPC.
+func TestListenRejectsSubscriptionForMissingTopic(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	data, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata(inbound.IPCPath()),
+		protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil))
+	if err != nil {
+		t.Fatalf("NewData(TopicSubscription, consumer-1, events) error = %v, want nil", err)
+	}
+	frame, err := protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(TopicSubscription, consumer-1, events) error = %v, want nil", err)
+	}
+	send(t, app.inbound.IPCPath(), string(frame))
+	data = receiveServerReply(t, inbound, protocol.ErrorReply)
+	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+	if !ok || reply.Kind() != protocol.TopicNotFound || reply.Reason() == "" {
+		t.Errorf("subscription to missing events payload = %+v, want %v with a nonempty reason", data.Payload(), protocol.TopicNotFound)
+	}
+	sendCreateRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after rejected subscription and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 
