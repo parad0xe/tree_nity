@@ -152,8 +152,8 @@ func (m *Manager) DisconnectConsumer(c *Consumer) error {
 	return err
 }
 
-// UpdateOffset stores the next topic offset without incrementing it.
-func (m *Manager) UpdateOffset(id id.ID, offset uint32) error {
+// UpdateInfo replaces supplied metadata fields together; nil preserves a field.
+func (m *Manager) UpdateInfo(id id.ID, topic *string, offset *uint32, prefix, ipcPath *string) error {
 	if err := m.validate(); err != nil {
 		return err
 	}
@@ -165,26 +165,7 @@ func (m *Manager) UpdateOffset(id id.ID, offset uint32) error {
 		return ErrNotFound
 	}
 
-	info.offset = offset
-	return nil
-}
-
-// UpdateSubscription changes the stored topic, prefix and queue name together.
-func (m *Manager) UpdateSubscription(id id.ID, topic, prefix, ipcPath string) error {
-	if err := m.validate(); err != nil {
-		return err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	info, exists := m.consumerTable.Get(id)
-	if !exists {
-		return ErrNotFound
-	}
-
-	info.topic = topic
-	info.prefix = prefix
-	info.ipcPath = ipcPath
+	info.updateInfo(topic, offset, prefix, ipcPath)
 	return nil
 }
 

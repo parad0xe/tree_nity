@@ -47,6 +47,35 @@ func TestInfoAccessors(t *testing.T) {
 	}
 }
 
+// TestInfoUpdateInfoSelectsOffset checks offset selection and metadata updates.
+func TestInfoUpdateInfoSelectsOffset(t *testing.T) {
+	zero, requested, maximum := uint32(0), uint32(42), ^uint32(0)
+	tests := []struct {
+		name    string
+		initial uint32
+		offset  *uint32
+		want    uint32
+	}{
+		{name: "new default"},
+		{name: "resume", initial: 17, want: 17},
+		{name: "rewind", initial: 17, offset: &zero},
+		{name: "explicit offset", initial: 17, offset: &requested, want: requested},
+		{name: "maximum offset", initial: 17, offset: &maximum, want: maximum},
+		{name: "resume maximum", initial: maximum, want: maximum},
+	}
+	topic, prefix, ipcPath := "events", "user/", "/new"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := Info{id: "consumer-1", topic: "old", offset: tt.initial, prefix: "old/", ipcPath: "/old"}
+			info.updateInfo(&topic, tt.offset, &prefix, &ipcPath)
+			want := Info{id: "consumer-1", topic: "events", offset: tt.want, prefix: "user/", ipcPath: "/new"}
+			if info != want {
+				t.Errorf("updateInfo(events, %v, user/, /new) from offset %d = %+v, want %+v", tt.offset, tt.initial, info, want)
+			}
+		})
+	}
+}
+
 // TestInfoValidate checks valid ID boundaries.
 func TestInfoValidate(t *testing.T) {
 	tests := []struct {
