@@ -147,7 +147,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 			wantErr: protocol.ErrInvalidPayload,
 		},
 		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: protocol.ErrInvalidPayload},
-		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: protocol.ErrUnknownOpcode},
+		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

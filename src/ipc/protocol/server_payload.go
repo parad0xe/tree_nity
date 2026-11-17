@@ -298,3 +298,28 @@ func (p *ServerShutdownPayload) validate() error {
 	}
 	return nil
 }
+
+// ProduceMessageReplyPayload confirms that the server accepted a message.
+type ProduceMessageReplyPayload struct{}
+
+// NewProduceMessageReplyPayload returns a message production response.
+func NewProduceMessageReplyPayload() *ProduceMessageReplyPayload {
+	return &ProduceMessageReplyPayload{}
+}
+
+func (p *ProduceMessageReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ProduceMessageReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &produceMessageReplyPayloadJSON{}, nil
+}
+
+func (p *ProduceMessageReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	return nil
+}
