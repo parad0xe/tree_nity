@@ -26,6 +26,54 @@ func NewManager() *Manager {
 	}
 }
 
+// Subscribe connects a consumer; a nil offset resumes its saved position.
+// previous is nil for a new consumer.
+func (m *Manager) Subscribe(ctx context.Context, id id.ID, topic string, offset *uint32, prefix, ipcPath string) (*Consumer, *Info, error) {
+	if err := m.validate(); err != nil {
+		return nil, nil, err
+	}
+	if err := id.Validate(); err != nil {
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	// Keep metadata changes and the connection reservation atomic.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, active := m.activeConsumers.Get(id); active {
+		return nil, nil, ErrAlreadyConnected
+	}
+
+	var previous *Info
+	stored, exists := m.consumerTable.Get(id)
+	if exists {
+		snapshot := *stored
+		previous = &snapshot
+	} else {
+		if err := m.addConsumer(id, topic, 0, prefix, ipcPath); err != nil {
+			return nil, nil, err
+		}
+		stored, _ = m.consumerTable.Get(id)
+	}
+	stored.updateInfo(&topic, offset, &prefix, &ipcPath)
+
+	c, err := m.getConsumer(id)
+	if err == nil {
+		err = m.connectConsumer(ctx, c)
+	}
+	if err != nil {
+		if previous == nil {
+			err = errors.Join(err, m.consumerTable.Remove(id))
+		} else {
+			*stored = *previous
+		}
+		return nil, nil, err
+	}
+	return c, previous, nil
+}
+
 // Len returns the number of stored consumers, or zero for a nil or uninitialized manager.
 func (m *Manager) Len() uint64 {
 	if err := m.validate(); err != nil {
@@ -44,18 +92,8 @@ func (m *Manager) GetConsumer(id id.ID) (*Consumer, error) {
 	}
 
 	m.mu.RLock()
-	info, exists := m.consumerTable.Get(id)
-	if !exists {
-		m.mu.RUnlock()
-		return nil, ErrNotFound
-	}
-	consumerInfo := *info
-	m.mu.RUnlock()
-
-	c := newConsumer(&consumerInfo)
-	c.manager = m
-	c.managedID = id
-	return c, nil
+	defer m.mu.RUnlock()
+	return m.getConsumer(id)
 }
 
 // AddConsumer validates and stores metadata without opening a connection.
@@ -64,14 +102,9 @@ func (m *Manager) AddConsumer(id id.ID, topic string, offset uint32, prefix stri
 		return err
 	}
 
-	info := newInfo(id, topic, offset, prefix, ipcPath)
-	if err := info.validate(); err != nil {
-		return err
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.consumerTable.Insert(info.id, info)
+	return m.addConsumer(id, topic, offset, prefix, ipcPath)
 }
 
 // ConnectConsumer reserves the ID and opens its current queue, tied to ctx.
@@ -86,39 +119,9 @@ func (m *Manager) ConnectConsumer(ctx context.Context, c *Consumer) error {
 	// Serialize opening with disconnection for this consumer.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.manager != m {
-		return ErrNotFound
-	}
-	if c.connection != nil {
-		return ErrAlreadyConnected
-	}
-
 	m.mu.Lock()
-	consumerInfo, exists := m.consumerTable.Get(c.managedID)
-	if !exists {
-		m.mu.Unlock()
-		return ErrNotFound
-	}
-	ipcPath := consumerInfo.ipcPath
-	if _, exists := m.activeConsumers.Get(c.managedID); exists {
-		m.mu.Unlock()
-		return ErrAlreadyConnected
-	}
-	err := m.activeConsumers.Insert(c.managedID, c)
-	m.mu.Unlock()
-	if err != nil {
-		return err
-	}
-
-	connection, err := newConnection(ctx, ipcPath)
-	if err != nil {
-		m.mu.Lock()
-		err = errors.Join(err, m.activeConsumers.Remove(c.managedID))
-		m.mu.Unlock()
-		return fmt.Errorf("connect consumer %q: %w", c.managedID, err)
-	}
-	c.connection = connection
-	return nil
+	defer m.mu.Unlock()
+	return m.connectConsumer(ctx, c)
 }
 
 // DisconnectConsumer closes a consumer connection and releases its ID.
@@ -183,6 +186,62 @@ func (m *Manager) RemoveConsumer(id id.ID) error {
 	}
 
 	return m.consumerTable.Remove(id)
+}
+
+// getConsumer requires m.mu to be held for reading.
+func (m *Manager) getConsumer(id id.ID) (*Consumer, error) {
+	info, exists := m.consumerTable.Get(id)
+	if !exists {
+		return nil, ErrNotFound
+	}
+	consumerInfo := *info
+	c := newConsumer(&consumerInfo)
+	c.manager, c.managedID = m, id
+	return c, nil
+}
+
+// addConsumer requires m.mu to be held for writing.
+func (m *Manager) addConsumer(id id.ID, topic string, offset uint32, prefix, ipcPath string) error {
+	info := newInfo(id, topic, offset, prefix, ipcPath)
+	if err := info.validate(); err != nil {
+		return err
+	}
+	return m.consumerTable.Insert(info.id, info)
+}
+
+// connectConsumer requires m.mu and exclusive access to c.
+func (m *Manager) connectConsumer(ctx context.Context, c *Consumer) error {
+	if c.manager != m {
+		return ErrNotFound
+	}
+	if c.connection != nil {
+		return ErrAlreadyConnected
+	}
+	info, exists := m.consumerTable.Get(c.managedID)
+	if !exists {
+		return ErrNotFound
+	}
+	if _, active := m.activeConsumers.Get(c.managedID); active {
+		return ErrAlreadyConnected
+	}
+	if err := m.activeConsumers.Insert(c.managedID, c); err != nil {
+		return err
+	}
+
+	// Opening an existing queue does not wait for queue capacity.
+	connection, err := newConnection(ctx, info.ipcPath)
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		if connection != nil {
+			err = errors.Join(err, connection.Close())
+		}
+		err = errors.Join(err, m.activeConsumers.Remove(c.managedID))
+		return fmt.Errorf("connect consumer %q: %w", c.managedID, err)
+	}
+	c.connection = connection
+	return nil
 }
 
 func (m *Manager) validate() error {

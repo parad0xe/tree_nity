@@ -70,6 +70,232 @@ func connectTestConsumer(t *testing.T, manager *Manager, consumerID id.ID) *Cons
 	return c
 }
 
+// TestManagerSubscribeSelectsOffset checks new and saved subscription state.
+func TestManagerSubscribeSelectsOffset(t *testing.T) {
+	zero, requested := uint32(0), uint32(42)
+	tests := []struct {
+		name     string
+		existing bool
+		offset   *uint32
+		want     uint32
+	}{
+		{name: "new default"},
+		{name: "new explicit", offset: &requested, want: requested},
+		{name: "resume", existing: true, want: 17},
+		{name: "rewind", existing: true, offset: &zero},
+		{name: "override", existing: true, offset: &requested, want: requested},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ipcPath := newTestConsumerQueue(t)
+			manager := NewManager()
+			original := Info{id: "consumer-1", topic: "old", offset: 17, prefix: "old/", ipcPath: "/old"}
+			if tt.existing {
+				if err := manager.AddConsumer(original.id, original.topic, original.offset, original.prefix, original.ipcPath); err != nil {
+					t.Fatalf("AddConsumer(%+v) during setup error = %v, want nil", original, err)
+				}
+			}
+			c, previous, err := manager.Subscribe(t.Context(), original.id, "events", tt.offset, "user/", ipcPath)
+			if err != nil {
+				t.Fatalf("Subscribe(consumer-1, events, %v) error = %v, want nil", tt.offset, err)
+			}
+			t.Cleanup(func() {
+				if err := manager.DisconnectConsumer(c); err != nil {
+					t.Errorf("DisconnectConsumer(consumer-1) error = %v, want nil", err)
+				}
+			})
+			want := Info{id: original.id, topic: "events", offset: tt.want, prefix: "user/", ipcPath: ipcPath}
+			stored := openTestConsumer(t, manager, original.id)
+			if stored == nil {
+				return
+			}
+			if c.Info != want || stored.Info != want || c.Connection() == nil {
+				t.Errorf("Subscribe() state = %+v, stored %+v, connection %p, want %+v and an open connection", c.Info, stored.Info, c.Connection(), want)
+			}
+			if tt.existing {
+				if previous == nil || *previous != original {
+					t.Errorf("Subscribe() previous = %+v, want %+v", previous, original)
+				}
+			} else if previous != nil {
+				t.Errorf("Subscribe() for a new consumer previous = %+v, want nil", previous)
+			}
+		})
+	}
+}
+
+// TestManagerSubscribeRejectsActiveName checks metadata isolation.
+func TestManagerSubscribeRejectsActiveName(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	original := Info{id: "consumer-1", topic: "events", offset: 17, prefix: "user/", ipcPath: ipcPath}
+	manager := newTestManager(t, original)
+	first := connectTestConsumer(t, manager, original.id)
+	if first == nil {
+		return
+	}
+	connection := first.Connection()
+	if _, _, err := manager.Subscribe(t.Context(), original.id, "other", nil, "other/", "/missing"); !errors.Is(err, ErrAlreadyConnected) {
+		t.Errorf("Subscribe(active consumer-1, other) error = %v, want %v", err, ErrAlreadyConnected)
+	}
+	stored := openTestConsumer(t, manager, original.id)
+	if stored == nil {
+		return
+	}
+	if stored.Info != original || first.Connection() != connection {
+		t.Errorf("state after duplicate subscription = %+v, connection %p, want %+v and %p", stored.Info, first.Connection(), original, connection)
+	}
+}
+
+// TestManagerSubscribeFailurePreservesState checks connection rollback.
+func TestManagerSubscribeFailurePreservesState(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	tests := []struct {
+		name     string
+		existing bool
+		ctx      context.Context
+		ipcPath  string
+		wantErr  error
+	}{
+		{name: "new invalid queue", ctx: t.Context(), ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "saved invalid queue", existing: true, ctx: t.Context(), ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", existing: true, ctx: t.Context(), ipcPath: fmt.Sprintf("/subscription.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+		{name: "canceled", existing: true, ctx: canceled, ipcPath: "/unused", wantErr: context.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			original := Info{id: "consumer-1", topic: "old", offset: 17, prefix: "old/", ipcPath: "/old"}
+			if tt.existing {
+				if err := manager.AddConsumer(original.id, original.topic, original.offset, original.prefix, original.ipcPath); err != nil {
+					t.Fatalf("AddConsumer(%+v) during setup error = %v, want nil", original, err)
+				}
+			}
+			if _, _, err := manager.Subscribe(tt.ctx, original.id, "events", nil, "user/", tt.ipcPath); !errors.Is(err, tt.wantErr) {
+				t.Errorf("Subscribe(%q) error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+			stored, err := manager.GetConsumer(original.id)
+			if tt.existing {
+				if err != nil || stored.Info != original {
+					t.Errorf("GetConsumer() after failed subscription = %+v, %v, want %+v and nil", stored, err, original)
+				}
+			} else if !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetConsumer() after failed new subscription error = %v, want %v", err, ErrNotFound)
+			}
+			if got := manager.activeConsumers.Len(); got != 0 {
+				t.Errorf("active count after failed Subscribe(%q) = %d, want 0", tt.ipcPath, got)
+			}
+		})
+	}
+}
+
+// TestManagerSubscribeConcurrentName checks reservation before metadata changes.
+func TestManagerSubscribeConcurrentName(t *testing.T) {
+	ipcPath := newTestConsumerQueue(t)
+	manager := NewManager()
+	const count = 8
+	start := make(chan struct{})
+	type result struct {
+		consumer *Consumer
+		err      error
+	}
+	results := make(chan result, count)
+	var workers sync.WaitGroup
+	for i := 0; i < count; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			c, _, err := manager.Subscribe(t.Context(), "consumer-1", "events", nil, fmt.Sprintf("prefix-%d", i), ipcPath)
+			results <- result{consumer: c, err: err}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	winners := 0
+	for result := range results {
+		if result.err == nil {
+			winners++
+			if err := manager.DisconnectConsumer(result.consumer); err != nil {
+				t.Errorf("DisconnectConsumer(winning consumer-1) error = %v, want nil", err)
+			}
+		} else if !errors.Is(result.err, ErrAlreadyConnected) {
+			t.Errorf("concurrent Subscribe(consumer-1) error = %v, want nil or %v", result.err, ErrAlreadyConnected)
+		}
+	}
+	if winners != 1 {
+		t.Errorf("successful concurrent subscriptions for consumer-1 = %d, want 1", winners)
+	}
+}
+
+// TestManagerSubscribeSharesConnectionReservation checks both entry points.
+func TestManagerSubscribeSharesConnectionReservation(t *testing.T) {
+	oldPath := newTestConsumerQueue(t, "old")
+	newPath := newTestConsumerQueue(t, "new")
+	original := Info{id: "consumer-1", topic: "old", offset: 17, prefix: "old/", ipcPath: oldPath}
+	manager := newTestManager(t, original)
+	candidate := openTestConsumer(t, manager, original.id)
+	if candidate == nil {
+		return
+	}
+	const count = 8
+	start := make(chan struct{})
+	type result struct {
+		consumer *Consumer
+		err      error
+	}
+	results := make(chan result, count)
+	var workers sync.WaitGroup
+	for i := range count {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			if i%2 == 0 {
+				c, _, err := manager.Subscribe(t.Context(), original.id, "events", nil, "user/", newPath)
+				results <- result{consumer: c, err: err}
+			} else {
+				err := manager.ConnectConsumer(t.Context(), candidate)
+				results <- result{consumer: candidate, err: err}
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	winners := 0
+	for result := range results {
+		if result.err != nil {
+			if !errors.Is(result.err, ErrAlreadyConnected) {
+				t.Errorf("concurrent subscription or connection for %q error = %v, want %v", original.id, result.err, ErrAlreadyConnected)
+			}
+			continue
+		}
+		winners++
+		t.Cleanup(func() {
+			if err := manager.DisconnectConsumer(result.consumer); err != nil {
+				t.Errorf("DisconnectConsumer(%q) after concurrent connection error = %v, want nil", original.id, err)
+			}
+		})
+		stored := openTestConsumer(t, manager, original.id)
+		if stored == nil {
+			continue
+		}
+		if stored.Info != result.consumer.Info {
+			t.Errorf("metadata after concurrent connections for %q = %+v, want winning metadata %+v", original.id, stored.Info, result.consumer.Info)
+		}
+		connection := result.consumer.Connection()
+		if connection == nil {
+			t.Errorf("Connection(%q) after winning concurrent connection = nil, want an open connection", original.id)
+		} else if got := connection.outbound.IPCPath(); got != stored.Info.ipcPath {
+			t.Errorf("connected queue for %q = %q, want %q", original.id, got, stored.Info.ipcPath)
+		}
+	}
+	if winners != 1 {
+		t.Errorf("successful concurrent connections for %q = %d, want 1", original.id, winners)
+	}
+}
+
 // TestManagerGetConsumerWithoutIPC checks lookup without a queue.
 func TestManagerGetConsumerWithoutIPC(t *testing.T) {
 	tests := []struct {
