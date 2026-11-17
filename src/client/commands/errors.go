@@ -17,4 +17,12 @@ var (
 	errUnexpectedPayload = errors.New("unexpected payload")
 	// errRequestRejected reports a request that the server refused.
 	errRequestRejected = errors.New("request rejected")
+	// errInvalidLine reports a text message without a key and value separator.
+	errInvalidLine = errors.New("invalid line")
+	// errIncompleteRecord reports a binary record cut before its end.
+	errIncompleteRecord = errors.New("incomplete record")
+	// errEmptyKey reports a message without a key.
+	errEmptyKey = errors.New("empty key")
+	// errEmptyValue reports a message without a value.
+	errEmptyValue = errors.New("empty value")
 )
