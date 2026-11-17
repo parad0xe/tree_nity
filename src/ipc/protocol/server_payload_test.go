@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,6 +23,7 @@ func TestServerOpcodeValues(t *testing.T) {
 		{name: "error reply", opcode: ErrorReply, want: 5},
 		{name: "message delivery", opcode: MessageDelivery, want: 6},
 		{name: "server shutdown", opcode: ServerShutdown, want: 7},
+		{name: "produce message reply", opcode: ProduceMessageReply, want: 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -367,6 +369,58 @@ func TestDecodeRejectsInvalidCheckTopicReply(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			frame := `{"opcode":4,"emitter":1,"metadata":{},"payload":` + tt.payload + `}`
+			got, err := Decode([]byte(frame))
+			if err == nil || !reflect.DeepEqual(got, Data{}) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Decode(%q) error = %v, want %v", frame, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestProduceMessageReplyPayloadToJSONRejectsInvalidInput checks routing and nil pointers.
+func TestProduceMessageReplyPayloadToJSONRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		emitter Emitter
+		opcode  Opcode
+		payload *ProduceMessageReplyPayload
+		wantErr error
+	}{
+		{name: "nil payload", emitter: Server, opcode: ProduceMessageReply, wantErr: ErrMissingPayload},
+		{name: "wrong opcode", emitter: Server, opcode: CheckTopicReply, payload: &ProduceMessageReplyPayload{}, wantErr: ErrInvalidPayload},
+		{name: "client emitter", emitter: Client, opcode: ProduceMessage, payload: &ProduceMessageReplyPayload{}, wantErr: ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.payload.toJSON(tt.emitter, tt.opcode)
+			if !errors.Is(err, tt.wantErr) || got != nil {
+				t.Errorf("toJSON(emitter=%d, opcode=%d, payload=%#v) = %#v, error = %v, want nil and %v", tt.emitter, tt.opcode, tt.payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestDecodeRejectsInvalidProduceMessageReply checks that the success response is an empty object.
+func TestDecodeRejectsInvalidProduceMessageReply(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr error
+	}{
+		{name: "offset field", payload: `{"offset":0}`, wantErr: ErrUnknownField},
+		{name: "unknown field", payload: `{"extra":true}`, wantErr: ErrUnknownField},
+		{name: "array", payload: `[]`},
+		{name: "string", payload: `"produced"`},
+		{name: "number", payload: `1`},
+		{name: "boolean", payload: `false`},
+		{name: "null", payload: `null`, wantErr: ErrMissingPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":{},"payload":%s}`, ProduceMessageReply, Server, tt.payload)
 			got, err := Decode([]byte(frame))
 			if err == nil || !reflect.DeepEqual(got, Data{}) {
 				t.Errorf("Decode(%q) = %#v, error = %v, want zero Data and an error", frame, got, err)
