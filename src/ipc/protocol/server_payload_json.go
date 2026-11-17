@@ -9,6 +9,7 @@ var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
 	ErrorReply:             func() payloadJSON { return &errorReplyPayloadJSON{} },
 	MessageDelivery:        func() payloadJSON { return &messageDeliveryPayloadJSON{} },
 	ServerShutdown:         func() payloadJSON { return &serverShutdownPayloadJSON{} },
+	ProduceMessageReply:    func() payloadJSON { return &produceMessageReplyPayloadJSON{} },
 }
 
 type listTopicReplyPayloadJSON struct {
@@ -189,5 +190,18 @@ func (p serverShutdownPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p serverShutdownPayloadJSON) validate() error {
+	return nil
+}
+
+type produceMessageReplyPayloadJSON struct{}
+
+func (p produceMessageReplyPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	return &ProduceMessageReplyPayload{}, nil
+}
+
+func (p produceMessageReplyPayloadJSON) validate() error {
 	return nil
 }

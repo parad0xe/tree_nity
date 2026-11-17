@@ -45,6 +45,8 @@ const (
 	MessageDelivery
 	// ServerShutdown identifies the server shutdown sentinel.
 	ServerShutdown
+	// ProduceMessageReply identifies a message production response.
+	ProduceMessageReply
 )
 
 func (o Opcode) validate(emitter Emitter) error {
@@ -58,7 +60,7 @@ func (o Opcode) validate(emitter Emitter) error {
 	case Server:
 		switch o {
 		case ListTopicReply, CreateTopicReply, ConsumerInfoReply, TopicSubscriptionReply,
-			CheckTopicReply, ErrorReply, MessageDelivery, ServerShutdown:
+			CheckTopicReply, ErrorReply, MessageDelivery, ServerShutdown, ProduceMessageReply:
 			return nil
 		}
 	default:

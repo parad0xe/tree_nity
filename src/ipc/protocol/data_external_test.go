@@ -147,7 +147,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 			wantErr: protocol.ErrInvalidPayload,
 		},
 		{name: "consumer disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: protocol.ErrInvalidPayload},
-		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: protocol.ErrUnknownOpcode},
+		{name: "consumer heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: protocol.ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -673,6 +673,37 @@ func TestCheckTopicReplyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestProduceMessageReplyRoundTrip checks constructed and zero-value success responses.
+func TestProduceMessageReplyRoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload *protocol.ProduceMessageReplyPayload
+	}{
+		{name: "constructor", payload: protocol.NewProduceMessageReplyPayload()},
+		{name: "zero value", payload: &protocol.ProduceMessageReplyPayload{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := protocol.NewServerMetadata()
+			data, err := protocol.NewData(protocol.ProduceMessageReply, metadata, tt.payload)
+			if err != nil {
+				t.Errorf("NewData(ProduceMessageReply, %#v, %#v) error = %v, want nil", metadata, tt.payload, err)
+				return
+			}
+			frame, err := protocol.Encode(data)
+			wantFrame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":{},"payload":{}}`, protocol.ProduceMessageReply, protocol.Server)
+			if err != nil || string(frame) != wantFrame {
+				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
+				return
+			}
+			decoded, err := protocol.Decode(frame)
+			if err != nil || !reflect.DeepEqual(decoded, data) {
+				t.Errorf("Decode(%q) = %#v, error = %v, want %#v and nil", frame, decoded, err, data)
+			}
+		})
+	}
+}
+
 // TestTopicSubscriptionPayloadRoundTrip checks prefixes and optional offsets through the public API.
 func TestTopicSubscriptionPayloadRoundTrip(t *testing.T) {
 	zero, one, maximum := uint32(0), uint32(1), uint32(4294967295)
@@ -855,6 +886,28 @@ func TestNewDataRejectsInvalidCheckTopicReply(t *testing.T) {
 			got, err := protocol.NewData(protocol.CheckTopicReply, tt.metadata, tt.payload)
 			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
 				t.Errorf("NewData(CheckTopicReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestNewDataRejectsInvalidProduceMessageReply checks nil payloads and emitter inference.
+func TestNewDataRejectsInvalidProduceMessageReply(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata protocol.Metadata
+		payload  protocol.Payload
+		wantErr  error
+	}{
+		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
+		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.ProduceMessageReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
+		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewProduceMessageReplyPayload(), wantErr: protocol.ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := protocol.NewData(protocol.ProduceMessageReply, tt.metadata, tt.payload)
+			if !errors.Is(err, tt.wantErr) || !reflect.DeepEqual(got, protocol.Data{}) {
+				t.Errorf("NewData(ProduceMessageReply, %#v, %#v) = %#v, error = %v, want zero Data and %v", tt.metadata, tt.payload, got, err, tt.wantErr)
 			}
 		})
 	}

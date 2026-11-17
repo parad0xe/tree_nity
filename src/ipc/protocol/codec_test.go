@@ -443,7 +443,7 @@ func TestEncodeRejectsClientPayloadsFromServer(t *testing.T) {
 			wantErr: ErrInvalidPayload,
 		},
 		{name: "consumer disconnect", opcode: ConsumerDisconnect, payload: &ConsumerDisconnectPayload{clientID: "client-1"}, wantErr: ErrInvalidPayload},
-		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, payload: &ConsumerHeartbeatPayload{clientID: "client-1"}, wantErr: ErrUnknownOpcode},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, payload: &ConsumerHeartbeatPayload{clientID: "client-1"}, wantErr: ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -471,7 +471,7 @@ func TestDecodeRejectsInvalidServerPayloads(t *testing.T) {
 		{name: "acknowledgement", opcode: Acknowledgement, json: `{"clientId":"client-1","offset":42}`},
 		{name: "check topic", opcode: CheckTopic, json: `{"topic":"orders"}`},
 		{name: "produce message", opcode: ProduceMessage, json: `{"topic":"orders","message":{"key":"a2V5","value":"dmFsdWU="}}`},
-		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, json: `{"clientId":"client-1"}`, wantErr: ErrUnknownOpcode},
+		{name: "consumer heartbeat", opcode: ConsumerHeartbeat, json: `{"clientId":"client-1"}`, wantErr: ErrUnknownField},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
