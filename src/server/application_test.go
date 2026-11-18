@@ -600,7 +600,7 @@ func TestDispatchListsTopics(t *testing.T) {
 				if err != nil {
 					t.Fatalf("NewData(CreateTopic, %q) during setup error = %v, want nil", want[i], err)
 				}
-				if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+				if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 					t.Fatalf("dispatch(CreateTopic, %q) during setup = %d, %v, want %d and nil", want[i], code, err, exitcode.Success)
 				}
 				receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -609,7 +609,7 @@ func TestDispatchListsTopics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(ListTopic) during setup error = %v, want nil", err)
 			}
-			if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+			if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 				t.Errorf("dispatch(ListTopic) with %d topics = %d, %v, want %d and nil", tt.count, code, err, exitcode.Success)
 				return
 			}
@@ -645,7 +645,7 @@ func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v) during setup error = %v, want nil", tt.opcode, err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.Success || err != nil {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 				t.Errorf("dispatch(%v, %T) = %d, %v, want %d and nil after rejection", tt.opcode, tt.payload, code, err, exitcode.Success)
 				return
 			}
@@ -677,7 +677,7 @@ func TestDispatchRejectsUnhandledRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.Success || err != nil {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 				t.Errorf("dispatch(%v, %q, %T) = %d, %v, want %d and nil after rejection", tt.opcode, inbound.IPCPath(), tt.payload, code, err, exitcode.Success)
 				return
 			}
@@ -712,7 +712,7 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
 				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, errUnhandledOpcode)
 			}
 			// A marker sent after dispatch must be the first frame in the client queue.
@@ -731,7 +731,7 @@ func TestDispatchRejectsServerFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewData(CreateTopicReply) during setup error = %v, want nil", err)
 	}
-	if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
+	if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
 		t.Errorf("dispatch(CreateTopicReply) = %d, %v, want %d and %v", code, err, exitcode.General, errUnhandledOpcode)
 	}
 }
@@ -753,7 +753,7 @@ func TestDispatchPropagatesRejectionErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(ConsumerInfo, %q) during setup error = %v, want nil", tt.ipcPath, err)
 			}
-			code, err := app.dispatch(t.Context(), data)
+			code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data)
 			if code != exitcode.General || !errors.Is(err, errUnhandledOpcode) || !errors.Is(err, tt.wantErr) {
 				t.Errorf("dispatch(ConsumerInfo, %q) = %d, %v, want %d, %v and %v", tt.ipcPath, code, err, exitcode.General, errUnhandledOpcode, tt.wantErr)
 			}
@@ -792,7 +792,7 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			code, err := app.dispatch(tt.ctx, data)
+			code, err := app.dispatch(tt.ctx, lifecycle.GracefulShutdown{}, data)
 			if code != exitcode.IPC || !errors.Is(err, tt.wantErr) || !errors.Is(err, response.ErrReply) {
 				t.Errorf("dispatch(%v) with %s = %d, %v, want %d, %v and %v", tt.opcode, tt.name, code, err, exitcode.IPC, tt.wantErr, response.ErrReply)
 			}
@@ -858,7 +858,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 			defer cancel()
-			if code, err := app.dispatch(ctx, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+			if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("dispatch(%v, %q) with a full client queue = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.IPC, context.DeadlineExceeded)
 			}
 			if err := ctx.Err(); err != nil {
@@ -886,7 +886,7 @@ func TestDispatchReturnsHandlerErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, /invalid/queue) during setup error = %v, want nil", tt.opcode, err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
 				t.Errorf("dispatch(%v, /invalid/queue) = %d, %v, want %d and %v", tt.opcode, code, err, exitcode.General, mqueue.ErrInvalidName)
 			}
 		})
@@ -918,7 +918,7 @@ func TestDispatchPropagatesProductionCancellation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
 			}
-			code, err := app.dispatch(tt.ctx, data)
+			code, err := app.dispatch(tt.ctx, lifecycle.GracefulShutdown{}, data)
 			if code != exitcode.General || !errors.Is(err, tt.wantErr) || errors.Is(err, response.ErrReply) {
 				t.Errorf("dispatch(ProduceMessage, events) with %s context = %d, %v, want %d and %v from the topic", tt.name, code, err, exitcode.General, tt.wantErr)
 			}
@@ -941,11 +941,42 @@ func TestDispatchProducesWithoutManualReceiver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
 	}
-	if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 		t.Errorf("dispatch(ProduceMessage, events) with the topic receiver = %d, %v, want %d and nil", code, err, exitcode.Success)
 	}
 	if err := ctx.Err(); err != nil {
 		t.Errorf("listener context after dispatch(ProduceMessage, events) error = %v, want nil", err)
+	}
+}
+
+// TestDispatchRejectsProductionDuringShutdown checks signal transmission to the handler.
+func TestDispatchRejectsProductionDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	metadata := protocol.NewClientMetadata(inbound.IPCPath())
+	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
+		return
+	}
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	requested := make(chan struct{})
+	shutdown := lifecycle.NewGracefulShutdown(requested)
+	close(requested)
+	data, err := protocol.NewData(protocol.ProduceMessage, metadata, protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+	if err != nil {
+		t.Errorf("NewData(ProduceMessage, events) error = %v, want nil", err)
+		return
+	}
+	if code, err := app.dispatch(ctx, shutdown, data); code != exitcode.Success || err != nil {
+		t.Errorf("dispatch(ProduceMessage, events) during shutdown = %d, %v, want %d and nil after rejection", code, err, exitcode.Success)
+		return
+	}
+	data = receiveServerReply(t, inbound, protocol.ErrorReply)
+	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+	if !ok || reply.Kind() != protocol.ServerShuttingDown || reply.Reason() == "" {
+		t.Errorf("production rejection during shutdown payload = %+v, want %v with a nonempty reason", data.Payload(), protocol.ServerShuttingDown)
 	}
 }
 

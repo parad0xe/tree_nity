@@ -16,6 +16,7 @@ import (
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/utils/hashmap"
 )
 
@@ -610,7 +611,7 @@ func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 			payload := *protocol.NewProduceMessagePayload(topicName, protocol.NewMessage(tt.key, tt.value))
 			// Successful production must not open a reply queue.
 			metadata := *protocol.NewClientMetadata("/invalid/queue")
-			if err := manager.ProduceMessage(ctx, metadata, payload); err != nil {
+			if err := manager.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
 				t.Errorf("ProduceMessage(%q) error = %v, want nil without a reply", topicName, err)
 				return
 			}
@@ -643,6 +644,7 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 		name     string
 		topic    string
 		count    int
+		shutdown bool
 		wantKind protocol.ErrorKind
 	}{
 		{name: "empty name", wantKind: protocol.InvalidRequest},
@@ -650,6 +652,8 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 		{name: "long name", topic: strings.Repeat("a", 33), wantKind: protocol.InvalidRequest},
 		{name: "empty registry", topic: "missing", wantKind: protocol.TopicNotFound},
 		{name: "populated registry", topic: "missing", count: 128, wantKind: protocol.TopicNotFound},
+		{name: "shutdown", topic: "topic-000", count: 1, shutdown: true, wantKind: protocol.ServerShuttingDown},
+		{name: "missing topic during shutdown", topic: "missing", count: 1, shutdown: true, wantKind: protocol.TopicNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -664,7 +668,12 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 			payload := *protocol.NewProduceMessagePayload(tt.topic, protocol.NewMessage(nil, nil))
-			if err := manager.ProduceMessage(ctx, metadata, payload); err != nil {
+			requested := make(chan struct{})
+			shutdown := lifecycle.NewGracefulShutdown(requested)
+			if tt.shutdown {
+				close(requested)
+			}
+			if err := manager.ProduceMessage(ctx, shutdown, metadata, payload); err != nil {
 				t.Errorf("ProduceMessage(%q) error = %v, want nil after rejection", tt.topic, err)
 				return
 			}
@@ -695,6 +704,37 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 	}
 }
 
+// TestManagerProduceMessageFinishesAfterAdmission checks a shutdown during handoff.
+func TestManagerProduceMessageFinishesAfterAdmission(t *testing.T) {
+	manager := NewManager()
+	target, _, stop := newTestTopic(t)
+	if err := manager.topicMap.Insert("events", target); err != nil {
+		t.Errorf("Insert(events) during setup error = %v, want nil", err)
+		return
+	}
+	requested := make(chan struct{})
+	shutdown := lifecycle.NewGracefulShutdown(requested)
+	ctx := &produceSelectContext{Context: topicManagerContext(t), selected: requested}
+	metadata := *protocol.NewClientMetadata("/invalid/queue")
+	payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("body")))
+	if err := manager.ProduceMessage(ctx, shutdown, metadata, payload); err != nil {
+		t.Errorf("ProduceMessage(events) admitted before shutdown error = %v, want nil without a reply", err)
+		return
+	}
+	if !shutdown.IsRequested() {
+		t.Error("shutdown during admitted production was not requested, want requested")
+	}
+	stop()
+	if !waitTopicLoop(t, target) {
+		return
+	}
+	if len(target.messages) != 1 {
+		t.Errorf("stored count after admitted production during shutdown = %d, want 1", len(target.messages))
+	} else if !bytes.Equal(target.messages[0].Key(), []byte("key")) || !bytes.Equal(target.messages[0].Value(), []byte("body")) {
+		t.Errorf("stored message after admitted production during shutdown = key %x, value %x, want key %x, value %x", target.messages[0].Key(), target.messages[0].Value(), []byte("key"), []byte("body"))
+	}
+}
+
 // TestManagerProduceMessagePropagatesTopicCancellation checks stopped sends.
 func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
 	canceled, cancel := context.WithCancel(t.Context())
@@ -717,7 +757,7 @@ func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
 			}
 			metadata := *protocol.NewClientMetadata("/unused")
 			payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))
-			if err := manager.ProduceMessage(tt.ctx, metadata, payload); !errors.Is(err, tt.wantErr) {
+			if err := manager.ProduceMessage(tt.ctx, lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ProduceMessage(events) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
 			}
 		})
@@ -739,7 +779,7 @@ func TestManagerProduceMessagePropagatesQueueErrors(t *testing.T) {
 			manager := NewManager()
 			metadata := *protocol.NewClientMetadata(tt.ipcPath)
 			payload := *protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))
-			if err := manager.ProduceMessage(topicManagerContext(t), metadata, payload); !errors.Is(err, tt.wantErr) {
+			if err := manager.ProduceMessage(topicManagerContext(t), lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ProduceMessage(missing) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
 			}
 		})

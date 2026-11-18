@@ -115,7 +115,7 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 			return exitcode.IPC, err
 		}
 
-		if code, err := app.dispatch(ctx, data); err != nil {
+		if code, err := app.dispatch(ctx, shutdown, data); err != nil {
 			if ctx.Err() != nil {
 				return code, err
 			}
@@ -125,7 +125,7 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 }
 
 // dispatch routes validated client requests and returns their exit status.
-func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, error) {
+func (app *application) dispatch(ctx context.Context, shutdown lifecycle.GracefulShutdown, data protocol.Data) (int, error) {
 	metadata, ok := data.Metadata().(*protocol.ClientMetadata)
 	if !ok {
 		return exitcode.General, errUnhandledOpcode
@@ -144,7 +144,7 @@ func (app *application) dispatch(ctx context.Context, data protocol.Data) (int, 
 	case *protocol.CheckTopicPayload:
 		err = app.topicManager.CheckTopic(sendCtx, *metadata, *payload)
 	case *protocol.ProduceMessagePayload:
-		err = app.topicManager.ProduceMessage(sendCtx, *metadata, *payload)
+		err = app.topicManager.ProduceMessage(sendCtx, shutdown, *metadata, *payload)
 	// TODO: enable request routes when their handlers can send a response.
 	// case *protocol.TopicSubscriptionPayload:
 	// 	app.topicManager.NewSubscription(*metadata, *payload)

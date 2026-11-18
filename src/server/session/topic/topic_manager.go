@@ -7,6 +7,7 @@ import (
 
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/response"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
@@ -132,7 +133,7 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 }
 
 // ProduceMessage forwards a decoded message, replying only on rejection.
-func (m *Manager) ProduceMessage(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
+func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
 	topicID := id.ID(payload.Topic())
 	message := payload.Message()
 	if err := topicID.Validate(); err != nil {
@@ -156,5 +157,9 @@ func (m *Manager) ProduceMessage(ctx context.Context, metadata protocol.ClientMe
 		)
 	}
 
+	if shutdown.IsRequested() {
+		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.ServerShuttingDown, "server is shutting down"))
+	}
 	return topic.ProduceMessage(ctx, message)
 }
