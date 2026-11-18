@@ -65,7 +65,11 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 	}
 
 	m.mu.Lock()
-	err := m.topicMap.Insert(topicID, NewTopic(topicCtx))
+	target := newTopic()
+	err := m.topicMap.Insert(topicID, target)
+	if err == nil {
+		go target.run(topicCtx)
+	}
 	m.mu.Unlock()
 
 	if err != nil {

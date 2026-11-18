@@ -573,7 +573,7 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	}
 }
 
-// TestManagerProduceMessageForwardsToTopic checks routing without a success reply.
+// TestManagerProduceMessageForwardsToTopic checks stored routing without a success reply.
 func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -590,40 +590,48 @@ func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			manager := NewManager()
-			var target *Topic
+			topics := make([]*Topic, 0, tt.count)
+			t.Cleanup(func() {
+				cancel()
+				for _, topic := range topics {
+					waitTopicLoop(t, topic)
+				}
+			})
 			for i := 0; i < tt.count; i++ {
-				target = NewTopic(ctx)
+				target := NewTopic(ctx)
+				topics = append(topics, target)
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
 				if err := manager.topicMap.Insert(topicID, target); err != nil {
-					cancel()
-					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+					t.Errorf("Insert(%q) during setup error = %v, want nil", topicID, err)
+					return
 				}
 			}
 			topicName := fmt.Sprintf("topic-%03d", tt.count-1)
 			payload := *protocol.NewProduceMessagePayload(topicName, protocol.NewMessage(tt.key, tt.value))
 			// Successful production must not open a reply queue.
 			metadata := *protocol.NewClientMetadata("/invalid/queue")
-			result := make(chan error, 1)
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				result <- manager.ProduceMessage(ctx, metadata, payload)
-			}()
-			defer func() {
-				cancel()
-				<-done
-			}()
-			select {
-			case message := <-target.newMessageChan:
-				if !bytes.Equal(message.Key(), tt.key) || !bytes.Equal(message.Value(), tt.value) {
-					t.Errorf("ProduceMessage(%q) forwarded key %x, value %x, want key %x, value %x", topicName, message.Key(), message.Value(), tt.key, tt.value)
-				}
-			case <-ctx.Done():
-				t.Errorf("ProduceMessage(%q) forwarding error = %v, want a message on the target channel", topicName, ctx.Err())
+			if err := manager.ProduceMessage(ctx, metadata, payload); err != nil {
+				t.Errorf("ProduceMessage(%q) error = %v, want nil without a reply", topicName, err)
 				return
 			}
-			if err := <-result; err != nil {
-				t.Errorf("ProduceMessage(%q) error = %v, want nil without a reply", topicName, err)
+			cancel()
+			for i, target := range topics {
+				if !waitTopicLoop(t, target) {
+					return
+				}
+				wantCount := 0
+				if i == tt.count-1 {
+					wantCount = 1
+				}
+				if got := len(target.messages); got != wantCount {
+					t.Errorf("stored count on topic-%03d after ProduceMessage(%q) = %d, want %d", i, topicName, got, wantCount)
+				}
+				if wantCount == 1 && len(target.messages) == 1 {
+					message := target.messages[0]
+					if !bytes.Equal(message.Key(), tt.key) || !bytes.Equal(message.Value(), tt.value) {
+						t.Errorf("ProduceMessage(%q) stored key %x, value %x, want key %x, value %x", topicName, message.Key(), message.Value(), tt.key, tt.value)
+					}
+				}
 			}
 		})
 	}

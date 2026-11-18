@@ -926,8 +926,8 @@ func TestDispatchPropagatesProductionCancellation(t *testing.T) {
 	}
 }
 
-// TestDispatchTimesOutWaitingForTopic checks bounded sends without a topic receiver.
-func TestDispatchTimesOutWaitingForTopic(t *testing.T) {
+// TestDispatchProducesWithoutManualReceiver checks the live topic receiver.
+func TestDispatchProducesWithoutManualReceiver(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 	app := &application{topicManager: topic.NewManager()}
@@ -941,11 +941,42 @@ func TestDispatchTimesOutWaitingForTopic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
 	}
-	if code, err := app.dispatch(ctx, data); code != exitcode.General || !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("dispatch(ProduceMessage, events) without a receiver = %d, %v, want %d and %v", code, err, exitcode.General, context.DeadlineExceeded)
+	if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+		t.Errorf("dispatch(ProduceMessage, events) with the topic receiver = %d, %v, want %d and nil", code, err, exitcode.Success)
 	}
 	if err := ctx.Err(); err != nil {
-		t.Errorf("listener context after dispatch(ProduceMessage, events) without a receiver error = %v, want nil", err)
+		t.Errorf("listener context after dispatch(ProduceMessage, events) error = %v, want nil", err)
+	}
+}
+
+// TestListenProducesWithoutBlockingRequests checks production followed by a query over IPC.
+func TestListenProducesWithoutBlockingRequests(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	sendCreateRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	for i := 0; i < 8; i++ {
+		data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata(inbound.IPCPath()),
+			protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte{byte(i)})))
+		if err != nil {
+			t.Errorf("NewData(ProduceMessage, sequence %d) error = %v, want nil", i, err)
+			return
+		}
+		frame, err := protocol.Encode(data)
+		if err != nil {
+			t.Errorf("Encode(ProduceMessage, sequence %d) error = %v, want nil", i, err)
+			return
+		}
+		send(t, app.inbound.IPCPath(), string(frame))
+	}
+	sendCheckRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CheckTopicReply)
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after production, query and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 
