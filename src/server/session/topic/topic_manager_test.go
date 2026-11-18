@@ -643,13 +643,11 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 		name     string
 		topic    string
 		count    int
-		value    []byte
 		wantKind protocol.ErrorKind
 	}{
 		{name: "empty name", wantKind: protocol.InvalidRequest},
 		{name: "invalid name", topic: "bad/topic", wantKind: protocol.InvalidRequest},
 		{name: "long name", topic: strings.Repeat("a", 33), wantKind: protocol.InvalidRequest},
-		{name: "oversized message", topic: "topic-000", count: 1, value: make([]byte, protocol.MessageSize+1), wantKind: protocol.InvalidRequest},
 		{name: "empty registry", topic: "missing", wantKind: protocol.TopicNotFound},
 		{name: "populated registry", topic: "missing", count: 128, wantKind: protocol.TopicNotFound},
 	}
@@ -665,9 +663,9 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 			}
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			payload := *protocol.NewProduceMessagePayload(tt.topic, protocol.NewMessage(nil, tt.value))
+			payload := *protocol.NewProduceMessagePayload(tt.topic, protocol.NewMessage(nil, nil))
 			if err := manager.ProduceMessage(ctx, metadata, payload); err != nil {
-				t.Errorf("ProduceMessage(%q, %d bytes) error = %v, want nil after rejection", tt.topic, len(tt.value), err)
+				t.Errorf("ProduceMessage(%q) error = %v, want nil after rejection", tt.topic, err)
 				return
 			}
 			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
@@ -679,6 +677,19 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 			}
 			if got := manager.topicMap.Len(); got != uint64(tt.count) {
 				t.Errorf("topic count after ProduceMessage(%q) = %d, want %d", tt.topic, got, tt.count)
+			}
+			topics, err := manager.topicMap.Values()
+			if err != nil {
+				t.Errorf("Values() after rejected ProduceMessage(%q) error = %v, want nil", tt.topic, err)
+				return
+			}
+			for _, topic := range topics {
+				topic.mu.Lock()
+				stored := len(topic.messages)
+				topic.mu.Unlock()
+				if stored != 0 {
+					t.Errorf("stored count after rejected ProduceMessage(%q) = %d, want 0", tt.topic, stored)
+				}
 			}
 		})
 	}

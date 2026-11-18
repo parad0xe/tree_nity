@@ -131,15 +131,11 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 	)
 }
 
-// ProduceMessage forwards a valid message to its topic, replying only on rejection.
+// ProduceMessage forwards a decoded message, replying only on rejection.
 func (m *Manager) ProduceMessage(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
 	topicID := id.ID(payload.Topic())
 	message := payload.Message()
-	err := topicID.Validate()
-	if err == nil && len(message.Key())+len(message.Value()) > protocol.MessageSize {
-		err = protocol.ErrMessageTooLarge
-	}
-	if err != nil {
+	if err := topicID.Validate(); err != nil {
 		return response.SendToClient(
 			ctx,
 			metadata,
