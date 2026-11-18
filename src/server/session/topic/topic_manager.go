@@ -137,7 +137,8 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 	)
 }
 
-// ProduceMessage forwards a decoded message, replying only on rejection.
+// ProduceMessage forwards a decoded message and replies with acceptance or rejection.
+// ctx bounds forwarding and reply delivery; internal or IPC errors are returned.
 func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
 	topicID := id.ID(payload.Topic())
 	message := payload.Message()
@@ -166,5 +167,13 @@ func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.Gracefu
 		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.ServerShuttingDown, "server is shutting down"))
 	}
-	return topic.ProduceMessage(ctx, message)
+	if err := topic.ProduceMessage(ctx, message); err != nil {
+		return err
+	}
+	return response.SendToClient(
+		ctx,
+		metadata,
+		protocol.ProduceMessageReply,
+		protocol.NewProduceMessageReplyPayload(),
+	)
 }

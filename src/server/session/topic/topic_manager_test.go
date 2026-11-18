@@ -574,7 +574,7 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	}
 }
 
-// TestManagerProduceMessageForwardsToTopic checks stored routing without a success reply.
+// TestManagerProduceMessageForwardsToTopic checks stored routing and success replies.
 func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -609,11 +609,15 @@ func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 			}
 			topicName := fmt.Sprintf("topic-%03d", tt.count-1)
 			payload := *protocol.NewProduceMessagePayload(topicName, protocol.NewMessage(tt.key, tt.value))
-			// Successful production must not open a reply queue.
-			metadata := *protocol.NewClientMetadata("/invalid/queue")
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 			if err := manager.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
-				t.Errorf("ProduceMessage(%q) error = %v, want nil without a reply", topicName, err)
+				t.Errorf("ProduceMessage(%q) error = %v, want nil after confirmation", topicName, err)
 				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ProduceMessageReply)
+			if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+				t.Errorf("ProduceMessage(%q) reply payload = %T, want *protocol.ProduceMessageReplyPayload", topicName, data.Payload())
 			}
 			cancel()
 			for i, target := range topics {
@@ -715,11 +719,16 @@ func TestManagerProduceMessageFinishesAfterAdmission(t *testing.T) {
 	requested := make(chan struct{})
 	shutdown := lifecycle.NewGracefulShutdown(requested)
 	ctx := &produceSelectContext{Context: topicManagerContext(t), selected: requested}
-	metadata := *protocol.NewClientMetadata("/invalid/queue")
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("body")))
 	if err := manager.ProduceMessage(ctx, shutdown, metadata, payload); err != nil {
-		t.Errorf("ProduceMessage(events) admitted before shutdown error = %v, want nil without a reply", err)
+		t.Errorf("ProduceMessage(events) admitted before shutdown error = %v, want nil after confirmation", err)
 		return
+	}
+	data := receiveTopicManagerReply(t, ctx, inbound, protocol.ProduceMessageReply)
+	if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+		t.Errorf("ProduceMessage(events) admitted before shutdown reply payload = %T, want *protocol.ProduceMessageReplyPayload", data.Payload())
 	}
 	if !shutdown.IsRequested() {
 		t.Error("shutdown during admitted production was not requested, want requested")
@@ -759,6 +768,41 @@ func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
 			payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))
 			if err := manager.ProduceMessage(tt.ctx, lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ProduceMessage(events) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessagePropagatesConfirmationQueueErrors checks replies after acceptance.
+func TestManagerProduceMessagePropagatesConfirmationQueueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid queue name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/produce.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			target, _, stop := newTestTopic(t)
+			if err := manager.topicMap.Insert("events", target); err != nil {
+				t.Errorf("Insert(events) during setup error = %v, want nil", err)
+				return
+			}
+			metadata := *protocol.NewClientMetadata(tt.ipcPath)
+			payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(events) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+			stop()
+			if !waitTopicLoop(t, target) {
+				return
+			}
+			if got := len(target.messages); got != 1 {
+				t.Errorf("stored count after ProduceMessage(events) with reply queue %q = %d, want 1", tt.ipcPath, got)
 			}
 		})
 	}

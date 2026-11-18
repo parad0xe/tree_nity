@@ -868,6 +868,32 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 	}
 }
 
+// TestDispatchTimesOutOnFullProductionReplyQueue checks bounded confirmation delivery.
+func TestDispatchTimesOutOnFullProductionReplyQueue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	metadata := protocol.NewClientMetadata(inbound.IPCPath())
+	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
+		return
+	}
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	fillServerClientInbox(t, inbound)
+	data, err := protocol.NewData(protocol.ProduceMessage, metadata, protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+	if err != nil {
+		t.Errorf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
+		return
+	}
+	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, response.ErrReply) {
+		t.Errorf("dispatch(ProduceMessage, events) with a full client queue = %d, %v, want %d, %v and %v", code, err, exitcode.IPC, context.DeadlineExceeded, response.ErrReply)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("listener context after dispatch(ProduceMessage, events) to a full queue error = %v, want nil", err)
+	}
+}
+
 // TestDispatchReturnsHandlerErrors checks connection failures and their general exit code.
 func TestDispatchReturnsHandlerErrors(t *testing.T) {
 	tests := []struct {
@@ -943,6 +969,11 @@ func TestDispatchProducesWithoutManualReceiver(t *testing.T) {
 	}
 	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 		t.Errorf("dispatch(ProduceMessage, events) with the topic receiver = %d, %v, want %d and nil", code, err, exitcode.Success)
+		return
+	}
+	data = receiveServerReply(t, inbound, protocol.ProduceMessageReply)
+	if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+		t.Errorf("dispatch(ProduceMessage, events) reply payload = %T, want *protocol.ProduceMessageReplyPayload", data.Payload())
 	}
 	if err := ctx.Err(); err != nil {
 		t.Errorf("listener context after dispatch(ProduceMessage, events) error = %v, want nil", err)
@@ -1002,6 +1033,10 @@ func TestListenProducesWithoutBlockingRequests(t *testing.T) {
 			return
 		}
 		send(t, app.inbound.IPCPath(), string(frame))
+		data = receiveServerReply(t, inbound, protocol.ProduceMessageReply)
+		if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+			t.Errorf("ProduceMessage(events, sequence %d) reply payload = %T, want *protocol.ProduceMessageReplyPayload", i, data.Payload())
+		}
 	}
 	sendCheckRequest(t, app, inbound.IPCPath(), "events")
 	receiveServerReply(t, inbound, protocol.CheckTopicReply)
