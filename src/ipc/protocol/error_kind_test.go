@@ -17,6 +17,7 @@ func TestErrorKindValues(t *testing.T) {
 		{name: "topic exists", kind: TopicExists, want: 2},
 		{name: "client not found", kind: ClientNotFound, want: 3},
 		{name: "client name taken", kind: ClientNameTaken, want: 4},
+		{name: "server shutting down", kind: ServerShuttingDown, want: 5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -38,6 +39,7 @@ func TestErrorKindValidate(t *testing.T) {
 		{name: "topic exists", kind: TopicExists},
 		{name: "client not found", kind: ClientNotFound},
 		{name: "client name taken", kind: ClientNameTaken},
+		{name: "server shutting down", kind: ServerShuttingDown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -55,7 +57,7 @@ func TestErrorKindValidateRejectsUnknownValues(t *testing.T) {
 		kind ErrorKind
 	}{
 		{name: "negative", kind: -1},
-		{name: "first unknown", kind: 5},
+		{name: "first unknown", kind: ServerShuttingDown + 1},
 		{name: "large", kind: 256},
 	}
 	for _, tt := range tests {

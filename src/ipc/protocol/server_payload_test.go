@@ -72,7 +72,7 @@ func TestErrorReplyPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "nil payload", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingPayload},
 		{name: "negative kind", emitter: Server, opcode: ErrorReply, payload: &ErrorReplyPayload{kind: -1}, wantErr: ErrInvalidPayload},
-		{name: "unknown kind", emitter: Server, opcode: ErrorReply, payload: &ErrorReplyPayload{kind: 5}, wantErr: ErrInvalidPayload},
+		{name: "unknown kind", emitter: Server, opcode: ErrorReply, payload: &ErrorReplyPayload{kind: ServerShuttingDown + 1}, wantErr: ErrInvalidPayload},
 		{name: "invalid UTF-8 reason", emitter: Server, opcode: ErrorReply, payload: &ErrorReplyPayload{reason: "\xff"}, wantErr: ErrInvalidPayload},
 		{name: "wrong opcode", emitter: Server, opcode: ListTopicReply, payload: &ErrorReplyPayload{}, wantErr: ErrInvalidPayload},
 		{name: "client emitter", emitter: Client, opcode: CheckTopic, payload: &ErrorReplyPayload{}, wantErr: ErrInvalidPayload},
@@ -100,7 +100,7 @@ func TestDecodeRejectsInvalidErrorReply(t *testing.T) {
 		{name: "missing reason", payload: `{"kind":0}`, wantErr: ErrMissingErrorReason},
 		{name: "null reason", payload: `{"kind":0,"reason":null}`, wantErr: ErrMissingErrorReason},
 		{name: "negative kind", payload: `{"kind":-1,"reason":"error"}`, wantErr: ErrInvalidPayload},
-		{name: "unknown kind", payload: `{"kind":5,"reason":"error"}`, wantErr: ErrInvalidPayload},
+		{name: "unknown kind", payload: fmt.Sprintf(`{"kind":%d,"reason":"error"}`, ServerShuttingDown+1), wantErr: ErrInvalidPayload},
 		{name: "string kind", payload: `{"kind":"0","reason":"error"}`},
 		{name: "fractional kind", payload: `{"kind":0.5,"reason":"error"}`},
 		{name: "boolean kind", payload: `{"kind":false,"reason":"error"}`},

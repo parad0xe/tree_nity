@@ -16,11 +16,13 @@ const (
 	ClientNotFound
 	// ClientNameTaken marks an active consumer name.
 	ClientNameTaken
+	// ServerShuttingDown rejects a new request during graceful shutdown.
+	ServerShuttingDown
 )
 
 func (k ErrorKind) validate() error {
 	switch k {
-	case InvalidRequest, TopicNotFound, TopicExists, ClientNotFound, ClientNameTaken:
+	case InvalidRequest, TopicNotFound, TopicExists, ClientNotFound, ClientNameTaken, ServerShuttingDown:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown error kind %d", ErrInvalidPayload, k)

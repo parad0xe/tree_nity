@@ -276,6 +276,7 @@ func TestErrorReplyRoundTrip(t *testing.T) {
 		{name: "topic exists", kind: protocol.TopicExists, reason: "topic exists", json: `{"kind":2,"reason":"topic exists"}`},
 		{name: "client not found", kind: protocol.ClientNotFound, reason: "client not found", json: `{"kind":3,"reason":"client not found"}`},
 		{name: "client name taken", kind: protocol.ClientNameTaken, reason: "client name taken", json: `{"kind":4,"reason":"client name taken"}`},
+		{name: "server shutting down", kind: protocol.ServerShuttingDown, reason: "stopping", json: `{"kind":5,"reason":"stopping"}`},
 		{name: "escaped UTF-8 reason", kind: protocol.InvalidRequest, reason: "échec\n\"topic\"", json: `{"kind":0,"reason":"échec\n\"topic\""}`},
 		{name: "large reason", kind: protocol.InvalidRequest, reason: strings.Repeat("r", 4096), json: `{"kind":0,"reason":"` + strings.Repeat("r", 4096) + `"}`},
 	}
@@ -320,7 +321,7 @@ func TestNewDataRejectsInvalidErrorReply(t *testing.T) {
 		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.ErrorReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "negative kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(-1, "error"), wantErr: protocol.ErrInvalidPayload},
-		{name: "unknown kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(5, "error"), wantErr: protocol.ErrInvalidPayload},
+		{name: "unknown kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(protocol.ServerShuttingDown+1, "error"), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid UTF-8 reason", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "\xff"), wantErr: protocol.ErrInvalidPayload},
 		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "error"), wantErr: protocol.ErrInvalidPayload},
 	}
