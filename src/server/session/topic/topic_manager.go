@@ -65,13 +65,18 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 		)
 	}
 
+	topicCtx, cancel := context.WithCancel(topicCtx)
 	m.mu.Lock()
-	target := newTopic()
+	target := NewTopic(topicCtx)
 	err := m.topicMap.Insert(topicID, target)
-	if err == nil {
-		go target.run(topicCtx)
-	}
 	m.mu.Unlock()
+	defer func() {
+		// A registered topic follows its parent context; failed insertions roll back.
+		if err != nil {
+			cancel()
+			<-target.done
+		}
+	}()
 
 	if err != nil {
 		if errors.Is(err, hashmap.ErrKeyExists) {

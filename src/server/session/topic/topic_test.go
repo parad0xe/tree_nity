@@ -95,6 +95,27 @@ func connectedTopicConsumer(t *testing.T, prefix, suffix string) *consumer.Consu
 	return c
 }
 
+// TestTopicCancellationStopsLoop checks rollback without stopping the parent context.
+func TestTopicCancellationStopsLoop(t *testing.T) {
+	parent := t.Context()
+	ctx, cancel := context.WithCancel(parent)
+	topic := NewTopic(ctx)
+	t.Cleanup(func() {
+		cancel()
+		waitTopicLoop(t, topic)
+	})
+	cancel()
+	if !waitTopicLoop(t, topic) {
+		return
+	}
+	if !errors.Is(topic.runErr, context.Canceled) {
+		t.Errorf("topic loop after cancellation error = %v, want %v", topic.runErr, context.Canceled)
+	}
+	if err := parent.Err(); err != nil {
+		t.Errorf("parent context after topic cancellation error = %v, want nil", err)
+	}
+}
+
 // TestTopicProduceMessageStoresInOrder checks empty, minimal and large streams.
 func TestTopicProduceMessageStoresInOrder(t *testing.T) {
 	tests := []struct {
