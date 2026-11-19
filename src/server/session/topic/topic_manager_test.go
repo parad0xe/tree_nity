@@ -85,6 +85,246 @@ func subscriptionTarget(t *testing.T, manager *Manager, name string) (*Topic, co
 	return target, ctx, cancel
 }
 
+// TestManagerConsumerInfoRepliesWithStoredMetadata checks current state without connection changes.
+func TestManagerConsumerInfoRepliesWithStoredMetadata(t *testing.T) {
+	tests := []struct {
+		name      string
+		count     int
+		offset    uint32
+		prefix    string
+		connected bool
+	}{
+		{name: "zero offset", count: 1},
+		{name: "saved consumer", count: 1, offset: 17, prefix: "é/猫/"},
+		{name: "connected consumer", count: 1, offset: 42, prefix: "user/", connected: true},
+		{name: "large registry", count: 128, offset: ^uint32(0), prefix: "events/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			inbound := newTopicManagerInbox(t)
+			subscriberIPC := "/saved-consumer"
+			if tt.connected {
+				subscriber, err := ipc.NewInbound(inbound.IPCPath()+".subscriber", protocol.Decode)
+				if err != nil {
+					t.Fatalf("NewInbound(subscriber) during setup error = %v, want nil", err)
+				}
+				subscriberIPC = subscriber.IPCPath()
+				t.Cleanup(func() {
+					if err := subscriber.Drop(); err != nil {
+						t.Errorf("Drop(subscriber) error = %v, want nil", err)
+					}
+				})
+			}
+			for i := 0; i < tt.count; i++ {
+				consumerID := id.ID(fmt.Sprintf("consumer-%03d", i))
+				if err := manager.consumerManager.AddConsumer(consumerID, "events", 7, tt.prefix, subscriberIPC); err != nil {
+					t.Fatalf("AddConsumer(%q) during setup error = %v, want nil", consumerID, err)
+				}
+			}
+			consumerID := id.ID(fmt.Sprintf("consumer-%03d", tt.count-1))
+			c, err := manager.consumerManager.GetConsumer(consumerID)
+			if err != nil {
+				t.Fatalf("GetConsumer(%q) during setup error = %v, want nil", consumerID, err)
+			}
+			if tt.connected {
+				if err := manager.consumerManager.ConnectConsumer(ctx, c); err != nil {
+					t.Fatalf("ConnectConsumer(%q) during setup error = %v, want nil", consumerID, err)
+				}
+				t.Cleanup(func() {
+					if err := manager.consumerManager.DisconnectConsumer(c); err != nil {
+						t.Errorf("DisconnectConsumer(%q) error = %v, want nil", consumerID, err)
+					}
+				})
+			}
+			if err := manager.consumerManager.UpdateInfo(consumerID, nil, &tt.offset, nil, nil); err != nil {
+				t.Fatalf("UpdateInfo(%q, offset %d) during setup error = %v, want nil", consumerID, tt.offset, err)
+			}
+			payload := *protocol.NewConsumerInfoPayload("caller-1", string(consumerID))
+			if err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+				t.Errorf("ConsumerInfo(%q) error = %v, want nil", consumerID, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ConsumerInfoReply)
+			reply, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
+			if !ok {
+				t.Errorf("ConsumerInfo(%q) payload = %T, want *protocol.ConsumerInfoReplyPayload", consumerID, data.Payload())
+			} else if reply.Client() != string(consumerID) || reply.Topic() != "events" || reply.Offset() != tt.offset || reply.Prefix() != tt.prefix || reply.IPC() != subscriberIPC {
+				t.Errorf("ConsumerInfo(%q) payload = %+v, want events, offset %d, prefix %q and IPC %q", consumerID, reply, tt.offset, tt.prefix, subscriberIPC)
+			}
+			stored, err := manager.consumerManager.GetConsumer(consumerID)
+			if err != nil {
+				t.Errorf("GetConsumer(%q) after ConsumerInfo error = %v, want nil", consumerID, err)
+			} else if stored.Info.Topic() != "events" || stored.Info.Offset() != tt.offset || stored.Info.Prefix() != tt.prefix || stored.Info.IPCPath() != subscriberIPC {
+				t.Errorf("stored %q after ConsumerInfo = %+v, want events, offset %d, prefix %q and IPC %q", consumerID, stored.Info, tt.offset, tt.prefix, subscriberIPC)
+			}
+			if got := manager.consumerManager.Len(); got != uint64(tt.count) {
+				t.Errorf("consumer count after ConsumerInfo(%q) = %d, want %d", consumerID, got, tt.count)
+			}
+			if connection := c.Connection(); tt.connected {
+				if connection == nil {
+					t.Errorf("connection for %q after ConsumerInfo = nil, want open", consumerID)
+					return
+				}
+				select {
+				case <-connection.Done():
+					t.Errorf("connection for %q after ConsumerInfo is closed, want open", consumerID)
+				default:
+				}
+			} else if connection != nil {
+				t.Errorf("connection for %q after ConsumerInfo = %p, want nil", consumerID, connection)
+			}
+		})
+	}
+}
+
+// TestManagerConsumerInfoRejectsUnknownSubscriber checks lookup failure without adding metadata.
+func TestManagerConsumerInfoRejectsUnknownSubscriber(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+	}{
+		{name: "empty registry"},
+		{name: "one consumer", count: 1},
+		{name: "large registry", count: 128},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			for i := 0; i < tt.count; i++ {
+				consumerID := id.ID(fmt.Sprintf("consumer-%03d", i))
+				if err := manager.consumerManager.AddConsumer(consumerID, "events", 17, "user/", "/saved-consumer"); err != nil {
+					t.Fatalf("AddConsumer(%q) during setup error = %v, want nil", consumerID, err)
+				}
+			}
+			ctx := topicManagerContext(t)
+			inbound := newTopicManagerInbox(t)
+			payload := *protocol.NewConsumerInfoPayload("consumer-000", "missing")
+			if err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+				t.Errorf("ConsumerInfo(missing) error = %v, want nil after rejection", err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("ConsumerInfo(missing) payload = %T, want *protocol.ErrorReplyPayload", data.Payload())
+			} else if reply.Kind() != protocol.ClientNotFound || reply.Reason() == "" {
+				t.Errorf("ConsumerInfo(missing) rejection = %v, %q, want %v and a nonempty reason", reply.Kind(), reply.Reason(), protocol.ClientNotFound)
+			}
+			if got := manager.consumerManager.Len(); got != uint64(tt.count) {
+				t.Errorf("consumer count after ConsumerInfo(missing) = %d, want %d", got, tt.count)
+			}
+		})
+	}
+}
+
+// TestManagerConsumerInfoPropagatesQueueErrors checks both reply paths.
+func TestManagerConsumerInfoPropagatesQueueErrors(t *testing.T) {
+	missingIPC := fmt.Sprintf("/consumer-info.missing.%d", os.Getpid())
+	tests := []struct {
+		name     string
+		existing bool
+		ipcPath  string
+		wantErr  error
+	}{
+		{name: "known invalid queue", existing: true, ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "known missing queue", existing: true, ipcPath: missingIPC, wantErr: os.ErrNotExist},
+		{name: "unknown invalid queue", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "unknown missing queue", ipcPath: missingIPC, wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("subscriber", "events", 17, "user/", "/saved-consumer"); err != nil {
+					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
+				}
+			}
+			payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+			if err := manager.ConsumerInfo(topicManagerContext(t), *protocol.NewClientMetadata(tt.ipcPath), payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ConsumerInfo(subscriber) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerConsumerInfoPropagatesStoppedContexts checks cancellation of both reply paths.
+func TestManagerConsumerInfoPropagatesStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name     string
+		existing bool
+		ctx      context.Context
+		wantErr  error
+	}{
+		{name: "known canceled", existing: true, ctx: canceled, wantErr: context.Canceled},
+		{name: "known expired", existing: true, ctx: expired, wantErr: context.DeadlineExceeded},
+		{name: "unknown canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "unknown expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("subscriber", "events", 17, "user/", "/saved-consumer"); err != nil {
+					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
+				}
+			}
+			inbound := newTopicManagerInbox(t)
+			payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+			err := manager.ConsumerInfo(tt.ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload)
+			if !errors.Is(err, tt.wantErr) || !errors.Is(err, response.ErrReply) {
+				t.Errorf("ConsumerInfo(subscriber) with %s error = %v, want %v and %v", tt.name, err, tt.wantErr, response.ErrReply)
+			}
+		})
+	}
+}
+
+// TestManagerConsumerInfoTimesOutOnFullQueue checks bounded delivery for both replies.
+func TestManagerConsumerInfoTimesOutOnFullQueue(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing bool
+	}{
+		{name: "known subscriber", existing: true},
+		{name: "unknown subscriber"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("subscriber", "events", 17, "user/", "/saved-consumer"); err != nil {
+					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
+				}
+			}
+			inbound := newTopicManagerInbox(t)
+			fillSubscriptionInbox(t, inbound)
+			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+			defer cancel()
+			payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+			err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload)
+			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, response.ErrReply) {
+				t.Errorf("ConsumerInfo(subscriber) with a full reply queue error = %v, want %v and %v", err, context.DeadlineExceeded, response.ErrReply)
+			}
+		})
+	}
+}
+
+// TestManagerConsumerInfoPropagatesLookupErrors checks internal errors are not client rejections.
+func TestManagerConsumerInfoPropagatesLookupErrors(t *testing.T) {
+	manager := NewManager()
+	manager.consumerManager = nil
+	payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+	err := manager.ConsumerInfo(t.Context(), *protocol.NewClientMetadata("/invalid/queue"), payload)
+	if !errors.Is(err, consumer.ErrManagerUninitialized) {
+		t.Errorf("ConsumerInfo(subscriber) with an uninitialized consumer manager error = %v, want %v", err, consumer.ErrManagerUninitialized)
+	}
+}
+
 // TestManagerNewSubscriptionRejectsShutdown checks admission without metadata changes.
 func TestManagerNewSubscriptionRejectsShutdown(t *testing.T) {
 	tests := []struct {

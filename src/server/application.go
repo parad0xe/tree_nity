@@ -141,6 +141,8 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 		err = app.topicManager.ListTopics(sendCtx, *metadata, *payload)
 	case *protocol.CreateTopicPayload:
 		err = app.topicManager.CreateTopic(sendCtx, ctx, *metadata, *payload)
+	case *protocol.ConsumerInfoPayload:
+		err = app.topicManager.ConsumerInfo(sendCtx, *metadata, *payload)
 	case *protocol.CheckTopicPayload:
 		err = app.topicManager.CheckTopic(sendCtx, *metadata, *payload)
 	case *protocol.ProduceMessagePayload:
