@@ -55,7 +55,7 @@ func TestErrorKindValidateRejectsUnknownValues(t *testing.T) {
 		kind ErrorKind
 	}{
 		{name: "negative", kind: -1},
-		{name: "first unknown", kind: 5},
+		{name: "first unknown", kind: ClientNameTaken + 1},
 		{name: "large", kind: 256},
 	}
 	for _, tt := range tests {

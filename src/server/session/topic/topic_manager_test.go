@@ -1,6 +1,7 @@
 package topic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/utils/hashmap"
 )
 
@@ -569,6 +571,306 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	}
 	if creations != count || checks != count {
 		t.Errorf("concurrent creation and checks received %d creations and %d checks, want %d each", creations, checks, count)
+	}
+}
+
+// TestManagerProduceMessageForwardsToTopic checks stored routing and success replies.
+func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+		key   []byte
+		value []byte
+	}{
+		{name: "empty message", count: 1},
+		{name: "binary message", count: 1, key: []byte{0, 255}, value: []byte{255, 0}},
+		{name: "size limit", count: 1, key: []byte("k"), value: make([]byte, protocol.MessageSize-1)},
+		{name: "many topics", count: 128, key: []byte("key"), value: []byte("body")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			manager := NewManager()
+			topics := make([]*Topic, 0, tt.count)
+			t.Cleanup(func() {
+				cancel()
+				for _, topic := range topics {
+					waitTopicLoop(t, topic)
+				}
+			})
+			for i := 0; i < tt.count; i++ {
+				target := NewTopic(ctx)
+				topics = append(topics, target)
+				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+				if err := manager.topicMap.Insert(topicID, target); err != nil {
+					t.Errorf("Insert(%q) during setup error = %v, want nil", topicID, err)
+					return
+				}
+			}
+			topicName := fmt.Sprintf("topic-%03d", tt.count-1)
+			payload := *protocol.NewProduceMessagePayload(topicName, protocol.NewMessage(tt.key, tt.value))
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			if err := manager.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
+				t.Errorf("ProduceMessage(%q) error = %v, want nil after confirmation", topicName, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ProduceMessageReply)
+			if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+				t.Errorf("ProduceMessage(%q) reply payload = %T, want *protocol.ProduceMessageReplyPayload", topicName, data.Payload())
+			}
+			cancel()
+			for i, target := range topics {
+				if !waitTopicLoop(t, target) {
+					return
+				}
+				wantCount := 0
+				if i == tt.count-1 {
+					wantCount = 1
+				}
+				if got := len(target.messages); got != wantCount {
+					t.Errorf("stored count on topic-%03d after ProduceMessage(%q) = %d, want %d", i, topicName, got, wantCount)
+				}
+				if wantCount == 1 && len(target.messages) == 1 {
+					message := target.messages[0]
+					if !bytes.Equal(message.Key(), tt.key) || !bytes.Equal(message.Value(), tt.value) {
+						t.Errorf("ProduceMessage(%q) stored key %x, value %x, want key %x, value %x", topicName, message.Key(), message.Value(), tt.key, tt.value)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessageRejectsRequests checks invalid and missing topics.
+func TestManagerProduceMessageRejectsRequests(t *testing.T) {
+	tests := []struct {
+		name     string
+		topic    string
+		count    int
+		wantKind protocol.ErrorKind
+	}{
+		{name: "empty name", wantKind: protocol.InvalidRequest},
+		{name: "invalid name", topic: "bad/topic", wantKind: protocol.InvalidRequest},
+		{name: "long name", topic: strings.Repeat("a", 33), wantKind: protocol.InvalidRequest},
+		{name: "empty registry", topic: "missing", wantKind: protocol.TopicNotFound},
+		{name: "populated registry", topic: "missing", count: 128, wantKind: protocol.TopicNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			for i := 0; i < tt.count; i++ {
+				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
+				}
+			}
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			payload := *protocol.NewProduceMessagePayload(tt.topic, protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
+				t.Errorf("ProduceMessage(%q) error = %v, want nil after rejection", tt.topic, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("ProduceMessage(%q) payload = %T, want *protocol.ErrorReplyPayload", tt.topic, data.Payload())
+			} else if reply.Kind() != tt.wantKind || reply.Reason() == "" {
+				t.Errorf("ProduceMessage(%q) rejection = %v, %q, want %v and a nonempty reason", tt.topic, reply.Kind(), reply.Reason(), tt.wantKind)
+			}
+			if got := manager.topicMap.Len(); got != uint64(tt.count) {
+				t.Errorf("topic count after ProduceMessage(%q) = %d, want %d", tt.topic, got, tt.count)
+			}
+			topics, err := manager.topicMap.Values()
+			if err != nil {
+				t.Errorf("Values() after rejected ProduceMessage(%q) error = %v, want nil", tt.topic, err)
+				return
+			}
+			for _, topic := range topics {
+				topic.mu.Lock()
+				stored := len(topic.messages)
+				topic.mu.Unlock()
+				if stored != 0 {
+					t.Errorf("stored count after rejected ProduceMessage(%q) = %d, want 0", tt.topic, stored)
+				}
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessageRejectsShutdown checks shutdown takes priority over topic lookup.
+func TestManagerProduceMessageRejectsShutdown(t *testing.T) {
+	tests := []struct {
+		name       string
+		topic      string
+		registered bool
+	}{
+		{name: "existing topic", topic: "events", registered: true},
+		{name: "missing topic", topic: "missing", registered: true},
+		{name: "invalid topic", topic: "bad/topic", registered: true},
+		{name: "empty registry", topic: "events"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			target, _, _ := newTestTopic(t)
+			var wantCount uint64
+			if tt.registered {
+				if err := manager.topicMap.Insert("events", target); err != nil {
+					t.Errorf("Insert(events) during setup error = %v, want nil", err)
+					return
+				}
+				wantCount = 1
+			}
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			payload := *protocol.NewProduceMessagePayload(tt.topic, protocol.NewMessage(nil, nil))
+			requested := make(chan struct{})
+			shutdown := lifecycle.NewGracefulShutdown(requested)
+			close(requested)
+			if err := manager.ProduceMessage(ctx, shutdown, metadata, payload); err != nil {
+				t.Errorf("ProduceMessage(%q) during shutdown error = %v, want nil after rejection", tt.topic, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+			if _, ok := data.Payload().(*protocol.ServerShutdownPayload); !ok {
+				t.Errorf("ProduceMessage(%q) during shutdown payload = %T, want *protocol.ServerShutdownPayload", tt.topic, data.Payload())
+			}
+			if got := manager.topicMap.Len(); got != wantCount {
+				t.Errorf("topic count after ProduceMessage(%q) during shutdown = %d, want %d", tt.topic, got, wantCount)
+			}
+			target.mu.Lock()
+			stored := len(target.messages)
+			target.mu.Unlock()
+			if stored != 0 {
+				t.Errorf("stored count after ProduceMessage(%q) during shutdown = %d, want 0", tt.topic, stored)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessageFinishesAfterAdmission checks a shutdown during handoff.
+func TestManagerProduceMessageFinishesAfterAdmission(t *testing.T) {
+	manager := NewManager()
+	target, _, stop := newTestTopic(t)
+	if err := manager.topicMap.Insert("events", target); err != nil {
+		t.Errorf("Insert(events) during setup error = %v, want nil", err)
+		return
+	}
+	requested := make(chan struct{})
+	shutdown := lifecycle.NewGracefulShutdown(requested)
+	ctx := &produceSelectContext{Context: topicManagerContext(t), selected: requested}
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("body")))
+	if err := manager.ProduceMessage(ctx, shutdown, metadata, payload); err != nil {
+		t.Errorf("ProduceMessage(events) admitted before shutdown error = %v, want nil after confirmation", err)
+		return
+	}
+	data := receiveTopicManagerReply(t, ctx, inbound, protocol.ProduceMessageReply)
+	if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+		t.Errorf("ProduceMessage(events) admitted before shutdown reply payload = %T, want *protocol.ProduceMessageReplyPayload", data.Payload())
+	}
+	if !shutdown.IsRequested() {
+		t.Error("shutdown during admitted production was not requested, want requested")
+	}
+	stop()
+	if !waitTopicLoop(t, target) {
+		return
+	}
+	if len(target.messages) != 1 {
+		t.Errorf("stored count after admitted production during shutdown = %d, want 1", len(target.messages))
+	} else if !bytes.Equal(target.messages[0].Key(), []byte("key")) || !bytes.Equal(target.messages[0].Value(), []byte("body")) {
+		t.Errorf("stored message after admitted production during shutdown = key %x, value %x, want key %x, value %x", target.messages[0].Key(), target.messages[0].Value(), []byte("key"), []byte("body"))
+	}
+}
+
+// TestManagerProduceMessagePropagatesTopicCancellation checks stopped sends.
+func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
+			}
+			metadata := *protocol.NewClientMetadata("/unused")
+			payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(tt.ctx, lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(events) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessagePropagatesConfirmationQueueErrors checks replies after acceptance.
+func TestManagerProduceMessagePropagatesConfirmationQueueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid queue name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/produce.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := topicManagerContext(t)
+			manager := NewManager()
+			target, _, stop := newTestTopic(t)
+			if err := manager.topicMap.Insert("events", target); err != nil {
+				t.Errorf("Insert(events) during setup error = %v, want nil", err)
+				return
+			}
+			metadata := *protocol.NewClientMetadata(tt.ipcPath)
+			payload := *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(events) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+			stop()
+			if !waitTopicLoop(t, target) {
+				return
+			}
+			if got := len(target.messages); got != 1 {
+				t.Errorf("stored count after ProduceMessage(events) with reply queue %q = %d, want 1", tt.ipcPath, got)
+			}
+		})
+	}
+}
+
+// TestManagerProduceMessagePropagatesQueueErrors checks failed rejection replies.
+func TestManagerProduceMessagePropagatesQueueErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		ipcPath string
+		wantErr error
+	}{
+		{name: "invalid queue name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/produce.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			metadata := *protocol.NewClientMetadata(tt.ipcPath)
+			payload := *protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))
+			if err := manager.ProduceMessage(topicManagerContext(t), lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(missing) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
+			}
+		})
 	}
 }
 

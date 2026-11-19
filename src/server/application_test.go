@@ -600,7 +600,7 @@ func TestDispatchListsTopics(t *testing.T) {
 				if err != nil {
 					t.Fatalf("NewData(CreateTopic, %q) during setup error = %v, want nil", want[i], err)
 				}
-				if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+				if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 					t.Fatalf("dispatch(CreateTopic, %q) during setup = %d, %v, want %d and nil", want[i], code, err, exitcode.Success)
 				}
 				receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -609,7 +609,7 @@ func TestDispatchListsTopics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(ListTopic) during setup error = %v, want nil", err)
 			}
-			if code, err := app.dispatch(ctx, data); code != exitcode.Success || err != nil {
+			if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 				t.Errorf("dispatch(ListTopic) with %d topics = %d, %v, want %d and nil", tt.count, code, err, exitcode.Success)
 				return
 			}
@@ -636,7 +636,6 @@ func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
 		payload protocol.Payload
 	}{
 		{name: "subscribe", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "events", "", nil)},
-		{name: "produce", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("value")))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -646,7 +645,7 @@ func TestDispatchRejectsUnimplementedTopicRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v) during setup error = %v, want nil", tt.opcode, err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.Success || err != nil {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 				t.Errorf("dispatch(%v, %T) = %d, %v, want %d and nil after rejection", tt.opcode, tt.payload, code, err, exitcode.Success)
 				return
 			}
@@ -678,7 +677,7 @@ func TestDispatchRejectsUnhandledRequests(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.Success || err != nil {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
 				t.Errorf("dispatch(%v, %q, %T) = %d, %v, want %d and nil after rejection", tt.opcode, inbound.IPCPath(), tt.payload, code, err, exitcode.Success)
 				return
 			}
@@ -713,7 +712,7 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
 				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, errUnhandledOpcode)
 			}
 			// A marker sent after dispatch must be the first frame in the client queue.
@@ -732,7 +731,7 @@ func TestDispatchRejectsServerFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewData(CreateTopicReply) during setup error = %v, want nil", err)
 	}
-	if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
+	if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
 		t.Errorf("dispatch(CreateTopicReply) = %d, %v, want %d and %v", code, err, exitcode.General, errUnhandledOpcode)
 	}
 }
@@ -754,7 +753,7 @@ func TestDispatchPropagatesRejectionErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(ConsumerInfo, %q) during setup error = %v, want nil", tt.ipcPath, err)
 			}
-			code, err := app.dispatch(t.Context(), data)
+			code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data)
 			if code != exitcode.General || !errors.Is(err, errUnhandledOpcode) || !errors.Is(err, tt.wantErr) {
 				t.Errorf("dispatch(ConsumerInfo, %q) = %d, %v, want %d, %v and %v", tt.ipcPath, code, err, exitcode.General, errUnhandledOpcode, tt.wantErr)
 			}
@@ -780,6 +779,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 		{name: "expired listing", ctx: expired, opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: context.DeadlineExceeded},
 		{name: "canceled check", ctx: cancelledContext(), opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events"), wantErr: context.Canceled},
 		{name: "expired check", ctx: expired, opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events"), wantErr: context.DeadlineExceeded},
+		{name: "canceled production rejection", ctx: cancelledContext(), opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil)), wantErr: context.Canceled},
+		{name: "expired production rejection", ctx: expired, opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil)), wantErr: context.DeadlineExceeded},
 		{name: "canceled rejection", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled, wantUnhandled: true},
 		{name: "expired rejection", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded, wantUnhandled: true},
 	}
@@ -791,7 +792,7 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			code, err := app.dispatch(tt.ctx, data)
+			code, err := app.dispatch(tt.ctx, lifecycle.GracefulShutdown{}, data)
 			if code != exitcode.IPC || !errors.Is(err, tt.wantErr) || !errors.Is(err, response.ErrReply) {
 				t.Errorf("dispatch(%v) with %s = %d, %v, want %d, %v and %v", tt.opcode, tt.name, code, err, exitcode.IPC, tt.wantErr, response.ErrReply)
 			}
@@ -843,6 +844,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 		{name: "creation", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events")},
 		{name: "listing", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload()},
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
+		{name: "production rejection", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))},
 		{name: "rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
 	}
 	for _, tt := range tests {
@@ -856,13 +858,39 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 			defer cancel()
-			if code, err := app.dispatch(ctx, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+			if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("dispatch(%v, %q) with a full client queue = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.IPC, context.DeadlineExceeded)
 			}
 			if err := ctx.Err(); err != nil {
 				t.Errorf("listener context after dispatch(%v) to a full queue error = %v, want nil", tt.opcode, err)
 			}
 		})
+	}
+}
+
+// TestDispatchTimesOutOnFullProductionReplyQueue checks bounded confirmation delivery.
+func TestDispatchTimesOutOnFullProductionReplyQueue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	metadata := protocol.NewClientMetadata(inbound.IPCPath())
+	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
+		return
+	}
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	fillServerClientInbox(t, inbound)
+	data, err := protocol.NewData(protocol.ProduceMessage, metadata, protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+	if err != nil {
+		t.Errorf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
+		return
+	}
+	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, response.ErrReply) {
+		t.Errorf("dispatch(ProduceMessage, events) with a full client queue = %d, %v, want %d, %v and %v", code, err, exitcode.IPC, context.DeadlineExceeded, response.ErrReply)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("listener context after dispatch(ProduceMessage, events) to a full queue error = %v, want nil", err)
 	}
 }
 
@@ -875,6 +903,7 @@ func TestDispatchReturnsHandlerErrors(t *testing.T) {
 	}{
 		{name: "creation", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("events")},
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
+		{name: "production", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -883,10 +912,167 @@ func TestDispatchReturnsHandlerErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, /invalid/queue) during setup error = %v, want nil", tt.opcode, err)
 			}
-			if code, err := app.dispatch(t.Context(), data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
 				t.Errorf("dispatch(%v, /invalid/queue) = %d, %v, want %d and %v", tt.opcode, code, err, exitcode.General, mqueue.ErrInvalidName)
 			}
 		})
+	}
+}
+
+// TestDispatchPropagatesProductionCancellation checks errors from the topic channel.
+func TestDispatchPropagatesProductionCancellation(t *testing.T) {
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: cancelledContext(), wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &application{topicManager: topic.NewManager()}
+			inbound := newServerClientInbox(t)
+			metadata := protocol.NewClientMetadata(inbound.IPCPath())
+			if err := app.topicManager.CreateTopic(t.Context(), t.Context(), *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+				t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
+			}
+			receiveServerReply(t, inbound, protocol.CreateTopicReply)
+			data, err := protocol.NewData(protocol.ProduceMessage, metadata, protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+			if err != nil {
+				t.Fatalf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
+			}
+			code, err := app.dispatch(tt.ctx, lifecycle.GracefulShutdown{}, data)
+			if code != exitcode.General || !errors.Is(err, tt.wantErr) || errors.Is(err, response.ErrReply) {
+				t.Errorf("dispatch(ProduceMessage, events) with %s context = %d, %v, want %d and %v from the topic", tt.name, code, err, exitcode.General, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestDispatchProducesWithoutManualReceiver checks the live topic receiver.
+func TestDispatchProducesWithoutManualReceiver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	metadata := protocol.NewClientMetadata(inbound.IPCPath())
+	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+		t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
+	}
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	data, err := protocol.NewData(protocol.ProduceMessage, metadata, protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+	if err != nil {
+		t.Fatalf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
+	}
+	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
+		t.Errorf("dispatch(ProduceMessage, events) with the topic receiver = %d, %v, want %d and nil", code, err, exitcode.Success)
+		return
+	}
+	data = receiveServerReply(t, inbound, protocol.ProduceMessageReply)
+	if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+		t.Errorf("dispatch(ProduceMessage, events) reply payload = %T, want *protocol.ProduceMessageReplyPayload", data.Payload())
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("listener context after dispatch(ProduceMessage, events) error = %v, want nil", err)
+	}
+}
+
+// TestDispatchRejectsProductionDuringShutdown checks signal transmission to the handler.
+func TestDispatchRejectsProductionDuringShutdown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+	defer cancel()
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	metadata := protocol.NewClientMetadata(inbound.IPCPath())
+	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
+		return
+	}
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	requested := make(chan struct{})
+	shutdown := lifecycle.NewGracefulShutdown(requested)
+	close(requested)
+	data, err := protocol.NewData(protocol.ProduceMessage, metadata, protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+	if err != nil {
+		t.Errorf("NewData(ProduceMessage, events) error = %v, want nil", err)
+		return
+	}
+	if code, err := app.dispatch(ctx, shutdown, data); code != exitcode.Success || err != nil {
+		t.Errorf("dispatch(ProduceMessage, events) during shutdown = %d, %v, want %d and nil after rejection", code, err, exitcode.Success)
+		return
+	}
+	data = receiveServerReply(t, inbound, protocol.ServerShutdown)
+	if _, ok := data.Payload().(*protocol.ServerShutdownPayload); !ok {
+		t.Errorf("production rejection during shutdown payload = %T, want *protocol.ServerShutdownPayload", data.Payload())
+	}
+}
+
+// TestListenProducesWithoutBlockingRequests checks production followed by a query over IPC.
+func TestListenProducesWithoutBlockingRequests(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	sendCreateRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	for i := 0; i < 8; i++ {
+		data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata(inbound.IPCPath()),
+			protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte{byte(i)})))
+		if err != nil {
+			t.Errorf("NewData(ProduceMessage, sequence %d) error = %v, want nil", i, err)
+			return
+		}
+		frame, err := protocol.Encode(data)
+		if err != nil {
+			t.Errorf("Encode(ProduceMessage, sequence %d) error = %v, want nil", i, err)
+			return
+		}
+		send(t, app.inbound.IPCPath(), string(frame))
+		data = receiveServerReply(t, inbound, protocol.ProduceMessageReply)
+		if _, ok := data.Payload().(*protocol.ProduceMessageReplyPayload); !ok {
+			t.Errorf("ProduceMessage(events, sequence %d) reply payload = %T, want *protocol.ProduceMessageReplyPayload", i, data.Payload())
+		}
+	}
+	sendCheckRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CheckTopicReply)
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after production, query and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+// TestListenRejectsProductionForMissingTopic checks rejection and continued service over IPC.
+func TestListenRejectsProductionForMissingTopic(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	data, err := protocol.NewData(protocol.ProduceMessage, protocol.NewClientMetadata(inbound.IPCPath()), protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+	if err != nil {
+		t.Fatalf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
+	}
+	frame, err := protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(ProduceMessage, events) during setup error = %v, want nil", err)
+	}
+	send(t, app.inbound.IPCPath(), string(frame))
+	data = receiveServerReply(t, inbound, protocol.ErrorReply)
+	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+	if !ok {
+		t.Errorf("ProduceMessage(events) before creation payload = %T, want *protocol.ErrorReplyPayload", data.Payload())
+	} else if reply.Kind() != protocol.TopicNotFound || reply.Reason() == "" {
+		t.Errorf("ProduceMessage(events) before creation rejection = %v, %q, want %v and a nonempty reason", reply.Kind(), reply.Reason(), protocol.TopicNotFound)
+	}
+	sendCreateRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after rejecting production, creating a topic and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 

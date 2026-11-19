@@ -12,9 +12,7 @@ import (
 	"tree_nity/src/server/utils/hashmap"
 )
 
-// Topic holds the message and consumer indexes and lifecycle state for a topic.
-// It is intended to own one message-processing goroutine and two goroutines
-// per active consumer connection: heartbeat monitoring and message delivery.
+// Topic owns message storage and the workers for its consumers.
 // A Topic must not be copied after initialization.
 type Topic struct {
 	mu                sync.Mutex
@@ -22,20 +20,28 @@ type Topic struct {
 	messageOffsetTrie *MessageOffsetTrie
 	consumerTrie      *ConsumerTrie
 	consumerMap       *hashmap.HashMap[id.ID, *subscription]
-	newMessageCond    *sync.Cond
+	newMessageChan    chan protocol.Message
+	messages          []protocol.Message
+	done              chan struct{}
+	// runErr is read only after done closes.
+	runErr error
 }
 
-// NewTopic initializes the indexes without starting message processing.
-// ctx is reserved for the future processing loop.
+// NewTopic initializes the indexes and starts message storage until ctx ends.
 func NewTopic(ctx context.Context) *Topic {
-	t := &Topic{
+	t := newTopic()
+	go t.run(ctx)
+	return t
+}
+
+func newTopic() *Topic {
+	return &Topic{
 		messageOffsetTrie: NewMessageOffsetTrie(),
 		consumerTrie:      NewConsumerTrie(),
 		consumerMap:       hashmap.NewHashMap[id.ID, *subscription](),
+		newMessageChan:    make(chan protocol.Message),
+		done:              make(chan struct{}),
 	}
-	t.newMessageCond = sync.NewCond(&t.mu)
-	// TODO: start a single run goroutine when message processing is implemented.
-	return t
 }
 
 // UpsertConsumer registers a metadata snapshot and c's current connection.
@@ -253,10 +259,19 @@ func (t *Topic) unregisterConsumer(c *subscription) (*subscription, error) {
 	return storedConsumer, nil
 }
 
-// ProduceMessage is the entry point for submitting a new message to the topic loop.
-func (t *Topic) ProduceMessage(message protocol.Message) {
-	// TODO: enqueue the message while holding newMessageCond.L, then signal
-	// newMessageCond so run can process it.
+// ProduceMessage queues a message while ctx and the topic loop are active.
+func (t *Topic) ProduceMessage(ctx context.Context, message protocol.Message) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case t.newMessageChan <- message:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.done:
+		return t.runErr
+	}
 }
 
 func (t *Topic) validate() error {
@@ -268,12 +283,41 @@ func (t *Topic) validate() error {
 }
 
 // run is the single topic goroutine's entry point for receiving new messages.
-func (t *Topic) run() {
-	// TODO: wait for pending messages on newMessageCond, store and index them,
-	// and select matching consumers with consumerTrie. Release shared-state
-	// locks before forwarding each message to their Connection.MessageChan.
-	// Wake condition waits on cancellation and make channel sends cancellable,
-	// then cancel every attached subscription and wait for both loops.
+func (t *Topic) run(ctx context.Context) {
+	defer close(t.done)
+	// TODO: add cancellable dispatch to matching consumers outside t.mu,
+	// then cancel and wait for their workers on exit.
+	for {
+		if err := ctx.Err(); err != nil {
+			t.runErr = err
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.runErr = ctx.Err()
+			return
+		case message := <-t.newMessageChan:
+			if err := t.storeMessage(message); err != nil {
+				t.runErr = err
+				return
+			}
+		}
+	}
+}
+
+// storeMessage keeps the message at its indexed topic offset.
+func (t *Topic) storeMessage(message protocol.Message) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if uint64(len(t.messages)) > uint64(^uint32(0)) {
+		return fmt.Errorf("message offset %d exceeds uint32", len(t.messages))
+	}
+	offset := uint32(len(t.messages))
+	if err := t.messageOffsetTrie.Insert(string(message.Key()), offset); err != nil {
+		return fmt.Errorf("index message at offset %d: %w", offset, err)
+	}
+	t.messages = append(t.messages, message)
+	return nil
 }
 
 // deliverMessages is the sending goroutine's entry point for one subscribed consumer.

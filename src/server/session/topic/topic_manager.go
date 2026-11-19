@@ -7,6 +7,7 @@ import (
 
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/response"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
@@ -64,9 +65,18 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 		)
 	}
 
+	topicCtx, cancel := context.WithCancel(topicCtx)
 	m.mu.Lock()
-	err := m.topicMap.Insert(topicID, NewTopic(topicCtx))
+	target := NewTopic(topicCtx)
+	err := m.topicMap.Insert(topicID, target)
 	m.mu.Unlock()
+	defer func() {
+		// A registered topic follows its parent context; failed insertions roll back.
+		if err != nil {
+			cancel()
+			<-target.done
+		}
+	}()
 
 	if err != nil {
 		if errors.Is(err, hashmap.ErrKeyExists) {
@@ -127,8 +137,43 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 	)
 }
 
-// ProduceMessage is reserved for requests to publish messages to a topic.
-func (m *Manager) ProduceMessage(metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) {
-	// TODO: reject missing topics, forward the message to the topic for storage
-	// and indexing, and notify its subscribed consumers.
+// ProduceMessage forwards a decoded message and replies with acceptance or rejection.
+// ctx bounds forwarding and reply delivery; internal or IPC errors are returned.
+func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
+	if shutdown.IsRequested() {
+		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+	}
+
+	topicID := id.ID(payload.Topic())
+	message := payload.Message()
+	if err := topicID.Validate(); err != nil {
+		return response.SendToClient(
+			ctx,
+			metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.InvalidRequest, err.Error()),
+		)
+	}
+
+	m.mu.RLock()
+	topic, exists := m.topicMap.Get(topicID)
+	m.mu.RUnlock()
+	if !exists {
+		return response.SendToClient(
+			ctx,
+			metadata,
+			protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic does not exist"),
+		)
+	}
+
+	if err := topic.ProduceMessage(ctx, message); err != nil {
+		return err
+	}
+	return response.SendToClient(
+		ctx,
+		metadata,
+		protocol.ProduceMessageReply,
+		protocol.NewProduceMessageReplyPayload(),
+	)
 }

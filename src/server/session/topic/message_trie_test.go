@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	lowestMessageOffset  int32 = -1 << 31
-	highestMessageOffset int32 = 1<<31 - 1
+	lowestMessageOffset  uint32 = 0
+	highestMessageOffset uint32 = 1<<32 - 1
 )
 
-func newTestMessageOffsetTrie(t *testing.T, entries map[string][]int32) *MessageOffsetTrie {
+func newTestMessageOffsetTrie(t *testing.T, entries map[string][]uint32) *MessageOffsetTrie {
 	t.Helper()
 	trie := NewMessageOffsetTrie()
 	for key, offsets := range entries {
@@ -51,18 +51,18 @@ func TestMessageOffsetTrieUninitialized(t *testing.T) {
 	}{
 		{name: "nil receiver", wantErr: ErrMessageOffsetTrieUninitialized},
 		{name: "zero value", trie: &MessageOffsetTrie{}, wantErr: ErrMessageOffsetTrieUninitialized},
-		{name: "uninitialized inner trie", trie: &MessageOffsetTrie{trie: &trie.Trie[int32]{}}, wantErr: trie.ErrUninitialized},
+		{name: "uninitialized inner trie", trie: &MessageOffsetTrie{trie: &trie.Trie[uint32]{}}, wantErr: trie.ErrUninitialized},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			operations := []struct {
 				name string
-				run  func() ([]int32, error)
+				run  func() ([]uint32, error)
 			}{
-				{name: "Insert", run: func() ([]int32, error) {
+				{name: "Insert", run: func() ([]uint32, error) {
 					return nil, tt.trie.Insert("a", 1)
 				}},
-				{name: "Search", run: func() ([]int32, error) {
+				{name: "Search", run: func() ([]uint32, error) {
 					return tt.trie.Search("a", 1)
 				}},
 			}
@@ -86,16 +86,16 @@ func TestMessageOffsetTrieInsert(t *testing.T) {
 	tests := []struct {
 		name    string
 		key     string
-		offsets []int32
-		want    []int32
+		offsets []uint32
+		want    []uint32
 	}{
-		{name: "empty key", offsets: []int32{0}, want: []int32{0}},
-		{name: "single byte", key: "a", offsets: []int32{1}, want: []int32{1}},
-		{name: "sort offsets", key: "topic", offsets: []int32{3, 1, 2}, want: []int32{1, 2, 3}},
-		{name: "int32 limits", key: "bounds", offsets: []int32{highestMessageOffset, lowestMessageOffset, 0}, want: []int32{lowestMessageOffset, 0, highestMessageOffset}},
-		{name: "UTF-8", key: "é/猫", offsets: []int32{1}, want: []int32{1}},
-		{name: "binary bytes", key: "\x00\xff", offsets: []int32{1}, want: []int32{1}},
-		{name: "long key", key: strings.Repeat("a", 4096), offsets: []int32{1}, want: []int32{1}},
+		{name: "empty key", offsets: []uint32{0}, want: []uint32{0}},
+		{name: "single byte", key: "a", offsets: []uint32{1}, want: []uint32{1}},
+		{name: "sort offsets", key: "topic", offsets: []uint32{3, 1, 2}, want: []uint32{1, 2, 3}},
+		{name: "uint32 limits", key: "bounds", offsets: []uint32{highestMessageOffset, lowestMessageOffset, 1 << 31}, want: []uint32{lowestMessageOffset, 1 << 31, highestMessageOffset}},
+		{name: "UTF-8", key: "é/猫", offsets: []uint32{1}, want: []uint32{1}},
+		{name: "binary bytes", key: "\x00\xff", offsets: []uint32{1}, want: []uint32{1}},
+		{name: "long key", key: strings.Repeat("a", 4096), offsets: []uint32{1}, want: []uint32{1}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,12 +119,12 @@ func TestMessageOffsetTrieInsertRejectsDuplicates(t *testing.T) {
 	tests := []struct {
 		name      string
 		key       string
-		offsets   []int32
-		want      []int32
+		offsets   []uint32
+		want      []uint32
 		wantErrAt map[int]bool
 	}{
-		{name: "duplicate zero", offsets: []int32{0, 0}, want: []int32{0}, wantErrAt: map[int]bool{1: true}},
-		{name: "duplicates", key: "topic", offsets: []int32{2, 2, 1, 2}, want: []int32{1, 2}, wantErrAt: map[int]bool{1: true, 3: true}},
+		{name: "duplicate zero", offsets: []uint32{0, 0}, want: []uint32{0}, wantErrAt: map[int]bool{1: true}},
+		{name: "duplicates", key: "topic", offsets: []uint32{2, 2, 1, 2}, want: []uint32{1, 2}, wantErrAt: map[int]bool{1: true, 3: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -149,37 +149,38 @@ func TestMessageOffsetTrieInsertRejectsDuplicates(t *testing.T) {
 
 // TestMessageOffsetTrieSearch checks descendant prefixes, inclusive thresholds, and sorting.
 func TestMessageOffsetTrieSearch(t *testing.T) {
-	entries := map[string][]int32{"": {7}, "a": {9, 1}, "ab": {4}, "ac": {2}, "b": {3}}
+	entries := map[string][]uint32{"": {7}, "a": {9, 1}, "ab": {4}, "ac": {2}, "b": {3}}
 	tests := []struct {
 		name    string
-		entries map[string][]int32
+		entries map[string][]uint32
 		prefix  string
-		offset  int32
-		want    []int32
+		offset  uint32
+		want    []uint32
 	}{
 		{name: "empty trie"},
-		{name: "minimal", entries: map[string][]int32{"a": {0}}, prefix: "a", want: []int32{0}},
-		{name: "entire trie", entries: entries, want: []int32{1, 2, 3, 4, 7, 9}},
-		{name: "prefix and descendants", entries: entries, prefix: "a", want: []int32{1, 2, 4, 9}},
-		{name: "ancestor excluded", entries: entries, prefix: "ab", want: []int32{4}},
-		{name: "sibling", entries: entries, prefix: "b", want: []int32{3}},
-		{name: "internal prefix", entries: map[string][]int32{"ab": {3}, "ac": {1}}, prefix: "a", want: []int32{1, 3}},
+		{name: "minimal", entries: map[string][]uint32{"a": {0}}, prefix: "a", want: []uint32{0}},
+		{name: "entire trie", entries: entries, want: []uint32{1, 2, 3, 4, 7, 9}},
+		{name: "prefix and descendants", entries: entries, prefix: "a", want: []uint32{1, 2, 4, 9}},
+		{name: "ancestor excluded", entries: entries, prefix: "ab", want: []uint32{4}},
+		{name: "sibling", entries: entries, prefix: "b", want: []uint32{3}},
+		{name: "internal prefix", entries: map[string][]uint32{"ab": {3}, "ac": {1}}, prefix: "a", want: []uint32{1, 3}},
 		{name: "missing prefix", entries: entries, prefix: "z"},
 		{name: "beyond a stored key", entries: entries, prefix: "abc"},
-		{name: "inclusive threshold", entries: entries, prefix: "a", offset: 4, want: []int32{4, 9}},
+		{name: "inclusive threshold", entries: entries, prefix: "a", offset: 4, want: []uint32{4, 9}},
 		{name: "threshold above all offsets", entries: entries, offset: 10},
-		{name: "zero threshold", entries: map[string][]int32{"a": {-1, 0, 1}}, prefix: "a", want: []int32{0, 1}},
+		{name: "zero threshold", entries: map[string][]uint32{"a": {1, 0}}, prefix: "a", want: []uint32{0, 1}},
+		{name: "above signed limit", entries: map[string][]uint32{"a": {highestMessageOffset, 1 << 31, 1<<31 - 1}}, prefix: "a", offset: 1 << 31, want: []uint32{1 << 31, highestMessageOffset}},
 		{
-			name: "minimum threshold", entries: map[string][]int32{"a": {highestMessageOffset, 0, lowestMessageOffset}},
-			prefix: "a", offset: lowestMessageOffset, want: []int32{lowestMessageOffset, 0, highestMessageOffset},
+			name: "minimum threshold", entries: map[string][]uint32{"a": {highestMessageOffset, 1, lowestMessageOffset}},
+			prefix: "a", offset: lowestMessageOffset, want: []uint32{lowestMessageOffset, 1, highestMessageOffset},
 		},
 		{
-			name: "maximum threshold", entries: map[string][]int32{"a": {lowestMessageOffset, highestMessageOffset, 0}},
-			prefix: "a", offset: highestMessageOffset, want: []int32{highestMessageOffset},
+			name: "maximum threshold", entries: map[string][]uint32{"a": {lowestMessageOffset, highestMessageOffset, 1}},
+			prefix: "a", offset: highestMessageOffset, want: []uint32{highestMessageOffset},
 		},
-		{name: "UTF-8", entries: map[string][]int32{"é": {2}, "é/猫": {5}, "è": {1}}, prefix: "é", want: []int32{2, 5}},
-		{name: "binary bytes", entries: map[string][]int32{"\x00": {2}, "\x00\xff": {1}, "\xff": {3}}, prefix: "\x00", want: []int32{1, 2}},
-		{name: "case sensitive", entries: map[string][]int32{"Ab": {1}, "ab": {2}}, prefix: "a", want: []int32{2}},
+		{name: "UTF-8", entries: map[string][]uint32{"é": {2}, "é/猫": {5}, "è": {1}}, prefix: "é", want: []uint32{2, 5}},
+		{name: "binary bytes", entries: map[string][]uint32{"\x00": {2}, "\x00\xff": {1}, "\xff": {3}}, prefix: "\x00", want: []uint32{1, 2}},
+		{name: "case sensitive", entries: map[string][]uint32{"Ab": {1}, "ab": {2}}, prefix: "a", want: []uint32{2}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -211,21 +212,21 @@ func TestMessageOffsetTrieManyMessages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			trie := NewMessageOffsetTrie()
-			want := make([]int32, tt.count)
+			want := make([]uint32, tt.count)
 			for i := 0; i < tt.count; i++ {
 				key := fmt.Sprintf("topic/%04d", i)
-				offset := int32(tt.count - 1 - i)
+				offset := uint32(tt.count - 1 - i)
 				if err := trie.Insert(key, offset); err != nil {
 					t.Errorf("Insert(%q, %d) at index %d of %d error = %v, want nil", key, offset, i, tt.count, err)
 					return
 				}
-				want[i] = int32(i)
+				want[i] = uint32(i)
 			}
 			got, err := trie.Search("", lowestMessageOffset)
 			if err != nil || !slices.Equal(got, want) {
 				t.Errorf("Search(%q, %d) with %d messages = %v, error = %v, want %v and nil error", "", lowestMessageOffset, tt.count, got, err, want)
 			}
-			threshold := int32(tt.count / 2)
+			threshold := uint32(tt.count / 2)
 			got, err = trie.Search("topic/", threshold)
 			if err != nil || !slices.Equal(got, want[tt.count/2:]) {
 				t.Errorf("Search(%q, %d) with %d messages = %v, error = %v, want %v and nil error", "topic/", threshold, tt.count, got, err, want[tt.count/2:])

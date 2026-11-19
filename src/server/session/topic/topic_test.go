@@ -1,16 +1,20 @@
 package topic
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/mqueue"
+	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
 	"tree_nity/src/server/utils/trie"
@@ -32,12 +36,24 @@ func waitTopicWorkers(t *testing.T, topic *Topic) bool {
 	}
 }
 
+func waitTopicLoop(t *testing.T, topic *Topic) bool {
+	t.Helper()
+	select {
+	case <-topic.done:
+		return true
+	case <-time.After(5 * time.Second):
+		t.Error("topic storage loop did not stop within 5s, want stopped")
+		return false
+	}
+}
+
 func newTestTopic(t *testing.T) (*Topic, context.Context, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	topic := NewTopic(ctx)
 	t.Cleanup(func() {
 		cancel()
+		waitTopicLoop(t, topic)
 		waitTopicWorkers(t, topic)
 	})
 	return topic, ctx, cancel
@@ -77,6 +93,268 @@ func connectedTopicConsumer(t *testing.T, prefix, suffix string) *consumer.Consu
 		return nil
 	}
 	return c
+}
+
+// TestTopicCancellationStopsLoop checks rollback without stopping the parent context.
+func TestTopicCancellationStopsLoop(t *testing.T) {
+	parent := t.Context()
+	ctx, cancel := context.WithCancel(parent)
+	topic := NewTopic(ctx)
+	t.Cleanup(func() {
+		cancel()
+		waitTopicLoop(t, topic)
+	})
+	cancel()
+	if !waitTopicLoop(t, topic) {
+		return
+	}
+	if !errors.Is(topic.runErr, context.Canceled) {
+		t.Errorf("topic loop after cancellation error = %v, want %v", topic.runErr, context.Canceled)
+	}
+	if err := parent.Err(); err != nil {
+		t.Errorf("parent context after topic cancellation error = %v, want nil", err)
+	}
+}
+
+// TestTopicProduceMessageStoresInOrder checks empty, minimal and large streams.
+func TestTopicProduceMessageStoresInOrder(t *testing.T) {
+	tests := []struct {
+		name  string
+		count int
+	}{
+		{name: "empty"},
+		{name: "single message", count: 1},
+		{name: "many messages", count: 256},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topic, _, stop := newTestTopic(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			for i := 0; i < tt.count; i++ {
+				if err := topic.ProduceMessage(ctx, protocol.NewMessage([]byte{0, 255}, []byte{byte(i)})); err != nil {
+					t.Errorf("ProduceMessage(sequence %d of %d) error = %v, want nil", i, tt.count, err)
+					return
+				}
+			}
+			stop()
+			if !waitTopicLoop(t, topic) {
+				return
+			}
+			if len(topic.messages) != tt.count {
+				t.Errorf("stored message count = %d, want %d", len(topic.messages), tt.count)
+			}
+			for i, message := range topic.messages {
+				if !bytes.Equal(message.Key(), []byte{0, 255}) || !bytes.Equal(message.Value(), []byte{byte(i)}) {
+					t.Errorf("stored message at offset %d = key %x, value %x, want key %x, value %x", i, message.Key(), message.Value(), []byte{0, 255}, []byte{byte(i)})
+				}
+			}
+			wantOffsets := make([]uint32, tt.count)
+			for i := range wantOffsets {
+				wantOffsets[i] = uint32(i)
+			}
+			offsets, err := topic.messageOffsetTrie.Search(string([]byte{0, 255}), 0)
+			if err != nil || !slices.Equal(offsets, wantOffsets) {
+				t.Errorf("Search(binary key, 0) after %d messages = %v, %v, want %v and nil", tt.count, offsets, err, wantOffsets)
+			}
+		})
+	}
+}
+
+// TestTopicProduceMessageRejectsStoppedContexts checks request cancellation.
+func TestTopicProduceMessageRejectsStoppedContexts(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topic, _, _ := newTestTopic(t)
+			if err := topic.ProduceMessage(tt.ctx, protocol.NewMessage(nil, nil)); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(empty) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// produceSelectContext signals when ProduceMessage evaluates its blocking select.
+type produceSelectContext struct {
+	context.Context
+	selected chan struct{}
+	once     sync.Once
+}
+
+func (c *produceSelectContext) Done() <-chan struct{} {
+	done := c.Context.Done()
+	c.once.Do(func() { close(c.selected) })
+	return done
+}
+
+// TestTopicProduceMessageCancelsWithoutReceiver checks cancellation inside the select.
+func TestTopicProduceMessageCancelsWithoutReceiver(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	// Isolate the send without starting the normal topic receiver.
+	topic := newTopic()
+	observed := &produceSelectContext{Context: ctx, selected: make(chan struct{})}
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("producer goroutine did not stop within 5s after cancellation, want stopped")
+		}
+	})
+	go func() {
+		defer close(finished)
+		result <- topic.ProduceMessage(observed, protocol.NewMessage(nil, nil))
+	}()
+	select {
+	case <-observed.selected:
+	case <-ctx.Done():
+		t.Errorf("ProduceMessage(empty) did not reach its select: %v, want a waiting send", ctx.Err())
+		return
+	}
+	select {
+	case err := <-result:
+		t.Errorf("ProduceMessage(empty) without a receiver returned %v before cancellation, want a waiting send", err)
+		return
+	default:
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("ProduceMessage(empty) without a receiver after cancellation error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("ProduceMessage(empty) without a receiver did not return within 5s after cancellation, want returned")
+	}
+}
+
+// TestTopicProduceMessageSendsConcurrently checks storage and each producer's order.
+func TestTopicProduceMessageSendsConcurrently(t *testing.T) {
+	topic, _, stop := newTestTopic(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	const producers, count = 8, 32
+	start := make(chan struct{})
+	results := make(chan error, producers)
+	var workers sync.WaitGroup
+	for producer := 0; producer < producers; producer++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for i := 0; i < count; i++ {
+				if err := topic.ProduceMessage(ctx, protocol.NewMessage([]byte{byte(producer)}, []byte{byte(i)})); err != nil {
+					results <- fmt.Errorf("ProduceMessage(producer %d, message %d): %w", producer, i, err)
+					return
+				}
+			}
+			results <- nil
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Errorf("concurrent ProduceMessage() error = %v, want nil", err)
+		}
+	}
+	stop()
+	if !waitTopicLoop(t, topic) {
+		return
+	}
+	if got := len(topic.messages); got != producers*count {
+		t.Errorf("stored message count after concurrent sends = %d, want %d", got, producers*count)
+	}
+	next := make([]int, producers)
+	wantOffsets := make([][]uint32, producers)
+	for offset, message := range topic.messages {
+		key, value := message.Key(), message.Value()
+		if len(key) != 1 || len(value) != 1 || int(key[0]) >= producers {
+			t.Errorf("stored message at offset %d = key %x, value %x, want a producer byte and a sequence byte", offset, key, value)
+			continue
+		}
+		producer := int(key[0])
+		if int(value[0]) != next[producer] {
+			t.Errorf("stored message at offset %d for producer %d has sequence %d, want %d", offset, producer, value[0], next[producer])
+		}
+		next[producer]++
+		wantOffsets[producer] = append(wantOffsets[producer], uint32(offset))
+	}
+	for producer, got := range next {
+		if got != count {
+			t.Errorf("stored count for producer %d = %d, want %d", producer, got, count)
+		}
+		offsets, err := topic.messageOffsetTrie.Search(string([]byte{byte(producer)}), 0)
+		if err != nil || !slices.Equal(offsets, wantOffsets[producer]) {
+			t.Errorf("Search(producer %d, 0) = %v, %v, want %v and nil", producer, offsets, err, wantOffsets[producer])
+		}
+	}
+}
+
+// TestTopicProduceMessageRejectsStoppedTopic checks sends after the receiver ends.
+func TestTopicProduceMessageRejectsStoppedTopic(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "canceled", ctx: canceled, wantErr: context.Canceled},
+		{name: "expired", ctx: expired, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topic := NewTopic(tt.ctx)
+			if !waitTopicLoop(t, topic) {
+				return
+			}
+			ctx, cancelRequest := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancelRequest()
+			if err := topic.ProduceMessage(ctx, protocol.NewMessage(nil, nil)); !errors.Is(err, tt.wantErr) {
+				t.Errorf("ProduceMessage(empty) after topic %s error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestTopicStorageFailureStopsReceiver checks failure propagation to later producers.
+func TestTopicStorageFailureStopsReceiver(t *testing.T) {
+	topic, _, _ := newTestTopic(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	topic.mu.Lock()
+	topic.messageOffsetTrie = &MessageOffsetTrie{}
+	topic.mu.Unlock()
+	if err := topic.ProduceMessage(ctx, protocol.NewMessage(nil, nil)); err != nil {
+		t.Errorf("ProduceMessage(empty) before index failure error = %v, want nil for the channel handoff", err)
+		return
+	}
+	if !waitTopicLoop(t, topic) {
+		return
+	}
+	if len(topic.messages) != 0 {
+		t.Errorf("stored message count after index failure = %d, want 0", len(topic.messages))
+	}
+	if err := topic.ProduceMessage(t.Context(), protocol.NewMessage(nil, nil)); !errors.Is(err, ErrMessageOffsetTrieUninitialized) {
+		t.Errorf("ProduceMessage(empty) after index failure error = %v, want %v", err, ErrMessageOffsetTrieUninitialized)
+	}
 }
 
 // TestTopicConsumerShutdown checks that each termination path stops workers and removes the subscription.

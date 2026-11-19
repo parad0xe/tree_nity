@@ -2,6 +2,7 @@ package protocol_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -262,6 +263,41 @@ func TestMessageAccessorsReturnCopies(t *testing.T) {
 	}
 }
 
+// TestDecodeRejectsOversizedProduction checks the payload size at the decoding boundary.
+func TestDecodeRejectsOversizedProduction(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   []byte
+		value []byte
+	}{
+		{name: "oversized key", key: make([]byte, protocol.MessageSize+1)},
+		{name: "oversized value", value: make([]byte, protocol.MessageSize+1)},
+		{name: "combined size", key: make([]byte, protocol.MessageSize/2), value: make([]byte, protocol.MessageSize/2+1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame, err := json.Marshal(map[string]any{
+				"opcode": protocol.ProduceMessage, "emitter": protocol.Client,
+				"metadata": map[string]string{"clientIPC": "/client"},
+				"payload": map[string]any{
+					"topic": "orders",
+					"message": map[string]string{
+						"key":   base64.StdEncoding.EncodeToString(tt.key),
+						"value": base64.StdEncoding.EncodeToString(tt.value),
+					},
+				},
+			})
+			if err != nil {
+				t.Errorf("Marshal(ProduceMessage, %d key bytes, %d value bytes) error = %v, want nil", len(tt.key), len(tt.value), err)
+				return
+			}
+			if _, err := protocol.Decode(frame); !errors.Is(err, protocol.ErrMessageTooLarge) {
+				t.Errorf("Decode(ProduceMessage, %d key bytes, %d value bytes) error = %v, want %v", len(tt.key), len(tt.value), err, protocol.ErrMessageTooLarge)
+			}
+		})
+	}
+}
+
 // TestErrorReplyRoundTrip checks public construction, wire encoding, and decoded accessors.
 func TestErrorReplyRoundTrip(t *testing.T) {
 	tests := []struct {
@@ -320,7 +356,7 @@ func TestNewDataRejectsInvalidErrorReply(t *testing.T) {
 		{name: "nil payload", metadata: protocol.NewServerMetadata(), wantErr: protocol.ErrMissingPayload},
 		{name: "nil payload pointer", metadata: protocol.NewServerMetadata(), payload: (*protocol.ErrorReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "negative kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(-1, "error"), wantErr: protocol.ErrInvalidPayload},
-		{name: "unknown kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(5, "error"), wantErr: protocol.ErrInvalidPayload},
+		{name: "unknown kind", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(protocol.ClientNameTaken+1, "error"), wantErr: protocol.ErrInvalidPayload},
 		{name: "invalid UTF-8 reason", metadata: protocol.NewServerMetadata(), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "\xff"), wantErr: protocol.ErrInvalidPayload},
 		{name: "client metadata", metadata: protocol.NewClientMetadata("/client-1"), payload: protocol.NewErrorReplyPayload(protocol.InvalidRequest, "error"), wantErr: protocol.ErrInvalidPayload},
 	}
