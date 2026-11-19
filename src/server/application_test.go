@@ -1004,10 +1004,9 @@ func TestDispatchRejectsProductionDuringShutdown(t *testing.T) {
 		t.Errorf("dispatch(ProduceMessage, events) during shutdown = %d, %v, want %d and nil after rejection", code, err, exitcode.Success)
 		return
 	}
-	data = receiveServerReply(t, inbound, protocol.ErrorReply)
-	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
-	if !ok || reply.Kind() != protocol.ServerShuttingDown || reply.Reason() == "" {
-		t.Errorf("production rejection during shutdown payload = %+v, want %v with a nonempty reason", data.Payload(), protocol.ServerShuttingDown)
+	data = receiveServerReply(t, inbound, protocol.ServerShutdown)
+	if _, ok := data.Payload().(*protocol.ServerShutdownPayload); !ok {
+		t.Errorf("production rejection during shutdown payload = %T, want *protocol.ServerShutdownPayload", data.Payload())
 	}
 }
 
