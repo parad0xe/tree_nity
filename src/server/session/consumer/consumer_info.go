@@ -46,6 +46,22 @@ func (i *Info) IPCPath() string {
 	return i.ipcPath
 }
 
+// updateInfo replaces only the supplied fields.
+func (i *Info) updateInfo(topic *string, offset *uint32, prefix, ipcPath *string) {
+	if topic != nil {
+		i.topic = *topic
+	}
+	if offset != nil {
+		i.offset = *offset
+	}
+	if prefix != nil {
+		i.prefix = *prefix
+	}
+	if ipcPath != nil {
+		i.ipcPath = *ipcPath
+	}
+}
+
 func (i *Info) validate() error {
 	if i == nil {
 		return ErrInfoUninitialized

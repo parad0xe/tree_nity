@@ -44,13 +44,8 @@ func newTopic() *Topic {
 	}
 }
 
-// UpsertConsumer registers a metadata snapshot and c's current connection.
-// Registration starts two workers under non-nil ctx, cancels replaced workers,
-// and closes their connection. An already stopped ctx returns its context error.
-// It returns ErrUninitialized for an unusable topic or ErrInvalidConsumer for
-// invalid consumers. Index failures attempt rollback; errors closing the old
-// connection are returned after registration.
-func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error {
+// upsertConsumer gates workers on ready; nil starts them immediately.
+func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready <-chan struct{}, onStop func()) error {
 	if err := t.validate(); err != nil {
 		return err
 	}
@@ -72,7 +67,7 @@ func (t *Topic) UpsertConsumer(ctx context.Context, c *consumer.Consumer) error 
 
 	oldConsumer, err := t.registerConsumer(consumerCTX, newConsumer)
 	if err == nil {
-		t.startConsumerWorkers(consumerCTX, newConsumer)
+		t.startConsumerWorkers(consumerCTX, newConsumer, ready, onStop)
 	}
 
 	t.mu.Unlock()
@@ -167,26 +162,45 @@ func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *sub
 	return nil
 }
 
-// startConsumerWorkers starts two workers; either exiting cancels its sibling.
-func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription) {
+// startConsumerWorkers waits for ready; either worker exiting cancels its sibling.
+func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription, ready <-chan struct{}, onStop func()) {
 	t.waitGroup.Add(2)
+	var cleanupOnce sync.Once
 
 	workDone := func() {
 		defer t.waitGroup.Done()
 		newConsumer.cancel()
 		// Worker cleanup is best-effort; explicit removals report cleanup errors.
 		_ = t.removeConsumer(newConsumer)
+		if onStop != nil {
+			cleanupOnce.Do(onStop)
+		}
 	}
 
-	go func() {
+	runWorker := func(work func(context.Context, *subscription)) {
 		defer workDone()
-		t.listenHeartbeat(ctx, newConsumer)
-	}()
+		if ready != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-newConsumer.connection.Done():
+				return
+			case <-ready:
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-newConsumer.connection.Done():
+			return
+		default:
+		}
+		work(ctx, newConsumer)
+	}
 
-	go func() {
-		defer workDone()
-		t.deliverMessages(ctx, newConsumer)
-	}()
+	go runWorker(t.listenHeartbeat)
+	go runWorker(t.deliverMessages)
 }
 
 // RemoveConsumer detaches and closes c's registered connection.

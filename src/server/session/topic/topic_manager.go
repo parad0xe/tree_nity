@@ -98,10 +98,65 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 	)
 }
 
-// NewSubscription is reserved for subscription requests.
-func (m *Manager) NewSubscription(metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) {
-	// TODO: check the topic, resolve the consumer and update its metadata,
-	// detach any previous topic subscription, then call Topic.UpsertConsumer.
+// NewSubscription attaches and confirms a consumer unless shutdown is requested.
+// ctx bounds the reply; consumerCtx covers the subscription's lifetime.
+func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) error {
+	if shutdown.IsRequested() {
+		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+	}
+
+	m.mu.RLock()
+	target, exists := m.topicMap.Get(id.ID(payload.Topic()))
+	m.mu.RUnlock()
+	if !exists {
+		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic does not exist"))
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	c, previous, err := m.consumerManager.Subscribe(consumerCtx, id.ID(payload.ClientID()),
+		payload.Topic(), payload.Offset(), payload.Prefix(), metadata.ClientIPC())
+	if errors.Is(err, consumer.ErrAlreadyConnected) {
+		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.ClientNameTaken, err.Error()))
+	}
+	if err != nil {
+		return err
+	}
+
+	setupDone := make(chan struct{})
+	defer close(setupDone)
+	confirmed := make(chan struct{})
+
+	onStop := func() {
+		<-setupDone
+		_ = m.consumerManager.DisconnectConsumer(c)
+	}
+
+	rollback := func(err error) error {
+		err = errors.Join(err, target.RemoveConsumer(c))
+		if previous == nil {
+			err = errors.Join(err, m.consumerManager.RemoveConsumer(c.Info.ID()))
+		} else {
+			topic, offset, prefix, ipcPath := previous.Topic(), previous.Offset(), previous.Prefix(), previous.IPCPath()
+			err = errors.Join(err, m.consumerManager.UpdateInfo(c.Info.ID(), &topic, &offset, &prefix, &ipcPath))
+		}
+		return errors.Join(err, m.consumerManager.DisconnectConsumer(c))
+	}
+
+	if err := target.upsertConsumer(consumerCtx, c, confirmed, onStop); err != nil {
+		return rollback(err)
+	}
+	if err := response.SendToClient(ctx, metadata, protocol.TopicSubscriptionReply,
+		protocol.NewTopicSubscriptionReplyPayload()); err != nil {
+		return rollback(err)
+	}
+	close(confirmed)
+
+	return nil
 }
 
 // CheckTopic replies with existence or rejection status; ctx bounds delivery.

@@ -17,6 +17,8 @@ import (
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
+	"tree_nity/src/server/response"
+	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
 )
 
@@ -26,6 +28,17 @@ func topicManagerContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
 	return ctx
+}
+
+// subscriptionReplyContext observes the start of reply transmission.
+type subscriptionReplyContext struct {
+	context.Context
+	beforeSend func()
+}
+
+func (c subscriptionReplyContext) Deadline() (time.Time, bool) {
+	c.beforeSend()
+	return c.Context.Deadline()
 }
 
 // newTopicManagerInbox creates a client queue that is removed after the test.
@@ -61,6 +74,477 @@ func receiveTopicManagerReply(t *testing.T, ctx context.Context, inbound *ipc.In
 		t.Errorf("Recv(%q) opcode = %v, want %v", inbound.IPCPath(), data.Opcode(), opcode)
 	}
 	return data
+}
+
+func subscriptionTarget(t *testing.T, manager *Manager, name string) (*Topic, context.Context, context.CancelFunc) {
+	t.Helper()
+	target, ctx, cancel := newTestTopic(t)
+	if err := manager.topicMap.Insert(id.ID(name), target); err != nil {
+		t.Fatalf("Insert(%q) during setup error = %v, want nil", name, err)
+	}
+	return target, ctx, cancel
+}
+
+// TestManagerNewSubscriptionRejectsShutdown checks admission without metadata changes.
+func TestManagerNewSubscriptionRejectsShutdown(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing bool
+	}{
+		{name: "new consumer"},
+		{name: "saved consumer", existing: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			target, lifetime, _ := subscriptionTarget(t, manager, "events")
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("consumer-1", "old", 17, "old/", "/old"); err != nil {
+					t.Errorf("AddConsumer(consumer-1, old, 17) during setup error = %v, want nil", err)
+					return
+				}
+			}
+			wantCount := manager.consumerManager.Len()
+			requested := make(chan struct{})
+			shutdown := lifecycle.NewGracefulShutdown(requested)
+			close(requested)
+			ctx := topicManagerContext(t)
+			inbound := newTopicManagerInbox(t)
+			offset := uint32(42)
+			payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "new/", &offset)
+			if err := manager.NewSubscription(ctx, lifetime, shutdown, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+				t.Errorf("NewSubscription(consumer-1, events) during shutdown error = %v, want nil after rejection", err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+			if _, ok := data.Payload().(*protocol.ServerShutdownPayload); !ok {
+				t.Errorf("NewSubscription() during shutdown payload = %T, want *protocol.ServerShutdownPayload", data.Payload())
+			}
+			if got := manager.consumerManager.Len(); got != wantCount {
+				t.Errorf("consumer count after rejected subscription during shutdown = %d, want %d", got, wantCount)
+			}
+			stored, err := manager.consumerManager.GetConsumer("consumer-1")
+			if tt.existing {
+				if err != nil || stored.Info.Topic() != "old" || stored.Info.Offset() != 17 || stored.Info.Prefix() != "old/" || stored.Info.IPCPath() != "/old" {
+					t.Errorf("saved metadata after rejected subscription during shutdown = %+v, %v, want old, offset 17, prefix old/, queue /old and nil", stored, err)
+				}
+			} else if !errors.Is(err, consumer.ErrNotFound) {
+				t.Errorf("GetConsumer(consumer-1) after rejected new subscription during shutdown error = %v, want %v", err, consumer.ErrNotFound)
+			}
+			target.mu.Lock()
+			attached := target.consumerMap.Len()
+			target.mu.Unlock()
+			if attached != 0 {
+				t.Errorf("attached consumer count after rejected subscription during shutdown = %d, want 0", attached)
+			}
+		})
+	}
+}
+
+// TestManagerNewSubscriptionFinishesDuringShutdown checks confirmation after admission.
+func TestManagerNewSubscriptionFinishesDuringShutdown(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	requested := make(chan struct{})
+	shutdown := lifecycle.NewGracefulShutdown(requested)
+	ctx := topicManagerContext(t)
+	replyCtx := subscriptionReplyContext{
+		Context:    ctx,
+		beforeSend: sync.OnceFunc(func() { close(requested) }),
+	}
+	inbound := newTopicManagerInbox(t)
+	payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil)
+	if err := manager.NewSubscription(replyCtx, lifetime, shutdown, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+		t.Errorf("NewSubscription(consumer-1, events) admitted before shutdown error = %v, want nil", err)
+		return
+	}
+	if !shutdown.IsRequested() {
+		t.Error("shutdown during subscription confirmation was not requested, want requested")
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+	target.mu.Lock()
+	stored, exists := target.consumerMap.Get("consumer-1")
+	var connection *consumer.Connection
+	if exists && stored != nil {
+		connection = stored.connection
+	}
+	target.mu.Unlock()
+	if connection == nil {
+		t.Error("connection for subscription admitted before shutdown = nil, want an open connection")
+		return
+	}
+	select {
+	case <-connection.Done():
+		t.Error("subscription connection after shutdown request is closed, want open while its context is active")
+	default:
+	}
+}
+
+// TestManagerNewSubscriptionConfirmsAttachment checks metadata and connection lifetime.
+func TestManagerNewSubscriptionConfirmsAttachment(t *testing.T) {
+	requested := uint32(42)
+	tests := []struct {
+		name     string
+		prefix   string
+		offset   *uint32
+		existing bool
+		want     uint32
+	}{
+		{name: "first subscription"},
+		{name: "explicit offset", prefix: "user/", offset: &requested, want: requested},
+		{name: "resume", prefix: "é/猫/", existing: true, want: 17},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			target, lifetime, _ := subscriptionTarget(t, manager, "events")
+			inbound := newTopicManagerInbox(t)
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("consumer-1", "events", 17, "old/", "/old"); err != nil {
+					t.Fatalf("AddConsumer(consumer-1, events, 17) during setup error = %v, want nil", err)
+				}
+			}
+			replyCtx, cancelReply := context.WithCancel(topicManagerContext(t))
+			defer cancelReply()
+			payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", tt.prefix, tt.offset)
+			if err := manager.NewSubscription(replyCtx, lifetime, lifecycle.GracefulShutdown{}, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+				t.Fatalf("NewSubscription(consumer-1, events, %q) error = %v, want nil", tt.prefix, err)
+			}
+			data := receiveTopicManagerReply(t, replyCtx, inbound, protocol.TopicSubscriptionReply)
+			if _, ok := data.Payload().(*protocol.TopicSubscriptionReplyPayload); !ok {
+				t.Errorf("subscription confirmation payload = %T, want *protocol.TopicSubscriptionReplyPayload", data.Payload())
+			}
+			target.mu.Lock()
+			stored, exists := target.consumerMap.Get("consumer-1")
+			var snapshot subscription
+			if exists && stored != nil {
+				snapshot = *stored
+			}
+			target.mu.Unlock()
+			if !exists || snapshot.connection == nil {
+				t.Fatalf("topic attachment for consumer-1 = %+v, exists %t, want a connection and true", snapshot, exists)
+			}
+			if snapshot.info.Topic() != "events" || snapshot.info.Offset() != tt.want || snapshot.info.Prefix() != tt.prefix || snapshot.info.IPCPath() != inbound.IPCPath() {
+				t.Errorf("attached consumer-1 = %+v, want events, offset %d, prefix %q, queue %q", snapshot.info, tt.want, tt.prefix, inbound.IPCPath())
+			}
+			cancelReply()
+			select {
+			case <-snapshot.connection.Done():
+				t.Error("subscription connection after reply context cancellation is closed, want open")
+			default:
+			}
+		})
+	}
+}
+
+// TestManagerNewSubscriptionWaitsForConfirmation checks workers during reply transmission.
+func TestManagerNewSubscriptionWaitsForConfirmation(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := newTopicManagerInbox(t)
+	ctx := topicManagerContext(t)
+	var connection *consumer.Connection
+	replyCtx := subscriptionReplyContext{
+		Context: ctx,
+		beforeSend: sync.OnceFunc(func() {
+			target.mu.Lock()
+			stored, exists := target.consumerMap.Get("consumer-1")
+			if exists && stored != nil {
+				connection = stored.connection
+			}
+			target.mu.Unlock()
+			if connection == nil {
+				t.Error("consumer-1 attachment before confirmation = nil, want a registered connection")
+				return
+			}
+			select {
+			case connection.HeartbeatChan <- struct{}{}:
+				t.Error("consumer-1 heartbeat before confirmation was consumed, want pending")
+			default:
+			}
+		}),
+	}
+	payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil)
+	if err := manager.NewSubscription(replyCtx, lifetime, lifecycle.GracefulShutdown{}, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+		t.Errorf("NewSubscription(consumer-1, events) error = %v, want nil", err)
+		return
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+	if connection == nil {
+		return
+	}
+	select {
+	case connection.HeartbeatChan <- struct{}{}:
+	case <-ctx.Done():
+		t.Errorf("consumer-1 heartbeat after confirmation error = %v, want consumed before deadline", ctx.Err())
+	}
+}
+
+// TestManagerNewSubscriptionReconnects checks saved offsets and changed subscriptions.
+func TestManagerNewSubscriptionReconnects(t *testing.T) {
+	zero, requested := uint32(0), uint32(42)
+	tests := []struct {
+		name   string
+		topic  string
+		offset *uint32
+		want   uint32
+	}{
+		{name: "same topic", topic: "events", want: 17},
+		{name: "changed topic", topic: "orders"},
+		{name: "explicit rewind", topic: "orders", offset: &zero},
+		{name: "explicit offset", topic: "orders", offset: &requested, want: requested},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			first, firstCtx, stopFirst := subscriptionTarget(t, manager, "events")
+			_, secondCtx, _ := subscriptionTarget(t, manager, "orders")
+			inbound := newTopicManagerInbox(t)
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			ctx := topicManagerContext(t)
+			if err := manager.NewSubscription(ctx, firstCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "old/", nil)); err != nil {
+				t.Fatalf("first NewSubscription(consumer-1, events) error = %v, want nil", err)
+			}
+			receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+			offset := uint32(17)
+			if err := manager.consumerManager.UpdateInfo("consumer-1", nil, &offset, nil, nil); err != nil {
+				t.Fatalf("UpdateInfo(consumer-1, nil, 17, nil, nil) during setup error = %v, want nil", err)
+			}
+			stopFirst()
+			if !waitTopicWorkers(t, first) {
+				return
+			}
+			if err := manager.NewSubscription(ctx, secondCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("consumer-1", tt.topic, "new/", tt.offset)); err != nil {
+				t.Fatalf("repeated NewSubscription(consumer-1, %q) error = %v, want nil", tt.topic, err)
+			}
+			receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+			stored, err := manager.consumerManager.GetConsumer("consumer-1")
+			if err != nil {
+				t.Fatalf("GetConsumer(consumer-1) after reconnect error = %v, want nil", err)
+			}
+			if stored.Info.Topic() != tt.topic || stored.Info.Offset() != tt.want || stored.Info.Prefix() != "new/" {
+				t.Errorf("reconnected consumer-1 = %+v, want topic %q, offset %d and prefix new/", stored.Info, tt.topic, tt.want)
+			}
+			if tt.topic != "events" {
+				first.mu.Lock()
+				count := first.consumerMap.Len()
+				first.mu.Unlock()
+				if count != 0 {
+					t.Errorf("old topic consumer count after moving to %q = %d, want 0", tt.topic, count)
+				}
+			}
+		})
+	}
+}
+
+// TestManagerNewSubscriptionRejectsRequests checks missing topics.
+func TestManagerNewSubscriptionRejectsRequests(t *testing.T) {
+	tests := []struct {
+		name     string
+		clientID string
+		topic    string
+		prefix   string
+		wantKind protocol.ErrorKind
+	}{
+		{name: "missing topic", clientID: "consumer-1", topic: "missing", wantKind: protocol.TopicNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			_, lifetime, _ := subscriptionTarget(t, manager, "events")
+			inbound := newTopicManagerInbox(t)
+			ctx := topicManagerContext(t)
+			payload := *protocol.NewTopicSubscriptionPayload(tt.clientID, tt.topic, tt.prefix, nil)
+			if err := manager.NewSubscription(ctx, lifetime, lifecycle.GracefulShutdown{}, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+				t.Errorf("NewSubscription(%q, %q) error = %v, want nil after rejection", tt.clientID, tt.topic, err)
+				return
+			}
+			data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+			if !ok {
+				t.Errorf("NewSubscription(%q, %q) payload = %T, want *protocol.ErrorReplyPayload", tt.clientID, tt.topic, data.Payload())
+			} else if reply.Kind() != tt.wantKind || reply.Reason() == "" {
+				t.Errorf("NewSubscription(%q, %q) rejection = %v, %q, want %v and a nonempty reason", tt.clientID, tt.topic, reply.Kind(), reply.Reason(), tt.wantKind)
+			}
+			if got := manager.consumerManager.Len(); got != 0 {
+				t.Errorf("consumer count after rejected subscription = %d, want 0", got)
+			}
+		})
+	}
+}
+
+// TestManagerNewSubscriptionRejectsActiveName checks preservation of an active consumer.
+func TestManagerNewSubscriptionRejectsActiveName(t *testing.T) {
+	manager := NewManager()
+	_, lifetime, _ := subscriptionTarget(t, manager, "events")
+	subscriptionTarget(t, manager, "orders")
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	ctx := topicManagerContext(t)
+	if err := manager.NewSubscription(ctx, lifetime, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "old/", nil)); err != nil {
+		t.Fatalf("first NewSubscription(consumer-1) error = %v, want nil", err)
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+	if err := manager.NewSubscription(ctx, lifetime, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("consumer-1", "orders", "new/", nil)); err != nil {
+		t.Fatalf("duplicate NewSubscription(consumer-1) error = %v, want nil after rejection", err)
+	}
+	data := receiveTopicManagerReply(t, ctx, inbound, protocol.ErrorReply)
+	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+	if !ok || reply.Kind() != protocol.ClientNameTaken {
+		t.Errorf("duplicate subscription payload = %+v, want %v rejection", data.Payload(), protocol.ClientNameTaken)
+	}
+	stored, err := manager.consumerManager.GetConsumer("consumer-1")
+	if err != nil || stored.Info.Topic() != "events" || stored.Info.Prefix() != "old/" {
+		t.Errorf("metadata after duplicate subscription = %+v, %v, want events, old/ and nil", stored, err)
+	}
+}
+
+// TestManagerNewSubscriptionRestoresFailedAttachment checks index failure cleanup.
+func TestManagerNewSubscriptionRestoresFailedAttachment(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	target.consumerTrie = &ConsumerTrie{}
+	inbound := newTopicManagerInbox(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	ctx := topicManagerContext(t)
+	payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil)
+	if err := manager.NewSubscription(ctx, lifetime, lifecycle.GracefulShutdown{}, metadata, payload); !errors.Is(err, ErrConsumerTrieUninitialized) {
+		t.Errorf("NewSubscription() with invalid prefix index error = %v, want %v", err, ErrConsumerTrieUninitialized)
+	}
+	if got := manager.consumerManager.Len(); got != 0 {
+		t.Errorf("consumer count after failed attachment = %d, want 0", got)
+	}
+	target.consumerTrie = NewConsumerTrie()
+	if err := manager.NewSubscription(ctx, lifetime, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
+		t.Errorf("NewSubscription() after repairing the index error = %v, want nil", err)
+		return
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+}
+
+func fillSubscriptionInbox(t *testing.T, inbound *ipc.Inbound) int {
+	t.Helper()
+	data, err := protocol.NewData(protocol.ServerShutdown, protocol.NewServerMetadata(), protocol.NewServerShutdownPayload())
+	if err != nil {
+		t.Fatalf("NewData(ServerShutdown) error = %v, want nil", err)
+	}
+	frame, err := protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(ServerShutdown) error = %v, want nil", err)
+	}
+	sender, err := mqueue.NewSender(inbound.IPCPath())
+	if err != nil {
+		t.Fatalf("NewSender(%q) error = %v, want nil", inbound.IPCPath(), err)
+	}
+	defer func() {
+		if err := sender.Close(); err != nil {
+			t.Errorf("Close(%q) after filling the queue error = %v, want nil", inbound.IPCPath(), err)
+		}
+	}()
+	for count := 0; ; count++ {
+		err := sender.TimedSend(frame, time.Now())
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return count
+		}
+		if err != nil {
+			t.Fatalf("TimedSend(ServerShutdown) to %q at frame %d error = %v, want nil or %v", inbound.IPCPath(), count, err, os.ErrDeadlineExceeded)
+		}
+	}
+}
+
+// TestManagerNewSubscriptionRestoresFailedReply checks rollback after confirmation failure.
+func TestManagerNewSubscriptionRestoresFailedReply(t *testing.T) {
+	requested := uint32(42)
+	tests := []struct {
+		name     string
+		existing bool
+		offset   *uint32
+	}{
+		{name: "new consumer", offset: &requested},
+		{name: "saved consumer explicit offset", existing: true, offset: &requested},
+		{name: "saved consumer default offset", existing: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			target, lifetime, _ := subscriptionTarget(t, manager, "events")
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("consumer-1", "old", 17, "old/", "/old"); err != nil {
+					t.Fatalf("AddConsumer(consumer-1, old, 17) error = %v, want nil", err)
+				}
+			}
+			inbound := newTopicManagerInbox(t)
+			count := fillSubscriptionInbox(t, inbound)
+			ctx := topicManagerContext(t)
+			replyCtx, cancelReply := context.WithTimeout(ctx, 200*time.Millisecond)
+			defer cancelReply()
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "new/", tt.offset)
+			shutdownRequested := make(chan struct{})
+			shutdown := lifecycle.NewGracefulShutdown(shutdownRequested)
+			replyCtx = subscriptionReplyContext{
+				Context:    replyCtx,
+				beforeSend: sync.OnceFunc(func() { close(shutdownRequested) }),
+			}
+			if err := manager.NewSubscription(replyCtx, lifetime, shutdown, metadata, payload); !errors.Is(err, response.ErrReply) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("NewSubscription() with a full reply queue error = %v, want %v and %v", err, response.ErrReply, context.DeadlineExceeded)
+			}
+			if !shutdown.IsRequested() {
+				t.Error("shutdown before failed subscription confirmation was not requested, want requested")
+			}
+			stored, err := manager.consumerManager.GetConsumer("consumer-1")
+			if tt.existing {
+				if err != nil || stored.Info.Topic() != "old" || stored.Info.Offset() != 17 || stored.Info.Prefix() != "old/" || stored.Info.IPCPath() != "/old" {
+					t.Errorf("metadata after failed confirmation = %+v, %v, want old, offset 17, prefix old/, queue /old and nil", stored, err)
+				}
+			} else if !errors.Is(err, consumer.ErrNotFound) {
+				t.Errorf("GetConsumer() after failed first confirmation error = %v, want %v", err, consumer.ErrNotFound)
+			}
+			target.mu.Lock()
+			attached := target.consumerMap.Len()
+			target.mu.Unlock()
+			if attached != 0 {
+				t.Errorf("attached count after failed confirmation = %d, want 0", attached)
+			}
+			for i := 0; i < count; i++ {
+				receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+			}
+			if err := manager.NewSubscription(ctx, lifetime, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
+				t.Errorf("NewSubscription() after draining the reply queue error = %v, want nil", err)
+				return
+			}
+			receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+		})
+	}
+}
+
+// TestManagerNewSubscriptionPropagatesSetupErrors checks cancellation and queue failures.
+func TestManagerNewSubscriptionPropagatesSetupErrors(t *testing.T) {
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	tests := []struct {
+		name    string
+		ipcPath string
+		ctx     context.Context
+		wantErr error
+	}{
+		{name: "invalid queue", ipcPath: "/invalid/queue", ctx: t.Context(), wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("/subscription.missing.%d", os.Getpid()), ctx: t.Context(), wantErr: os.ErrNotExist},
+		{name: "canceled lifetime", ipcPath: "/unused", ctx: canceled, wantErr: context.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			subscriptionTarget(t, manager, "events")
+			payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "", nil)
+			if err := manager.NewSubscription(topicManagerContext(t), tt.ctx, lifecycle.GracefulShutdown{}, *protocol.NewClientMetadata(tt.ipcPath), payload); !errors.Is(err, tt.wantErr) {
+				t.Errorf("NewSubscription() with %s error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+			if got := manager.consumerManager.Len(); got != 0 {
+				t.Errorf("consumer count after %s = %d, want 0", tt.name, got)
+			}
+		})
+	}
 }
 
 // TestNewManagerInitializesState checks that both indexes are ready for use.
