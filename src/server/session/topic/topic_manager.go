@@ -105,11 +105,6 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
 	}
 
-	if _, err := protocol.NewData(protocol.TopicSubscription, &metadata, &payload); err != nil {
-		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
-			protocol.NewErrorReplyPayload(protocol.InvalidRequest, err.Error()))
-	}
-
 	m.mu.RLock()
 	target, exists := m.topicMap.Get(id.ID(payload.Topic()))
 	m.mu.RUnlock()

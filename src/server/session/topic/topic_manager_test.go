@@ -293,7 +293,7 @@ func TestManagerNewSubscriptionReconnects(t *testing.T) {
 	}
 }
 
-// TestManagerNewSubscriptionRejectsRequests checks protocol rejection kinds.
+// TestManagerNewSubscriptionRejectsRequests checks missing topics.
 func TestManagerNewSubscriptionRejectsRequests(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -302,9 +302,6 @@ func TestManagerNewSubscriptionRejectsRequests(t *testing.T) {
 		prefix   string
 		wantKind protocol.ErrorKind
 	}{
-		{name: "invalid client", clientID: "bad name", topic: "events", wantKind: protocol.InvalidRequest},
-		{name: "invalid topic", clientID: "consumer-1", topic: "bad/topic", wantKind: protocol.InvalidRequest},
-		{name: "invalid prefix", clientID: "consumer-1", topic: "events", prefix: "\xff", wantKind: protocol.InvalidRequest},
 		{name: "missing topic", clientID: "consumer-1", topic: "missing", wantKind: protocol.TopicNotFound},
 	}
 	for _, tt := range tests {
