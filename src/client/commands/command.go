@@ -87,6 +87,10 @@ func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode pro
 		return zero, code, fmt.Errorf("recv: %w: %s", errRequestRejected, reply.Reason())
 	}
 
+	if data.Opcode() == protocol.ServerShutdown {
+		return zero, exitcode.IPC, fmt.Errorf("recv: %w", errServerShuttingDown)
+	}
+
 	if data.Opcode() != expectedOpcode {
 		return zero, exitcode.General, fmt.Errorf("recv: %w: %d", errUnexpectedOpcode, data.Opcode())
 	}

@@ -15,6 +15,8 @@ var (
 	errUnexpectedOpcode = errors.New("unexpected opcode")
 	// errUnexpectedPayload reports a payload whose type does not match its opcode.
 	errUnexpectedPayload = errors.New("unexpected payload")
+	// errServerShuttingDown reports a request refused because the server is stopping.
+	errServerShuttingDown = errors.New("server shutting down")
 	// errRequestRejected reports a request that the server refused.
 	errRequestRejected = errors.New("request rejected")
 	// errInvalidLine reports a text message without a key and value separator.
