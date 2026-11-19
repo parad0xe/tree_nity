@@ -325,6 +325,37 @@ func TestManagerConsumerInfoPropagatesLookupErrors(t *testing.T) {
 	}
 }
 
+// TestManagerAcknowledgementRejectsMissingConnections checks one-way routing failures.
+func TestManagerAcknowledgementRejectsMissingConnections(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing bool
+		topic    bool
+	}{
+		{name: "unknown consumer"},
+		{name: "missing topic", existing: true},
+		{name: "disconnected consumer", existing: true, topic: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if tt.topic {
+				subscriptionTarget(t, manager, "events")
+			}
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("subscriber", "events", 17, "", "/subscriber"); err != nil {
+					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
+				}
+			}
+			payload := *protocol.NewAcknowledgementPayload("subscriber", 18)
+			err := manager.Acknowledgement(t.Context(), *protocol.NewClientMetadata("/subscriber"), payload)
+			if !errors.Is(err, consumer.ErrNotFound) {
+				t.Errorf("Acknowledgement(subscriber, 18) with %s error = %v, want %v", tt.name, err, consumer.ErrNotFound)
+			}
+		})
+	}
+}
+
 // TestManagerNewSubscriptionRejectsShutdown checks admission without metadata changes.
 func TestManagerNewSubscriptionRejectsShutdown(t *testing.T) {
 	tests := []struct {

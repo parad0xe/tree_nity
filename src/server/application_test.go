@@ -1126,6 +1126,64 @@ func TestListenRepliesWithConsumerInfo(t *testing.T) {
 	}
 }
 
+// TestListenCommitsAcknowledgements checks delivery and immediately queryable progress over IPC.
+func TestListenCommitsAcknowledgements(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	producer, err := ipc.NewInbound(inbound.IPCPath()+".producer", protocol.Decode)
+	if err != nil {
+		t.Fatalf("NewInbound(producer) during setup error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := producer.Drop(); err != nil {
+			t.Errorf("Drop(producer) error = %v, want nil", err)
+		}
+	})
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	request := func(ipcPath string, opcode protocol.Opcode, payload protocol.Payload) {
+		data, err := protocol.NewData(opcode, protocol.NewClientMetadata(ipcPath), payload)
+		if err != nil {
+			t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+		}
+		frame, err := protocol.Encode(data)
+		if err != nil {
+			t.Fatalf("Encode(%v) error = %v, want nil", opcode, err)
+		}
+		send(t, app.inbound.IPCPath(), string(frame))
+	}
+	sendCreateRequest(t, app, producer.IPCPath(), "events")
+	receiveServerReply(t, producer, protocol.CreateTopicReply)
+	for offset := 0; offset < 2; offset++ {
+		request(producer.IPCPath(), protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte{byte(offset)})))
+		receiveServerReply(t, producer, protocol.ProduceMessageReply)
+	}
+	request(inbound.IPCPath(), protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
+	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+	for offset := uint32(0); offset < 2; offset++ {
+		data := receiveServerReply(t, inbound, protocol.MessageDelivery)
+		delivery, ok := data.Payload().(*protocol.MessageDeliveryPayload)
+		if !ok {
+			t.Fatalf("MessageDelivery(%d) payload = %T, want *protocol.MessageDeliveryPayload", offset, data.Payload())
+		}
+		if message := delivery.Message(); message.Offset() != offset || string(message.Key()) != "key" || len(message.Value()) != 1 || message.Value()[0] != byte(offset) {
+			t.Errorf("MessageDelivery(%d) = offset %d, key %x, value %x, want key and value %x", offset, message.Offset(), message.Key(), message.Value(), []byte{byte(offset)})
+		}
+		request(inbound.IPCPath(), protocol.Acknowledgement, protocol.NewAcknowledgementPayload("subscriber", offset+1))
+		request(producer.IPCPath(), protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("caller", "subscriber"))
+		data = receiveServerReply(t, producer, protocol.ConsumerInfoReply)
+		info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
+		if !ok || info.Offset() != offset+1 {
+			t.Errorf("ConsumerInfo(subscriber) after ACK(%d) = %+v, want saved offset %d", offset+1, data.Payload(), offset+1)
+		}
+	}
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after delivery, ACK and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
 // TestListenRejectsSubscriptionForMissingTopic checks subscription routing over IPC.
 func TestListenRejectsSubscriptionForMissingTopic(t *testing.T) {
 	app := newTestApplication(t)
