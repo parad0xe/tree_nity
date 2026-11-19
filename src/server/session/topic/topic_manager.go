@@ -163,7 +163,10 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 		return errors.Join(err, m.consumerManager.DisconnectConsumer(c))
 	}
 
-	if err := target.upsertConsumer(consumerCtx, c, confirmed, onStop); err != nil {
+	onAck := func(offset uint32) error {
+		return m.consumerManager.UpdateInfo(c.Info.ID(), nil, &offset, nil, nil)
+	}
+	if err := target.upsertConsumer(consumerCtx, c, confirmed, onStop, onAck); err != nil {
 		return rollback(err)
 	}
 	if err := response.SendToClient(ctx, metadata, protocol.TopicSubscriptionReply,
@@ -173,6 +176,21 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 	close(confirmed)
 
 	return nil
+}
+
+// Acknowledgement commits the expected offset without sending a reply.
+func (m *Manager) Acknowledgement(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.AcknowledgementPayload) error {
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.ClientID()))
+	if err != nil {
+		return err
+	}
+	m.mu.RLock()
+	target, exists := m.topicMap.Get(id.ID(c.Info.Topic()))
+	m.mu.RUnlock()
+	if !exists {
+		return consumer.ErrNotFound
+	}
+	return target.acknowledge(ctx, c.Info.ID(), metadata.ClientIPC(), payload.Offset())
 }
 
 // CheckTopic replies with existence or rejection status; ctx bounds delivery.

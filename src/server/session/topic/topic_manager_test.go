@@ -537,12 +537,14 @@ func TestManagerNewSubscriptionReconnects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := NewManager()
-			first, firstCtx, stopFirst := subscriptionTarget(t, manager, "events")
+			first, firstCtx, _ := subscriptionTarget(t, manager, "events")
+			firstLifetime, stopFirst := context.WithCancel(firstCtx)
+			t.Cleanup(stopFirst)
 			_, secondCtx, _ := subscriptionTarget(t, manager, "orders")
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 			ctx := topicManagerContext(t)
-			if err := manager.NewSubscription(ctx, firstCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "old/", nil)); err != nil {
+			if err := manager.NewSubscription(ctx, firstLifetime, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "old/", nil)); err != nil {
 				t.Fatalf("first NewSubscription(consumer-1, events) error = %v, want nil", err)
 			}
 			receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)

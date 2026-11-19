@@ -9,9 +9,12 @@ import (
 
 // subscription snapshots metadata and a connection for one pair of workers.
 type subscription struct {
-	info       consumer.Info
-	connection *consumer.Connection
-	cancel     context.CancelFunc
+	info           consumer.Info
+	connection     *consumer.Connection
+	cancel         context.CancelFunc
+	onAck          func(uint32) error
+	awaitingACK    bool
+	expectedOffset uint32
 }
 
 func (s *subscription) validate() error {

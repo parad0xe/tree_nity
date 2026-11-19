@@ -289,6 +289,10 @@ func TestConnectionDoneUnblocksSend(t *testing.T) {
 				return
 			}
 			cleanupTestConnection(t, connection)
+			// Fill buffered channels so the next send must wait for cancellation.
+			connection.MessageChan <- protocol.Message{}
+			connection.AcknowledgedChan <- 0
+
 			limitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			t.Cleanup(cancel)
 			started := make(chan struct{})

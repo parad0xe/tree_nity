@@ -18,6 +18,7 @@ import (
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/response"
+	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/session/topic"
 )
 
@@ -666,10 +667,11 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 		name    string
 		opcode  protocol.Opcode
 		payload protocol.Payload
+		wantErr error
 	}{
-		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 1)},
-		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1")},
-		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1")},
+		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 1), wantErr: consumer.ErrNotFound},
+		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: errUnhandledOpcode},
+		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: errUnhandledOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -680,8 +682,8 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
-				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, errUnhandledOpcode)
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, tt.wantErr) {
+				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, tt.wantErr)
 			}
 			// A marker sent after dispatch must be the first frame in the client queue.
 			if err := response.SendToClient(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {

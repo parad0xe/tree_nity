@@ -23,6 +23,7 @@ type Topic struct {
 	newMessageChan    chan protocol.Message
 	messages          []protocol.Message
 	done              chan struct{}
+	stopping          bool
 	// runErr is read only after done closes.
 	runErr error
 }
@@ -45,7 +46,7 @@ func newTopic() *Topic {
 }
 
 // upsertConsumer gates workers on ready; nil starts them immediately.
-func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready <-chan struct{}, onStop func()) error {
+func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready <-chan struct{}, onStop func(), onAck func(uint32) error) error {
 	if err := t.validate(); err != nil {
 		return err
 	}
@@ -56,7 +57,7 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready 
 		return fmt.Errorf("%w: %v", ErrInvalidConsumer, err)
 	}
 
-	newConsumer := &subscription{info: c.Info, connection: c.Connection()}
+	newConsumer := &subscription{info: c.Info, connection: c.Connection(), onAck: onAck}
 	if err := newConsumer.validate(); err != nil {
 		return err
 	}
@@ -91,6 +92,9 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready 
 // newConsumer must be valid. The caller must hold t.mu and start the new
 // workers before unlocking.
 func (t *Topic) registerConsumer(ctx context.Context, newConsumer *subscription) (*subscription, error) {
+	if t.stopping {
+		return nil, context.Canceled
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -299,8 +303,7 @@ func (t *Topic) validate() error {
 // run is the single topic goroutine's entry point for receiving new messages.
 func (t *Topic) run(ctx context.Context) {
 	defer close(t.done)
-	// TODO: add cancellable dispatch to matching consumers outside t.mu,
-	// then cancel and wait for their workers on exit.
+	defer t.stopConsumerWorkers()
 	for {
 		if err := ctx.Err(); err != nil {
 			t.runErr = err
@@ -319,34 +322,149 @@ func (t *Topic) run(ctx context.Context) {
 	}
 }
 
+func (t *Topic) stopConsumerWorkers() {
+	t.mu.Lock()
+	t.stopping = true
+	consumers, err := t.consumerMap.Values()
+	if err != nil {
+		t.runErr = errors.Join(t.runErr, err)
+	}
+	for _, c := range consumers {
+		c.cancel()
+	}
+	t.mu.Unlock()
+	t.waitGroup.Wait()
+}
+
 // storeMessage keeps the message at its indexed topic offset.
 func (t *Topic) storeMessage(message protocol.Message) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if uint64(len(t.messages)) > uint64(^uint32(0)) {
-		return fmt.Errorf("message offset %d exceeds uint32", len(t.messages))
+	if uint64(len(t.messages)) >= uint64(^uint32(0)) {
+		return fmt.Errorf("message offset %d cannot be acknowledged as uint32", len(t.messages))
+	}
+	consumers, err := t.consumerTrie.Search(string(message.Key()))
+	if err != nil {
+		return fmt.Errorf("find matching consumers: %w", err)
 	}
 	offset := uint32(len(t.messages))
 	if err := t.messageOffsetTrie.Insert(string(message.Key()), offset); err != nil {
 		return fmt.Errorf("index message at offset %d: %w", offset, err)
 	}
 	t.messages = append(t.messages, message)
+	for _, consumerID := range consumers {
+		if c, exists := t.consumerMap.Get(consumerID); exists {
+			select {
+			case c.connection.MessageChan <- message:
+			default:
+			}
+		}
+	}
 	return nil
 }
 
 // deliverMessages is the sending goroutine's entry point for one subscribed consumer.
-func (t *Topic) deliverMessages(ctx context.Context, consumer *subscription) {
-	// TODO: replay messages from the consumer's stored offset, then receive
-	// targeted messages from Connection.MessageChan and send them through its IPC.
-	// Process Connection.AcknowledgedChan using the next offset to consume.
-	// Keep using this worker's connection. Read or update current metadata through
-	// consumerMap under t.mu, only while this connection is still current.
-	// Stop on consumer removal, disconnection, or ctx cancellation.
-
-	select {
-	case <-ctx.Done():
-	case <-consumer.connection.Done():
+func (t *Topic) deliverMessages(ctx context.Context, c *subscription) {
+	nextOffset := c.info.Offset()
+	for {
+		t.mu.Lock()
+		stored, exists := t.consumerMap.Get(c.info.ID())
+		if !exists || stored.connection != c.connection || t.stopping {
+			t.mu.Unlock()
+			return
+		}
+		offsets, err := t.messageOffsetTrie.Search(c.info.Prefix(), nextOffset)
+		t.mu.Unlock()
+		if err != nil {
+			return
+		}
+		for _, offset := range offsets {
+			if !t.deliverMessage(ctx, c, offset) {
+				return
+			}
+			nextOffset = offset + 1
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.connection.Done():
+			return
+		case _, ok := <-c.connection.MessageChan:
+			if !ok {
+				return
+			}
+		}
 	}
+}
+
+func (t *Topic) deliverMessage(ctx context.Context, c *subscription, offset uint32) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	t.mu.Lock()
+	stored, exists := t.consumerMap.Get(c.info.ID())
+	if !exists || stored.connection != c.connection || t.stopping {
+		t.mu.Unlock()
+		return false
+	}
+	message := t.messages[offset]
+	stored.expectedOffset, stored.awaitingACK = offset+1, true
+	t.mu.Unlock()
+
+	data, err := protocol.NewData(protocol.MessageDelivery, protocol.NewServerMetadata(), protocol.NewMessageDeliveryPayload(offset, message))
+	if err != nil {
+		return false
+	}
+	if err := c.connection.Send(ctx, data); err != nil {
+		return false
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.connection.Done():
+			return false
+		case acknowledged, ok := <-c.connection.AcknowledgedChan:
+			if !ok {
+				return false
+			}
+			if acknowledged == offset+1 {
+				return true
+			}
+		}
+	}
+}
+
+func (t *Topic) acknowledge(ctx context.Context, consumerID id.ID, ipcPath string, offset uint32) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, exists := t.consumerMap.Get(consumerID)
+	if !exists || c.info.IPCPath() != ipcPath {
+		return consumer.ErrNotFound
+	}
+	select {
+	case <-c.connection.Done():
+		return context.Canceled
+	default:
+	}
+	if t.stopping {
+		return context.Canceled
+	}
+	if !c.awaitingACK || c.expectedOffset != offset {
+		return fmt.Errorf("%w: unexpected acknowledgement offset %d", protocol.ErrInvalidPayload, offset)
+	}
+	if c.onAck != nil {
+		if err := c.onAck(offset); err != nil {
+			return err
+		}
+	}
+	c.awaitingACK = false
+	// The worker drains this single ACK before arming the next delivery.
+	c.connection.AcknowledgedChan <- offset
+	return nil
 }
 
 // listenHeartbeat is the heartbeat goroutine's entry point for one subscribed consumer.
