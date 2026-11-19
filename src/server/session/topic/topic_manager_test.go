@@ -200,8 +200,8 @@ func TestManagerNewSubscriptionConfirmsAttachment(t *testing.T) {
 			target, lifetime, _ := subscriptionTarget(t, manager, "events")
 			inbound := newTopicManagerInbox(t)
 			if tt.existing {
-				if err := manager.consumerManager.AddConsumer("consumer-1", "old", 17, "old/", "/old"); err != nil {
-					t.Fatalf("AddConsumer(consumer-1, old, 17) during setup error = %v, want nil", err)
+				if err := manager.consumerManager.AddConsumer("consumer-1", "events", 17, "old/", "/old"); err != nil {
+					t.Fatalf("AddConsumer(consumer-1, events, 17) during setup error = %v, want nil", err)
 				}
 			}
 			replyCtx, cancelReply := context.WithCancel(topicManagerContext(t))
@@ -282,7 +282,7 @@ func TestManagerNewSubscriptionWaitsForConfirmation(t *testing.T) {
 
 // TestManagerNewSubscriptionReconnects checks saved offsets and changed subscriptions.
 func TestManagerNewSubscriptionReconnects(t *testing.T) {
-	zero := uint32(0)
+	zero, requested := uint32(0), uint32(42)
 	tests := []struct {
 		name   string
 		topic  string
@@ -290,8 +290,9 @@ func TestManagerNewSubscriptionReconnects(t *testing.T) {
 		want   uint32
 	}{
 		{name: "same topic", topic: "events", want: 17},
-		{name: "changed topic", topic: "orders", want: 17},
+		{name: "changed topic", topic: "orders"},
 		{name: "explicit rewind", topic: "orders", offset: &zero},
+		{name: "explicit offset", topic: "orders", offset: &requested, want: requested},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -453,12 +454,15 @@ func fillSubscriptionInbox(t *testing.T, inbound *ipc.Inbound) int {
 
 // TestManagerNewSubscriptionRestoresFailedReply checks rollback after confirmation failure.
 func TestManagerNewSubscriptionRestoresFailedReply(t *testing.T) {
+	requested := uint32(42)
 	tests := []struct {
 		name     string
 		existing bool
+		offset   *uint32
 	}{
-		{name: "new consumer"},
-		{name: "saved consumer", existing: true},
+		{name: "new consumer", offset: &requested},
+		{name: "saved consumer explicit offset", existing: true, offset: &requested},
+		{name: "saved consumer default offset", existing: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -475,8 +479,7 @@ func TestManagerNewSubscriptionRestoresFailedReply(t *testing.T) {
 			replyCtx, cancelReply := context.WithTimeout(ctx, 200*time.Millisecond)
 			defer cancelReply()
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			requested := uint32(42)
-			payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "new/", &requested)
+			payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "new/", tt.offset)
 			shutdownRequested := make(chan struct{})
 			shutdown := lifecycle.NewGracefulShutdown(shutdownRequested)
 			replyCtx = subscriptionReplyContext{

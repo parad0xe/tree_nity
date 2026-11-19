@@ -26,7 +26,7 @@ func NewManager() *Manager {
 	}
 }
 
-// Subscribe connects a consumer; a nil offset resumes its saved position.
+// Subscribe connects a consumer; nil resumes only within the same topic.
 // previous is nil for a new consumer.
 func (m *Manager) Subscribe(ctx context.Context, id id.ID, topic string, offset *uint32, prefix, ipcPath string) (*Consumer, *Info, error) {
 	if err := m.validate(); err != nil {
@@ -56,6 +56,10 @@ func (m *Manager) Subscribe(ctx context.Context, id id.ID, topic string, offset 
 			return nil, nil, err
 		}
 		stored, _ = m.consumerTable.Get(id)
+	}
+	if offset == nil && stored.Topic() != topic {
+		var startOffset uint32
+		offset = &startOffset
 	}
 	stored.updateInfo(&topic, offset, &prefix, &ipcPath)
 

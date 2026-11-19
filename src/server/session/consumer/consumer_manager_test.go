@@ -75,15 +75,19 @@ func TestManagerSubscribeSelectsOffset(t *testing.T) {
 	zero, requested := uint32(0), uint32(42)
 	tests := []struct {
 		name     string
+		topic    string
 		existing bool
 		offset   *uint32
 		want     uint32
 	}{
-		{name: "new default"},
-		{name: "new explicit", offset: &requested, want: requested},
-		{name: "resume", existing: true, want: 17},
-		{name: "rewind", existing: true, offset: &zero},
-		{name: "override", existing: true, offset: &requested, want: requested},
+		{name: "new default", topic: "events"},
+		{name: "new explicit", topic: "events", offset: &requested, want: requested},
+		{name: "resume", topic: "old", existing: true, want: 17},
+		{name: "rewind", topic: "old", existing: true, offset: &zero},
+		{name: "override", topic: "old", existing: true, offset: &requested, want: requested},
+		{name: "changed topic default", topic: "events", existing: true},
+		{name: "changed topic rewind", topic: "events", existing: true, offset: &zero},
+		{name: "changed topic explicit", topic: "events", existing: true, offset: &requested, want: requested},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -95,16 +99,16 @@ func TestManagerSubscribeSelectsOffset(t *testing.T) {
 					t.Fatalf("AddConsumer(%+v) during setup error = %v, want nil", original, err)
 				}
 			}
-			c, previous, err := manager.Subscribe(t.Context(), original.id, "events", tt.offset, "user/", ipcPath)
+			c, previous, err := manager.Subscribe(t.Context(), original.id, tt.topic, tt.offset, "user/", ipcPath)
 			if err != nil {
-				t.Fatalf("Subscribe(consumer-1, events, %v) error = %v, want nil", tt.offset, err)
+				t.Fatalf("Subscribe(consumer-1, %q, %v) error = %v, want nil", tt.topic, tt.offset, err)
 			}
 			t.Cleanup(func() {
 				if err := manager.DisconnectConsumer(c); err != nil {
 					t.Errorf("DisconnectConsumer(consumer-1) error = %v, want nil", err)
 				}
 			})
-			want := Info{id: original.id, topic: "events", offset: tt.want, prefix: "user/", ipcPath: ipcPath}
+			want := Info{id: original.id, topic: tt.topic, offset: tt.want, prefix: "user/", ipcPath: ipcPath}
 			stored := openTestConsumer(t, manager, original.id)
 			if stored == nil {
 				return
