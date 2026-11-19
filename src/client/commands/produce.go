@@ -107,7 +107,10 @@ func (cmd *produceCommand) Execute(ctx context.Context, env Env) (int, error) {
 				return code, fmt.Errorf("produce: %w", err)
 			}
 
-			// TODO: listen recv (NewProduceMessagePayloadReply) when exists soon
+			_, code, err = env.recv[*protocol.ProduceMessageReplyPayload](ctx, protocol.ProduceMessageReply)
+			if err != nil {
+				return code, fmt.Errorf("produce: %w", err)
+			}
 
 		case <-env.Shutdown.Requested():
 			return exitcode.Success, nil
