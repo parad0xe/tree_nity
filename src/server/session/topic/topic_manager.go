@@ -98,6 +98,22 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 	)
 }
 
+// ConsumerInfo replies with saved subscriber metadata; ctx bounds reply delivery.
+func (m *Manager) ConsumerInfo(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerInfoPayload) error {
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.Subscriber()))
+	if errors.Is(err, consumer.ErrNotFound) {
+		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+			protocol.NewErrorReplyPayload(protocol.ClientNotFound, err.Error()))
+	}
+	if err != nil {
+		return err
+	}
+
+	info := c.Info
+	return response.SendToClient(ctx, metadata, protocol.ConsumerInfoReply,
+		protocol.NewConsumerInfoReplyPayload(string(info.ID()), info.Topic(), info.Offset(), info.Prefix(), info.IPCPath()))
+}
+
 // NewSubscription attaches and confirms a consumer unless shutdown is requested.
 // ctx bounds the reply; consumerCtx covers the subscription's lifetime.
 func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) error {

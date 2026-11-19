@@ -24,8 +24,8 @@ import (
 const (
 	// testTimeout is the longest a test waits for an event before it fails.
 	testTimeout = 5 * time.Second
-	// validFrame decodes to protocol data whose opcode the server does not handle.
-	validFrame = `{"opcode":2,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1","subscriber":"consumer-1"}}`
+	// validFrame decodes to a heartbeat whose handler is not implemented yet.
+	validFrame = `{"opcode":8,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1"}}`
 	// invalidFrame does not decode to protocol data.
 	invalidFrame = "not json"
 )
@@ -328,8 +328,8 @@ func TestListenSkipsInvalidFrame(t *testing.T) {
 	}
 }
 
-// TestListenRepliesToUnhandledOpcode checks rejection delivery before graceful shutdown.
-func TestListenRepliesToUnhandledOpcode(t *testing.T) {
+// TestListenRejectsUnknownSubscriber checks rejection delivery before graceful shutdown.
+func TestListenRejectsUnknownSubscriber(t *testing.T) {
 	app := newTestApplication(t)
 	inbound := newServerClientInbox(t)
 	requestedChan := make(chan struct{})
@@ -350,17 +350,17 @@ func TestListenRepliesToUnhandledOpcode(t *testing.T) {
 	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
 	if !ok {
 		t.Errorf("ConsumerInfo rejection payload = %T, want *protocol.ErrorReplyPayload", data.Payload())
-	} else if reply.Kind() != protocol.InvalidRequest || reply.Reason() == "" {
-		t.Errorf("ConsumerInfo rejection = %v, %q, want %v and a nonempty reason", reply.Kind(), reply.Reason(), protocol.InvalidRequest)
+	} else if reply.Kind() != protocol.ClientNotFound || reply.Reason() == "" {
+		t.Errorf("ConsumerInfo rejection = %v, %q, want %v and a nonempty reason", reply.Kind(), reply.Reason(), protocol.ClientNotFound)
 	}
 	close(requestedChan)
 
 	res := c.wait(t)
 	if res.Code() != exitcode.Success {
-		t.Errorf("listen() after an unhandled opcode then a shutdown request code = %d, want %d", res.Code(), exitcode.Success)
+		t.Errorf("listen() after an unknown subscriber then a shutdown request code = %d, want %d", res.Code(), exitcode.Success)
 	}
 	if res.Err() != nil {
-		t.Errorf("listen() after an unhandled opcode then a shutdown request error = %v, want nil", res.Err())
+		t.Errorf("listen() after an unknown subscriber then a shutdown request error = %v, want nil", res.Err())
 	}
 }
 
@@ -628,8 +628,8 @@ func TestDispatchListsTopics(t *testing.T) {
 	}
 }
 
-// TestDispatchRejectsUnhandledRequests checks error replies for unsupported client requests.
-func TestDispatchRejectsUnhandledRequests(t *testing.T) {
+// TestDispatchRejectsUnknownSubscriber checks the consumer lookup rejection.
+func TestDispatchRejectsUnknownSubscriber(t *testing.T) {
 	tests := []struct {
 		name    string
 		opcode  protocol.Opcode
@@ -653,8 +653,8 @@ func TestDispatchRejectsUnhandledRequests(t *testing.T) {
 			reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
 			if !ok {
 				t.Errorf("dispatch(%v) rejection payload = %T, want *protocol.ErrorReplyPayload", tt.opcode, data.Payload())
-			} else if reply.Kind() != protocol.InvalidRequest || reply.Reason() == "" {
-				t.Errorf("dispatch(%v) rejection = %v, %q, want %v and a nonempty reason", tt.opcode, reply.Kind(), reply.Reason(), protocol.InvalidRequest)
+			} else if reply.Kind() != protocol.ClientNotFound || reply.Reason() == "" {
+				t.Errorf("dispatch(%v) rejection = %v, %q, want %v and a nonempty reason", tt.opcode, reply.Kind(), reply.Reason(), protocol.ClientNotFound)
 			}
 		})
 	}
@@ -722,8 +722,8 @@ func TestDispatchPropagatesRejectionErrors(t *testing.T) {
 				t.Fatalf("NewData(ConsumerInfo, %q) during setup error = %v, want nil", tt.ipcPath, err)
 			}
 			code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data)
-			if code != exitcode.General || !errors.Is(err, errUnhandledOpcode) || !errors.Is(err, tt.wantErr) {
-				t.Errorf("dispatch(ConsumerInfo, %q) = %d, %v, want %d, %v and %v", tt.ipcPath, code, err, exitcode.General, errUnhandledOpcode, tt.wantErr)
+			if code != exitcode.General || !errors.Is(err, tt.wantErr) || errors.Is(err, errUnhandledOpcode) {
+				t.Errorf("dispatch(ConsumerInfo, %q) = %d, %v, want %d and %v from the handler", tt.ipcPath, code, err, exitcode.General, tt.wantErr)
 			}
 		})
 	}
@@ -751,8 +751,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 		{name: "expired production rejection", ctx: expired, opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil)), wantErr: context.DeadlineExceeded},
 		{name: "canceled subscription rejection", ctx: cancelledContext(), opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil), wantErr: context.Canceled},
 		{name: "expired subscription rejection", ctx: expired, opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil), wantErr: context.DeadlineExceeded},
-		{name: "canceled rejection", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled, wantUnhandled: true},
-		{name: "expired rejection", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded, wantUnhandled: true},
+		{name: "canceled consumer info", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled},
+		{name: "expired consumer info", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -816,7 +816,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 		{name: "production rejection", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))},
 		{name: "subscription rejection", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil)},
-		{name: "rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
+		{name: "consumer info rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1068,6 +1068,59 @@ func TestDispatchForwardsSubscriptionShutdown(t *testing.T) {
 	data = receiveServerReply(t, inbound, protocol.ServerShutdown)
 	if _, ok := data.Payload().(*protocol.ServerShutdownPayload); !ok {
 		t.Errorf("subscription during shutdown payload = %T, want *protocol.ServerShutdownPayload", data.Payload())
+	}
+}
+
+// TestListenRepliesWithConsumerInfo checks querying another subscriber over IPC.
+func TestListenRepliesWithConsumerInfo(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	subscriber, err := ipc.NewInbound(inbound.IPCPath()+".subscriber", protocol.Decode)
+	if err != nil {
+		t.Fatalf("NewInbound(subscriber) during setup error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := subscriber.Drop(); err != nil {
+			t.Errorf("Drop(subscriber) error = %v, want nil", err)
+		}
+	})
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	sendCreateRequest(t, app, inbound.IPCPath(), "events")
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	offset := uint32(42)
+	data, err := protocol.NewData(protocol.TopicSubscription, protocol.NewClientMetadata(subscriber.IPCPath()),
+		protocol.NewTopicSubscriptionPayload("subscriber-1", "events", "é/猫/", &offset))
+	if err != nil {
+		t.Fatalf("NewData(TopicSubscription, subscriber-1) during setup error = %v, want nil", err)
+	}
+	frame, err := protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(TopicSubscription, subscriber-1) during setup error = %v, want nil", err)
+	}
+	send(t, app.inbound.IPCPath(), string(frame))
+	receiveServerReply(t, subscriber, protocol.TopicSubscriptionReply)
+	data, err = protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata(inbound.IPCPath()),
+		protocol.NewConsumerInfoPayload("caller-1", "subscriber-1"))
+	if err != nil {
+		t.Fatalf("NewData(ConsumerInfo, subscriber-1) error = %v, want nil", err)
+	}
+	frame, err = protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(ConsumerInfo, subscriber-1) error = %v, want nil", err)
+	}
+	send(t, app.inbound.IPCPath(), string(frame))
+	data = receiveServerReply(t, inbound, protocol.ConsumerInfoReply)
+	reply, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
+	if !ok {
+		t.Errorf("ConsumerInfo(subscriber-1) payload = %T, want *protocol.ConsumerInfoReplyPayload", data.Payload())
+	} else if reply.Client() != "subscriber-1" || reply.Topic() != "events" || reply.Offset() != offset || reply.Prefix() != "é/猫/" || reply.IPC() != subscriber.IPCPath() {
+		t.Errorf("ConsumerInfo(subscriber-1) payload = %+v, want events, offset %d, prefix é/猫/ and IPC %q", reply, offset, subscriber.IPCPath())
+	}
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after ConsumerInfo and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 
