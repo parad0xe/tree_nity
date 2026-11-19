@@ -289,6 +289,16 @@ func TestRecvReturnsTopicCodeForRejection(t *testing.T) {
 	}
 }
 
+func TestRecvReturnsIPCCodeOnServerShutdown(t *testing.T) {
+	env := newReplyEnv(t, newServerData(t, protocol.ServerShutdown, protocol.NewServerShutdownPayload()))
+
+	_, code, err := env.recv[*protocol.CreateTopicReplyPayload](context.Background(), protocol.CreateTopicReply)
+
+	if code != exitcode.IPC || !errors.Is(err, errServerShuttingDown) {
+		t.Errorf("recv(%d) of a server shutdown = %d, %v, want %d, %v", protocol.CreateTopicReply, code, err, exitcode.IPC, errServerShuttingDown)
+	}
+}
+
 func TestRecvRejectsUnexpectedOpcode(t *testing.T) {
 	env := newReplyEnv(t, newServerData(t, protocol.ListTopicReply, protocol.NewListTopicReplyPayload(nil)))
 
