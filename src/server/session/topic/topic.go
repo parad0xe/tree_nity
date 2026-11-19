@@ -44,8 +44,8 @@ func newTopic() *Topic {
 	}
 }
 
-// upsertConsumer optionally releases the consumer reservation when its workers stop.
-func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, onStop func()) error {
+// upsertConsumer gates workers on ready; nil starts them immediately.
+func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready <-chan struct{}, onStop func()) error {
 	if err := t.validate(); err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, onStop
 
 	oldConsumer, err := t.registerConsumer(consumerCTX, newConsumer)
 	if err == nil {
-		t.startConsumerWorkers(consumerCTX, newConsumer, onStop)
+		t.startConsumerWorkers(consumerCTX, newConsumer, ready, onStop)
 	}
 
 	t.mu.Unlock()
@@ -162,8 +162,8 @@ func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *sub
 	return nil
 }
 
-// startConsumerWorkers starts two workers; either exiting cancels its sibling.
-func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription, onStop func()) {
+// startConsumerWorkers waits for ready; either worker exiting cancels its sibling.
+func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription, ready <-chan struct{}, onStop func()) {
 	t.waitGroup.Add(2)
 	var cleanupOnce sync.Once
 
@@ -177,15 +177,30 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 		}
 	}
 
-	go func() {
+	runWorker := func(work func(context.Context, *subscription)) {
 		defer workDone()
-		t.listenHeartbeat(ctx, newConsumer)
-	}()
+		if ready != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-newConsumer.connection.Done():
+				return
+			case <-ready:
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-newConsumer.connection.Done():
+			return
+		default:
+		}
+		work(ctx, newConsumer)
+	}
 
-	go func() {
-		defer workDone()
-		t.deliverMessages(ctx, newConsumer)
-	}()
+	go runWorker(t.listenHeartbeat)
+	go runWorker(t.deliverMessages)
 }
 
 // RemoveConsumer detaches and closes c's registered connection.

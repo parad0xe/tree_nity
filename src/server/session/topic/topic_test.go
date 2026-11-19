@@ -382,7 +382,7 @@ func TestTopicConsumerShutdown(t *testing.T) {
 			if c == nil {
 				return
 			}
-			if err := topic.upsertConsumer(ctx, c, nil); err != nil {
+			if err := topic.upsertConsumer(ctx, c, nil, nil); err != nil {
 				t.Errorf("upsertConsumer(consumer-1, events/) error = %v, want nil", err)
 				return
 			}
@@ -407,6 +407,80 @@ func TestTopicConsumerShutdown(t *testing.T) {
 			case <-c.Connection().Done():
 			default:
 				t.Errorf("Connection().Done() after %s is open, want closed", tt.name)
+			}
+		})
+	}
+}
+
+// TestTopicConsumerWorkersAwaitConfirmation checks heartbeat processing after confirmation.
+func TestTopicConsumerWorkersAwaitConfirmation(t *testing.T) {
+	topic, ctx, _ := newTestTopic(t)
+	c := connectedTopicConsumer(t, "events/", "pending")
+	if c == nil {
+		return
+	}
+	confirmed := make(chan struct{})
+	if err := topic.upsertConsumer(ctx, c, confirmed, nil); err != nil {
+		t.Errorf("upsertConsumer(consumer-1) before confirmation error = %v, want nil", err)
+		return
+	}
+	select {
+	case c.Connection().HeartbeatChan <- struct{}{}:
+		t.Error("consumer-1 heartbeat before confirmation was consumed, want pending")
+	default:
+	}
+	close(confirmed)
+	select {
+	case c.Connection().HeartbeatChan <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Error("consumer-1 heartbeat after confirmation was not consumed within 5s, want consumed")
+	}
+}
+
+// TestTopicPendingConsumerShutdown checks cleanup without confirmation.
+func TestTopicPendingConsumerShutdown(t *testing.T) {
+	tests := []struct {
+		name string
+		stop func(*Topic, *consumer.Consumer, context.CancelFunc) error
+	}{
+		{name: "explicit removal", stop: func(topic *Topic, c *consumer.Consumer, _ context.CancelFunc) error {
+			return topic.RemoveConsumer(c)
+		}},
+		{name: "connection closed", stop: func(_ *Topic, c *consumer.Consumer, _ context.CancelFunc) error {
+			return c.Connection().Close()
+		}},
+		{name: "parent canceled", stop: func(_ *Topic, _ *consumer.Consumer, cancel context.CancelFunc) error {
+			cancel()
+			return nil
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topic, ctx, cancel := newTestTopic(t)
+			c := connectedTopicConsumer(t, "events/", "pending")
+			if c == nil {
+				return
+			}
+			var calls atomic.Int32
+			if err := topic.upsertConsumer(ctx, c, make(chan struct{}), func() { calls.Add(1) }); err != nil {
+				t.Errorf("upsertConsumer(consumer-1) before %s error = %v, want nil", tt.name, err)
+				return
+			}
+			if err := tt.stop(topic, c, cancel); err != nil {
+				t.Errorf("%s for pending consumer-1 error = %v, want nil", tt.name, err)
+				return
+			}
+			if !waitTopicWorkers(t, topic) {
+				return
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("cleanup count after %s before confirmation = %d, want 1", tt.name, got)
+			}
+			topic.mu.Lock()
+			attached := topic.consumerMap.Len()
+			topic.mu.Unlock()
+			if attached != 0 {
+				t.Errorf("attached count after %s before confirmation = %d, want 0", tt.name, attached)
 			}
 		})
 	}
@@ -437,7 +511,7 @@ func TestTopicConsumerWorkersRunCleanupOnce(t *testing.T) {
 				return
 			}
 			var calls atomic.Int32
-			if err := topic.upsertConsumer(ctx, c, func() { calls.Add(1) }); err != nil {
+			if err := topic.upsertConsumer(ctx, c, nil, func() { calls.Add(1) }); err != nil {
 				t.Fatalf("upsertConsumer(consumer-1, cleanup) error = %v, want nil", err)
 			}
 			if err := tt.stop(topic, c, cancel); err != nil {
@@ -469,7 +543,7 @@ func TestTopicConsumerCleanupDoesNotRunAfterFailedRegistration(t *testing.T) {
 	}
 	topic.consumerMap = &hashmap.HashMap[id.ID, *subscription]{}
 	var calls atomic.Int32
-	if err := topic.upsertConsumer(ctx, c, func() { calls.Add(1) }); !errors.Is(err, hashmap.ErrUninitialized) {
+	if err := topic.upsertConsumer(ctx, c, nil, func() { calls.Add(1) }); !errors.Is(err, hashmap.ErrUninitialized) {
 		t.Errorf("upsertConsumer(consumer-1, cleanup) with an invalid index error = %v, want %v", err, hashmap.ErrUninitialized)
 	}
 	if !waitTopicWorkers(t, topic) {
@@ -498,11 +572,11 @@ func TestTopicConsumerReplacement(t *testing.T) {
 			if previous == nil || current == nil {
 				return
 			}
-			if err := topic.upsertConsumer(ctx, previous, nil); err != nil {
+			if err := topic.upsertConsumer(ctx, previous, nil, nil); err != nil {
 				t.Errorf("upsertConsumer(previous consumer-1, events/) error = %v, want nil", err)
 				return
 			}
-			if err := topic.upsertConsumer(ctx, current, nil); err != nil {
+			if err := topic.upsertConsumer(ctx, current, nil, nil); err != nil {
 				t.Errorf("upsertConsumer(replacement consumer-1, %q) error = %v, want nil", tt.prefix, err)
 				return
 			}
@@ -546,11 +620,11 @@ func TestTopicUpsertRejectsDuplicateConnection(t *testing.T) {
 	if c == nil {
 		return
 	}
-	if err := topic.upsertConsumer(ctx, c, nil); err != nil {
+	if err := topic.upsertConsumer(ctx, c, nil, nil); err != nil {
 		t.Errorf("upsertConsumer(consumer-1, events/) error = %v, want nil", err)
 		return
 	}
-	if err := topic.upsertConsumer(ctx, c, nil); !errors.Is(err, ErrInvalidConsumer) {
+	if err := topic.upsertConsumer(ctx, c, nil, nil); !errors.Is(err, ErrInvalidConsumer) {
 		t.Errorf("upsertConsumer(consumer-1, same connection) error = %v, want %v", err, ErrInvalidConsumer)
 	}
 	select {
@@ -573,7 +647,7 @@ func TestTopicUpsertRejectsDisconnectedConsumer(t *testing.T) {
 		return
 	}
 	topic, ctx, _ := newTestTopic(t)
-	if err := topic.upsertConsumer(ctx, c, nil); !errors.Is(err, ErrInvalidConsumer) {
+	if err := topic.upsertConsumer(ctx, c, nil, nil); !errors.Is(err, ErrInvalidConsumer) {
 		t.Errorf("upsertConsumer(disconnected consumer-1) error = %v, want %v", err, ErrInvalidConsumer)
 	}
 }
@@ -591,7 +665,7 @@ func TestTopicUninitialized(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.topic.upsertConsumer(context.Background(), nil, nil); !errors.Is(err, ErrUninitialized) {
+			if err := tt.topic.upsertConsumer(context.Background(), nil, nil, nil); !errors.Is(err, ErrUninitialized) {
 				t.Errorf("upsertConsumer(nil) on %s error = %v, want %v", tt.name, err, ErrUninitialized)
 			}
 			if err := tt.topic.RemoveConsumer(nil); !errors.Is(err, ErrUninitialized) {
@@ -613,7 +687,7 @@ func TestTopicRejectsInvalidConsumer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			topic, ctx, _ := newTestTopic(t)
-			if err := topic.upsertConsumer(ctx, tt.consumer, nil); !errors.Is(err, ErrInvalidConsumer) {
+			if err := topic.upsertConsumer(ctx, tt.consumer, nil, nil); !errors.Is(err, ErrInvalidConsumer) {
 				t.Errorf("upsertConsumer(%s) error = %v, want %v", tt.name, err, ErrInvalidConsumer)
 			}
 			if err := topic.RemoveConsumer(tt.consumer); !errors.Is(err, ErrInvalidConsumer) {
@@ -651,7 +725,7 @@ func TestTopicUpsertRejectsStoppedContext(t *testing.T) {
 			if c == nil {
 				return
 			}
-			if err := topic.upsertConsumer(tt.ctx, c, nil); !errors.Is(err, tt.wantErr) {
+			if err := topic.upsertConsumer(tt.ctx, c, nil, nil); !errors.Is(err, tt.wantErr) {
 				t.Errorf("upsertConsumer(consumer-1) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
 			}
 			if !waitTopicWorkers(t, topic) {
@@ -682,7 +756,7 @@ func TestTopicUpsertRollsBackFailedInsert(t *testing.T) {
 	}
 	// An uninitialized map fails insertion after the prefix has been subscribed.
 	topic.consumerMap = &hashmap.HashMap[id.ID, *subscription]{}
-	if err := topic.upsertConsumer(ctx, c, nil); !errors.Is(err, hashmap.ErrUninitialized) {
+	if err := topic.upsertConsumer(ctx, c, nil, nil); !errors.Is(err, hashmap.ErrUninitialized) {
 		t.Errorf("upsertConsumer(consumer-1, events/) with an uninitialized consumer index error = %v, want %v", err, hashmap.ErrUninitialized)
 	}
 	got, err := topic.consumerTrie.Search("events/item")
@@ -704,7 +778,7 @@ func TestTopicUpsertRollsBackFailedPrefixChange(t *testing.T) {
 	if previous == nil || current == nil {
 		return
 	}
-	if err := topic.upsertConsumer(ctx, previous, nil); err != nil {
+	if err := topic.upsertConsumer(ctx, previous, nil, nil); err != nil {
 		t.Errorf("upsertConsumer(previous consumer-1, events/) error = %v, want nil", err)
 		return
 	}
@@ -713,7 +787,7 @@ func TestTopicUpsertRollsBackFailedPrefixChange(t *testing.T) {
 		t.Errorf("Unsubscribe(events/, consumer-1) during setup error = %v, want nil", err)
 		return
 	}
-	if err := topic.upsertConsumer(ctx, current, nil); !errors.Is(err, trie.ErrPrefixNotFound) {
+	if err := topic.upsertConsumer(ctx, current, nil, nil); !errors.Is(err, trie.ErrPrefixNotFound) {
 		t.Errorf("upsertConsumer(replacement consumer-1, orders/) without its old prefix error = %v, want %v", err, trie.ErrPrefixNotFound)
 	}
 	topic.mu.Lock()
@@ -741,7 +815,7 @@ func TestTopicRemoveKeepsConnectionOnIndexFailure(t *testing.T) {
 	if c == nil {
 		return
 	}
-	if err := topic.upsertConsumer(ctx, c, nil); err != nil {
+	if err := topic.upsertConsumer(ctx, c, nil, nil); err != nil {
 		t.Errorf("upsertConsumer(consumer-1, events/) error = %v, want nil", err)
 		return
 	}

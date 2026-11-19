@@ -129,6 +129,7 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 
 	setupDone := make(chan struct{})
 	defer close(setupDone)
+	confirmed := make(chan struct{})
 
 	onStop := func() {
 		<-setupDone
@@ -146,13 +147,14 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 		return errors.Join(err, m.consumerManager.DisconnectConsumer(c))
 	}
 
-	if err := target.upsertConsumer(consumerCtx, c, onStop); err != nil {
+	if err := target.upsertConsumer(consumerCtx, c, confirmed, onStop); err != nil {
 		return rollback(err)
 	}
 	if err := response.SendToClient(ctx, metadata, protocol.TopicSubscriptionReply,
 		protocol.NewTopicSubscriptionReplyPayload()); err != nil {
 		return rollback(err)
 	}
+	close(confirmed)
 
 	return nil
 }

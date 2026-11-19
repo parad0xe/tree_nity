@@ -30,14 +30,14 @@ func topicManagerContext(t *testing.T) context.Context {
 	return ctx
 }
 
-// subscriptionReplyContext requests shutdown when reply transmission starts.
+// subscriptionReplyContext observes the start of reply transmission.
 type subscriptionReplyContext struct {
 	context.Context
-	requestShutdown func()
+	beforeSend func()
 }
 
 func (c subscriptionReplyContext) Deadline() (time.Time, bool) {
-	c.requestShutdown()
+	c.beforeSend()
 	return c.Context.Deadline()
 }
 
@@ -149,8 +149,8 @@ func TestManagerNewSubscriptionFinishesDuringShutdown(t *testing.T) {
 	shutdown := lifecycle.NewGracefulShutdown(requested)
 	ctx := topicManagerContext(t)
 	replyCtx := subscriptionReplyContext{
-		Context:         ctx,
-		requestShutdown: sync.OnceFunc(func() { close(requested) }),
+		Context:    ctx,
+		beforeSend: sync.OnceFunc(func() { close(requested) }),
 	}
 	inbound := newTopicManagerInbox(t)
 	payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil)
@@ -234,6 +234,49 @@ func TestManagerNewSubscriptionConfirmsAttachment(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+// TestManagerNewSubscriptionWaitsForConfirmation checks workers during reply transmission.
+func TestManagerNewSubscriptionWaitsForConfirmation(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := newTopicManagerInbox(t)
+	ctx := topicManagerContext(t)
+	var connection *consumer.Connection
+	replyCtx := subscriptionReplyContext{
+		Context: ctx,
+		beforeSend: sync.OnceFunc(func() {
+			target.mu.Lock()
+			stored, exists := target.consumerMap.Get("consumer-1")
+			if exists && stored != nil {
+				connection = stored.connection
+			}
+			target.mu.Unlock()
+			if connection == nil {
+				t.Error("consumer-1 attachment before confirmation = nil, want a registered connection")
+				return
+			}
+			select {
+			case connection.HeartbeatChan <- struct{}{}:
+				t.Error("consumer-1 heartbeat before confirmation was consumed, want pending")
+			default:
+			}
+		}),
+	}
+	payload := *protocol.NewTopicSubscriptionPayload("consumer-1", "events", "user/", nil)
+	if err := manager.NewSubscription(replyCtx, lifetime, lifecycle.GracefulShutdown{}, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
+		t.Errorf("NewSubscription(consumer-1, events) error = %v, want nil", err)
+		return
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.TopicSubscriptionReply)
+	if connection == nil {
+		return
+	}
+	select {
+	case connection.HeartbeatChan <- struct{}{}:
+	case <-ctx.Done():
+		t.Errorf("consumer-1 heartbeat after confirmation error = %v, want consumed before deadline", ctx.Err())
 	}
 }
 
@@ -437,8 +480,8 @@ func TestManagerNewSubscriptionRestoresFailedReply(t *testing.T) {
 			shutdownRequested := make(chan struct{})
 			shutdown := lifecycle.NewGracefulShutdown(shutdownRequested)
 			replyCtx = subscriptionReplyContext{
-				Context:         replyCtx,
-				requestShutdown: sync.OnceFunc(func() { close(shutdownRequested) }),
+				Context:    replyCtx,
+				beforeSend: sync.OnceFunc(func() { close(shutdownRequested) }),
 			}
 			if err := manager.NewSubscription(replyCtx, lifetime, shutdown, metadata, payload); !errors.Is(err, response.ErrReply) || !errors.Is(err, context.DeadlineExceeded) {
 				t.Errorf("NewSubscription() with a full reply queue error = %v, want %v and %v", err, response.ErrReply, context.DeadlineExceeded)
