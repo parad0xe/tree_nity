@@ -487,3 +487,69 @@ func TestSubscribeExecuteKeepsWaitingAfterRecvTimeout(t *testing.T) {
 		t.Errorf("Execute() after a late delivery wrote %q, want %q", got, want)
 	}
 }
+
+func TestSubscribeExecuteReturnsConfirmationWriteError(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.Stdout = failingWriter{}
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.General || !errors.Is(err, errTestWrite) {
+		t.Errorf("Execute() with a failing write of the confirmation = %d, %v, want %d, %v", code, err, exitcode.General, errTestWrite)
+	}
+}
+
+func TestSubscribeExecuteReturnsIPCCodeWhenSubscriptionCannotBeSent(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	fillTestQueue(t, server.IPCPath())
+	env.SendTimeout = shortSendTimeout
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Execute() with a full server queue = %d, %v, want %d, %v", code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+}
+
+func TestSubscribeExecuteReturnsIPCCodeWhenAcknowledgementCannotBeSent(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, stdout := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.SendTimeout = shortSendTimeout
+
+	result := startExecute(cmd, env)
+	recvTestData(t, server)
+	// Execute sends nothing else before the delivery, so the queue stays full.
+	fillTestQueue(t, server.IPCPath())
+	sendTestReplies(t, env, newDeliveryData(t, 0, "a", "1"))
+
+	code, err := waitExecute(t, result)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Execute() with a full server queue at acknowledgement = %d, %v, want %d, %v", code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+	if got, want := stdout.String(), fmt.Sprintf("subscribed to %s\na:1\n", cmd.topic); got != want {
+		t.Errorf("Execute() with a full server queue at acknowledgement wrote %q, want %q", got, want)
+	}
+}
+
+func TestSubscribeExecuteReturnsDisconnectError(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.SendTimeout = shortSendTimeout
+	shutdown, requestShutdown := newShutdown()
+	env.Shutdown = shutdown
+
+	result := startExecute(cmd, env)
+	recvTestData(t, server)
+	// Execute sends nothing else before the shutdown, so the queue stays full.
+	fillTestQueue(t, server.IPCPath())
+	requestShutdown()
+
+	code, err := waitExecute(t, result)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Execute() with a full server queue at disconnection = %d, %v, want %d, %v", code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+}
