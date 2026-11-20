@@ -205,7 +205,7 @@ func (cmd *produceCommand) splitMessage(data []byte, atEOF bool) (advance int, t
 	}
 
 	if atEOF {
-		return len(data), data, nil
+		return len(data), bytes.TrimSuffix(data, []byte{'\r'}), nil
 	}
 
 	return 0, nil, nil
