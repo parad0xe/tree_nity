@@ -94,6 +94,88 @@ func deliveryMessage(index int) protocol.Message {
 	return protocol.NewMessage(append([]byte(key), byte(index), 0xff), []byte{0, 0xff, byte(index)})
 }
 
+// TestDeliveryStreamsWhileProducing checks batch ownership during concurrent production and ACKs.
+func TestDeliveryStreamsWhileProducing(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := deliveryInbox(t, "consumer")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("concurrent producer did not stop within 5s, want stopped")
+		}
+	})
+	const count = 512
+	go func() {
+		defer close(finished)
+		for index := 0; index < count; index++ {
+			if err := target.ProduceMessage(ctx, deliveryMessage(index)); err != nil {
+				result <- err
+				return
+			}
+		}
+		result <- nil
+	}()
+	for index := 0; index < count; index++ {
+		receiveDelivery(t, inbound, uint32(index), deliveryMessage(index))
+		acknowledgeDelivery(t, manager, inbound, "subscriber", uint32(index+1))
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Errorf("ProduceMessage(%d concurrent messages) error = %v, want nil", count, err)
+		}
+	case <-ctx.Done():
+		t.Errorf("ProduceMessage(%d concurrent messages) did not finish: %v, want nil", count, ctx.Err())
+	}
+	checkSavedOffset(t, manager, "subscriber", count)
+	expectNoDelivery(t, inbound)
+}
+
+// TestDeliveryPreservesPendingBatches checks new arrivals while a replay batch waits for ACKs.
+func TestDeliveryPreservesPendingBatches(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	ctx := topicManagerContext(t)
+	const history = 5
+	for index := 0; index < history; index++ {
+		if err := target.ProduceMessage(ctx, deliveryMessage(index)); err != nil {
+			t.Fatalf("ProduceMessage(history %d) error = %v, want nil", index, err)
+		}
+	}
+	inbound := deliveryInbox(t, "consumer")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	receiveDelivery(t, inbound, 0, deliveryMessage(0))
+	const burst = 128
+	for index := history; index < history+burst; index++ {
+		if err := target.ProduceMessage(ctx, deliveryMessage(index)); err != nil {
+			t.Fatalf("ProduceMessage(first burst %d) error = %v, want nil", index, err)
+		}
+	}
+	acknowledgeDelivery(t, manager, inbound, "subscriber", 1)
+	receiveDelivery(t, inbound, 1, deliveryMessage(1))
+	for index := history + burst; index < history+2*burst; index++ {
+		if err := target.ProduceMessage(ctx, deliveryMessage(index)); err != nil {
+			t.Fatalf("ProduceMessage(second burst %d) error = %v, want nil", index, err)
+		}
+	}
+	expectNoDelivery(t, inbound)
+	checkSavedOffset(t, manager, "subscriber", 1)
+	acknowledgeDelivery(t, manager, inbound, "subscriber", 2)
+	for index := 2; index < history+2*burst; index++ {
+		receiveDelivery(t, inbound, uint32(index), deliveryMessage(index))
+		acknowledgeDelivery(t, manager, inbound, "subscriber", uint32(index+1))
+	}
+	checkSavedOffset(t, manager, "subscriber", history+2*burst)
+	expectNoDelivery(t, inbound)
+}
+
 // TestDeliveryWakesAfterIdle checks notifications after catch-up, including nonmatching messages.
 func TestDeliveryWakesAfterIdle(t *testing.T) {
 	manager := NewManager()
