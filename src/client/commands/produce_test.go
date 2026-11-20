@@ -229,6 +229,7 @@ func TestProduceExecuteSendsTextMessages(t *testing.T) {
 		{name: "line feeds", stdin: "a:1\nb:2\n", want: []testMessage{{key: "a", value: "1"}, {key: "b", value: "2"}}},
 		{name: "carriage returns", stdin: "a:1\r\nb:2\r\n", want: []testMessage{{key: "a", value: "1"}, {key: "b", value: "2"}}},
 		{name: "no final line feed", stdin: "a:1\nb:2", want: []testMessage{{key: "a", value: "1"}, {key: "b", value: "2"}}},
+		{name: "final carriage return", stdin: "a:1\nb:2\r", want: []testMessage{{key: "a", value: "1"}, {key: "b", value: "2"}}},
 		{name: "separator in value", stdin: "a:1:2\n", want: []testMessage{{key: "a", value: "1:2"}}},
 	}
 	for _, tt := range tests {
