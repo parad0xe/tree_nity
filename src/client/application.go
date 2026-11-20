@@ -83,6 +83,7 @@ func (app *application) run(sigCtx context.Context, command commands.Command) (i
 		RecvTimeout: commands.DefaultRecvTimeout,
 		SendTimeout: commands.DefaultSendTimeout,
 		Stdout:      os.Stdout,
+		Stdin:       os.Stdin,
 	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())

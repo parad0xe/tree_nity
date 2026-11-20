@@ -339,6 +339,26 @@ func TestRunPassesStdoutToCommand(t *testing.T) {
 	}
 }
 
+func TestRunPassesStdinToCommand(t *testing.T) {
+	app := &application{
+		inbound:  &ipc.Inbound{},
+		outbound: &ipc.Outbound{},
+	}
+	var got commands.Env
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		got = env
+		return exitcode.Success, nil
+	})
+
+	if _, err := app.run(context.Background(), command); err != nil {
+		t.Errorf("run() error = %v, want nil", err)
+	}
+
+	if got.Stdin != os.Stdin {
+		t.Errorf("run() env.Stdin = %v, want %v", got.Stdin, os.Stdin)
+	}
+}
+
 func TestRunPassesDefaultTimeoutsToCommand(t *testing.T) {
 	app := &application{
 		inbound:  &ipc.Inbound{},

@@ -30,6 +30,8 @@ type Env struct {
 	Outbound *ipc.Outbound
 	// Stdout receives the non-error output of the command.
 	Stdout io.Writer
+	// Stdin provides the input of the command.
+	Stdin io.ReadCloser
 	// RecvTimeout is the longest a command waits for the server reply.
 	RecvTimeout time.Duration
 	// SendTimeout is the longest a request waits while the server queue is full.
@@ -83,6 +85,10 @@ func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode pro
 			code = exitcode.Topic
 		}
 		return zero, code, fmt.Errorf("recv: %w: %s", errRequestRejected, reply.Reason())
+	}
+
+	if data.Opcode() == protocol.ServerShutdown {
+		return zero, exitcode.IPC, fmt.Errorf("recv: %w", errServerShuttingDown)
 	}
 
 	if data.Opcode() != expectedOpcode {
