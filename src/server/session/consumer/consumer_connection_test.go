@@ -248,7 +248,7 @@ func TestConnectionDoneUnblocksSend(t *testing.T) {
 	}{
 		{name: "message", send: func(c *Connection, abort <-chan struct{}) string {
 			select {
-			case c.MessageChan <- protocol.Message{}:
+			case c.MessageChan <- []uint32{0}:
 				return "sent"
 			case <-c.Done():
 				return "canceled"
@@ -290,7 +290,7 @@ func TestConnectionDoneUnblocksSend(t *testing.T) {
 			}
 			cleanupTestConnection(t, connection)
 			// Fill buffered channels so the next send must wait for cancellation.
-			connection.MessageChan <- protocol.Message{}
+			connection.MessageChan <- []uint32{0}
 			connection.AcknowledgedChan <- 0
 
 			limitCtx, cancel := context.WithTimeout(context.Background(), time.Second)

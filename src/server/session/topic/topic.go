@@ -45,7 +45,7 @@ func newTopic() *Topic {
 	}
 }
 
-// upsertConsumer gates workers on ready; nil starts them immediately.
+// upsertConsumer snapshots matching offsets and gates workers on ready; nil starts them immediately.
 func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready <-chan struct{}, onStop func(), onAck func(uint32) error) error {
 	if err := t.validate(); err != nil {
 		return err
@@ -66,9 +66,16 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready 
 
 	t.mu.Lock()
 
-	oldConsumer, err := t.registerConsumer(consumerCTX, newConsumer)
+	offsets, err := t.messageOffsetTrie.Search(newConsumer.info.Prefix(), newConsumer.info.Offset())
+	var oldConsumer *subscription
 	if err == nil {
-		t.startConsumerWorkers(consumerCTX, newConsumer, ready, onStop)
+		oldConsumer, err = t.registerConsumer(consumerCTX, newConsumer)
+		if err == nil {
+			if len(offsets) != 0 {
+				newConsumer.connection.MessageChan <- offsets
+			}
+			t.startConsumerWorkers(consumerCTX, newConsumer, ready, onStop)
+		}
 	}
 
 	t.mu.Unlock()
@@ -353,11 +360,15 @@ func (t *Topic) storeMessage(message protocol.Message) error {
 	}
 	t.messages = append(t.messages, message)
 	for _, consumerID := range consumers {
-		if c, exists := t.consumerMap.Get(consumerID); exists {
+		if c, exists := t.consumerMap.Get(consumerID); exists && offset >= c.info.Offset() {
+			var pending []uint32
+			// Only the batch still owned by the channel may be extended.
+			// t.mu serializes producers; delivery only removes batches.
 			select {
-			case c.connection.MessageChan <- message:
+			case pending = <-c.connection.MessageChan:
 			default:
 			}
+			c.connection.MessageChan <- append(pending, offset)
 		}
 	}
 	return nil
@@ -365,33 +376,20 @@ func (t *Topic) storeMessage(message protocol.Message) error {
 
 // deliverMessages is the sending goroutine's entry point for one subscribed consumer.
 func (t *Topic) deliverMessages(ctx context.Context, c *subscription) {
-	nextOffset := c.info.Offset()
 	for {
-		t.mu.Lock()
-		stored, exists := t.consumerMap.Get(c.info.ID())
-		if !exists || stored.connection != c.connection || t.stopping {
-			t.mu.Unlock()
-			return
-		}
-		offsets, err := t.messageOffsetTrie.Search(c.info.Prefix(), nextOffset)
-		t.mu.Unlock()
-		if err != nil {
-			return
-		}
-		for _, offset := range offsets {
-			if !t.deliverMessage(ctx, c, offset) {
-				return
-			}
-			nextOffset = offset + 1
-		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.connection.Done():
 			return
-		case _, ok := <-c.connection.MessageChan:
+		case offsets, ok := <-c.connection.MessageChan:
 			if !ok {
 				return
+			}
+			for _, offset := range offsets {
+				if !t.deliverMessage(ctx, c, offset) {
+					return
+				}
 			}
 		}
 	}
