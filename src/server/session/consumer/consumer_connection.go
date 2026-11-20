@@ -11,8 +11,8 @@ import (
 
 // Connection holds connection resources; it must not be copied.
 type Connection struct {
-	// MessageChan carries messages to deliver.
-	MessageChan chan protocol.Message
+	// MessageChan carries ordered batches of matching message offsets.
+	MessageChan chan []uint32
 	// AcknowledgedChan carries acknowledged offsets.
 	AcknowledgedChan chan uint32
 	// HeartbeatChan carries received heartbeats.
@@ -38,8 +38,8 @@ func newConnection(ctx context.Context, ipcPath string) (*Connection, error) {
 
 	connectionCtx, cancel := context.WithCancel(ctx)
 	return &Connection{
-		MessageChan:      make(chan protocol.Message),
-		AcknowledgedChan: make(chan uint32),
+		MessageChan:      make(chan []uint32, 1),
+		AcknowledgedChan: make(chan uint32, 1),
 		HeartbeatChan:    make(chan struct{}),
 		outbound:         outbound,
 		done:             connectionCtx.Done(),

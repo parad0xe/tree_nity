@@ -18,6 +18,7 @@ import (
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/response"
+	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/session/topic"
 )
 
@@ -666,10 +667,11 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 		name    string
 		opcode  protocol.Opcode
 		payload protocol.Payload
+		wantErr error
 	}{
-		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 1)},
-		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1")},
-		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1")},
+		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 1), wantErr: consumer.ErrNotFound},
+		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: errUnhandledOpcode},
+		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: errUnhandledOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -680,8 +682,8 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, inbound.IPCPath(), err)
 			}
-			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, errUnhandledOpcode) {
-				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, errUnhandledOpcode)
+			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, tt.wantErr) {
+				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.General, tt.wantErr)
 			}
 			// A marker sent after dispatch must be the first frame in the client queue.
 			if err := response.SendToClient(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
@@ -1121,6 +1123,64 @@ func TestListenRepliesWithConsumerInfo(t *testing.T) {
 	c.cancel()
 	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
 		t.Errorf("listen() after ConsumerInfo and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+// TestListenCommitsAcknowledgements checks delivery and immediately queryable progress over IPC.
+func TestListenCommitsAcknowledgements(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	producer, err := ipc.NewInbound(inbound.IPCPath()+".producer", protocol.Decode)
+	if err != nil {
+		t.Fatalf("NewInbound(producer) during setup error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := producer.Drop(); err != nil {
+			t.Errorf("Drop(producer) error = %v, want nil", err)
+		}
+	})
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	request := func(ipcPath string, opcode protocol.Opcode, payload protocol.Payload) {
+		data, err := protocol.NewData(opcode, protocol.NewClientMetadata(ipcPath), payload)
+		if err != nil {
+			t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+		}
+		frame, err := protocol.Encode(data)
+		if err != nil {
+			t.Fatalf("Encode(%v) error = %v, want nil", opcode, err)
+		}
+		send(t, app.inbound.IPCPath(), string(frame))
+	}
+	sendCreateRequest(t, app, producer.IPCPath(), "events")
+	receiveServerReply(t, producer, protocol.CreateTopicReply)
+	for offset := 0; offset < 2; offset++ {
+		request(producer.IPCPath(), protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte{byte(offset)})))
+		receiveServerReply(t, producer, protocol.ProduceMessageReply)
+	}
+	request(inbound.IPCPath(), protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
+	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+	for offset := uint32(0); offset < 2; offset++ {
+		data := receiveServerReply(t, inbound, protocol.MessageDelivery)
+		delivery, ok := data.Payload().(*protocol.MessageDeliveryPayload)
+		if !ok {
+			t.Fatalf("MessageDelivery(%d) payload = %T, want *protocol.MessageDeliveryPayload", offset, data.Payload())
+		}
+		if message := delivery.Message(); message.Offset() != offset || string(message.Key()) != "key" || len(message.Value()) != 1 || message.Value()[0] != byte(offset) {
+			t.Errorf("MessageDelivery(%d) = offset %d, key %x, value %x, want key and value %x", offset, message.Offset(), message.Key(), message.Value(), []byte{byte(offset)})
+		}
+		request(inbound.IPCPath(), protocol.Acknowledgement, protocol.NewAcknowledgementPayload("subscriber", offset+1))
+		request(producer.IPCPath(), protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("caller", "subscriber"))
+		data = receiveServerReply(t, producer, protocol.ConsumerInfoReply)
+		info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
+		if !ok || info.Offset() != offset+1 {
+			t.Errorf("ConsumerInfo(subscriber) after ACK(%d) = %+v, want saved offset %d", offset+1, data.Payload(), offset+1)
+		}
+	}
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after delivery, ACK and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 
