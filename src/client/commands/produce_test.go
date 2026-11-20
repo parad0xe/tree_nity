@@ -9,13 +9,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
-	"tree_nity/src/lifecycle"
 )
 
 // testMessage is a key and value that a produce request carries.
@@ -24,23 +22,12 @@ type testMessage struct {
 	value string
 }
 
-// executeResult is what Execute returned.
-type executeResult struct {
-	code int
-	err  error
-}
-
 // newProduceEnv returns an Env reading stdin, whose inbound already holds the
 // replies in order, with the queue of the server.
 func newProduceEnv(t *testing.T, stdin io.ReadCloser, reply protocol.Data, nextReplies ...protocol.Data) (Env, *ipc.Inbound) {
 	t.Helper()
 	env, server, _ := newCommandEnv(t, reply)
-	client := newTestOutbound(t, env.Inbound.IPCPath())
-	for _, next := range nextReplies {
-		if err := client.Send(context.Background(), next); err != nil {
-			t.Fatalf("Send(%d) error = %v, want nil", next.Opcode(), err)
-		}
-	}
+	sendTestReplies(t, env, nextReplies...)
 	env.Stdin = stdin
 	return env, server
 }
@@ -81,30 +68,6 @@ func rawRecord(key, value []byte) []byte {
 	record = append(record, key...)
 	record = binary.LittleEndian.AppendUint32(record, uint32(len(value)))
 	return append(record, value...)
-}
-
-// requestedShutdown returns a shutdown that is already requested.
-func requestedShutdown() lifecycle.GracefulShutdown {
-	requested := make(chan struct{})
-	close(requested)
-	return lifecycle.NewGracefulShutdown(requested)
-}
-
-// executeWithTimeout runs cmd, and fails the test if it does not return within testTimeout.
-func executeWithTimeout(t *testing.T, cmd Command, env Env) (int, error) {
-	t.Helper()
-	result := make(chan executeResult, 1)
-	go func() {
-		code, err := cmd.Execute(context.Background(), env)
-		result <- executeResult{code: code, err: err}
-	}()
-	select {
-	case res := <-result:
-		return res.code, res.err
-	case <-time.After(testTimeout):
-		t.Fatalf("Execute() did not return within %v", testTimeout)
-		return 0, nil
-	}
 }
 
 func TestParseProduceReadsTopic(t *testing.T) {
