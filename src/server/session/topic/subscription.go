@@ -15,6 +15,8 @@ type subscription struct {
 	onAck          func(uint32) error
 	awaitingACK    bool
 	expectedOffset uint32
+	// done closes after both workers finish cleanup, including onStop.
+	done chan struct{}
 }
 
 func (s *subscription) validate() error {

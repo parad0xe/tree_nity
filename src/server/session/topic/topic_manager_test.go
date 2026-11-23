@@ -85,6 +85,17 @@ func subscriptionTarget(t *testing.T, manager *Manager, name string) (*Topic, co
 	return target, ctx, cancel
 }
 
+func subscriptionSnapshot(t *testing.T, target *Topic, name id.ID) subscription {
+	t.Helper()
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	c, exists := target.consumerMap.Get(name)
+	if !exists || c == nil {
+		t.Fatalf("subscription %q = %+v, exists %t, want a registered subscription", name, c, exists)
+	}
+	return *c
+}
+
 // TestManagerConsumerInfoRepliesWithStoredMetadata checks current state without connection changes.
 func TestManagerConsumerInfoRepliesWithStoredMetadata(t *testing.T) {
 	tests := []struct {
@@ -354,6 +365,111 @@ func TestManagerAcknowledgementRejectsMissingConnections(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestManagerConsumerDisconnectRejectsMissingConnections checks one-way routing failures.
+func TestManagerConsumerDisconnectRejectsMissingConnections(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing bool
+		topic    bool
+	}{
+		{name: "unknown consumer"},
+		{name: "missing topic", existing: true},
+		{name: "disconnected consumer", existing: true, topic: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if tt.topic {
+				subscriptionTarget(t, manager, "events")
+			}
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("subscriber", "events", 17, "user/", "/subscriber"); err != nil {
+					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
+				}
+			}
+			err := manager.ConsumerDisconnect(t.Context(), *protocol.NewClientMetadata("/subscriber"), *protocol.NewConsumerDisconnectPayload("subscriber"))
+			if !errors.Is(err, consumer.ErrNotFound) {
+				t.Errorf("ConsumerDisconnect(subscriber) with %s error = %v, want %v", tt.name, err, consumer.ErrNotFound)
+			}
+			if tt.existing {
+				c, err := manager.consumerManager.GetConsumer("subscriber")
+				if err != nil || c.Info.Offset() != 17 || c.Info.Topic() != "events" || c.Info.Prefix() != "user/" || c.Info.IPCPath() != "/subscriber" {
+					t.Errorf("saved subscriber after rejected disconnect = %+v, %v, want events, offset 17, user/, /subscriber and nil", c, err)
+				}
+			}
+		})
+	}
+}
+
+// TestManagerConsumerDisconnectPropagatesLookupErrors checks the existing manager error contract.
+func TestManagerConsumerDisconnectPropagatesLookupErrors(t *testing.T) {
+	manager := NewManager()
+	manager.consumerManager = nil
+	err := manager.ConsumerDisconnect(t.Context(), *protocol.NewClientMetadata("/subscriber"), *protocol.NewConsumerDisconnectPayload("subscriber"))
+	if !errors.Is(err, consumer.ErrManagerUninitialized) {
+		t.Errorf("ConsumerDisconnect(subscriber) with an uninitialized consumer manager error = %v, want %v", err, consumer.ErrManagerUninitialized)
+	}
+}
+
+// TestManagerConsumerDisconnectRejectsStoppedContexts checks cancellation before detachment.
+func TestManagerConsumerDisconnectRejectsStoppedContexts(t *testing.T) {
+	tests := []struct {
+		name    string
+		expired bool
+		wantErr error
+	}{
+		{name: "canceled", wantErr: context.Canceled},
+		{name: "expired", expired: true, wantErr: context.DeadlineExceeded},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			target, lifetime, _ := subscriptionTarget(t, manager, "events")
+			inbound := deliveryInbox(t, "consumer")
+			subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			if tt.expired {
+				ctx, cancel = context.WithDeadline(t.Context(), time.Unix(0, 0))
+				defer cancel()
+			}
+			err := manager.ConsumerDisconnect(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), *protocol.NewConsumerDisconnectPayload("subscriber"))
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("ConsumerDisconnect(subscriber) with %s context error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+			current := subscriptionSnapshot(t, target, "subscriber")
+			select {
+			case <-current.connection.Done():
+				t.Errorf("Done(subscriber) after rejected %s disconnect is closed, want open", tt.name)
+			default:
+			}
+		})
+	}
+}
+
+// TestManagerConsumerDisconnectRejectsReplacedIPC checks that an old client cannot stop its replacement.
+func TestManagerConsumerDisconnectRejectsReplacedIPC(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	first := deliveryInbox(t, "first")
+	subscribeForDelivery(t, manager, lifetime, first, "subscriber", "", nil)
+	payload := *protocol.NewConsumerDisconnectPayload("subscriber")
+	if err := manager.ConsumerDisconnect(topicManagerContext(t), *protocol.NewClientMetadata(first.IPCPath()), payload); err != nil {
+		t.Fatalf("ConsumerDisconnect(subscriber) for the original IPC error = %v, want nil", err)
+	}
+	second := deliveryInbox(t, "second")
+	subscribeForDelivery(t, manager, lifetime, second, "subscriber", "", nil)
+	err := manager.ConsumerDisconnect(topicManagerContext(t), *protocol.NewClientMetadata(first.IPCPath()), payload)
+	if !errors.Is(err, consumer.ErrNotFound) {
+		t.Errorf("ConsumerDisconnect(subscriber) from replaced IPC error = %v, want %v", err, consumer.ErrNotFound)
+	}
+	if err := target.ProduceMessage(topicManagerContext(t), deliveryMessage(0)); err != nil {
+		t.Fatalf("ProduceMessage(0) after rejecting old IPC error = %v, want nil", err)
+	}
+	receiveDelivery(t, second, 0, deliveryMessage(0))
+	acknowledgeDelivery(t, manager, second, "subscriber", 1)
 }
 
 // TestManagerNewSubscriptionRejectsShutdown checks admission without metadata changes.

@@ -671,7 +671,7 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 	}{
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 1), wantErr: consumer.ErrNotFound},
 		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: errUnhandledOpcode},
-		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: errUnhandledOpcode},
+		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: consumer.ErrNotFound},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -690,6 +690,52 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 				t.Fatalf("SendToClient(ServerShutdown) after dispatch(%v) error = %v, want nil", tt.opcode, err)
 			}
 			receiveServerReply(t, inbound, protocol.ServerShutdown)
+		})
+	}
+}
+
+// TestDispatchConsumerDisconnectReleasesName checks one-way dispatch during normal operation and shutdown.
+func TestDispatchConsumerDisconnectReleasesName(t *testing.T) {
+	tests := []struct {
+		name     string
+		shutdown bool
+	}{
+		{name: "normal operation"},
+		{name: "shutdown requested", shutdown: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &application{topicManager: topic.NewManager()}
+			inbound := newServerClientInbox(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+			dispatch := func(shutdown lifecycle.GracefulShutdown, opcode protocol.Opcode, payload protocol.Payload) {
+				t.Helper()
+				data, err := protocol.NewData(opcode, &metadata, payload)
+				if err != nil {
+					t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+				}
+				if code, err := app.dispatch(ctx, shutdown, data); code != exitcode.Success || err != nil {
+					t.Fatalf("dispatch(%v) during %s = %d, %v, want %d and nil", opcode, tt.name, code, err, exitcode.Success)
+				}
+			}
+			dispatch(lifecycle.GracefulShutdown{}, protocol.CreateTopic, protocol.NewCreateTopicPayload("events"))
+			receiveServerReply(t, inbound, protocol.CreateTopicReply)
+			subscription := protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil)
+			dispatch(lifecycle.GracefulShutdown{}, protocol.TopicSubscription, subscription)
+			receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+			var shutdown lifecycle.GracefulShutdown
+			if tt.shutdown {
+				shutdown = requestedShutdown()
+			}
+			dispatch(shutdown, protocol.ConsumerDisconnect, protocol.NewConsumerDisconnectPayload("subscriber"))
+			if err := response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+				t.Fatalf("SendToClient(marker) after disconnect during %s error = %v, want nil", tt.name, err)
+			}
+			receiveServerReply(t, inbound, protocol.ServerShutdown)
+			dispatch(lifecycle.GracefulShutdown{}, protocol.TopicSubscription, subscription)
+			receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
 		})
 	}
 }
@@ -1181,6 +1227,45 @@ func TestListenCommitsAcknowledgements(t *testing.T) {
 	c.cancel()
 	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
 		t.Errorf("listen() after delivery, ACK and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+// TestListenDisconnectsConsumer checks immediate name reuse and metadata preservation over IPC.
+func TestListenDisconnectsConsumer(t *testing.T) {
+	app := newTestApplication(t)
+	inbound := newServerClientInbox(t)
+	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+		return app.listen(ctx, lifecycle.GracefulShutdown{})
+	})
+	request := func(opcode protocol.Opcode, payload protocol.Payload) {
+		t.Helper()
+		data, err := protocol.NewData(opcode, protocol.NewClientMetadata(inbound.IPCPath()), payload)
+		if err != nil {
+			t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+		}
+		frame, err := protocol.Encode(data)
+		if err != nil {
+			t.Fatalf("Encode(%v) error = %v, want nil", opcode, err)
+		}
+		send(t, app.inbound.IPCPath(), string(frame))
+	}
+	request(protocol.CreateTopic, protocol.NewCreateTopicPayload("events"))
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	offset := uint32(42)
+	request(protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "user/", &offset))
+	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+	request(protocol.ConsumerDisconnect, protocol.NewConsumerDisconnectPayload("subscriber"))
+	request(protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "user/", nil))
+	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+	request(protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("subscriber"))
+	data := receiveServerReply(t, inbound, protocol.ConsumerInfoReply)
+	info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
+	if !ok || info.Client() != "subscriber" || info.Topic() != "events" || info.Offset() != offset || info.Prefix() != "user/" || info.IPC() != inbound.IPCPath() {
+		t.Errorf("ConsumerInfo(subscriber) after disconnect and resubscribe = %+v, want events, offset %d, user/ and IPC %q", data.Payload(), offset, inbound.IPCPath())
+	}
+	c.cancel()
+	if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+		t.Errorf("listen() after disconnect, resubscribe and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
 	}
 }
 
