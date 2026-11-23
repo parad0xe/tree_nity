@@ -157,6 +157,11 @@ func TestConsumerExpirationReleasesName(t *testing.T) {
 		if !waitTopicWorkers(t, target) {
 			return
 		}
+		data := receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerConsumerDisconnect)
+		payload, ok := data.Payload().(*protocol.ServerConsumerDisconnectPayload)
+		if !ok || payload.ClientID() != "subscriber" {
+			t.Errorf("expiration notification payload = %#v, want ServerConsumerDisconnectPayload for subscriber", data.Payload())
+		}
 		select {
 		case <-connection.Done():
 		default:
@@ -2438,4 +2443,30 @@ func TestManagerCreateTopicRejectsConcurrentDuplicates(t *testing.T) {
 	if stored, exists := manager.topicMap.Get("events"); !exists || stored == nil {
 		t.Errorf("Get(events) after concurrent creation = %p, exists = %t, want an initialized topic and true", stored, exists)
 	}
+}
+
+// TestConsumerExpirationPrioritizesDisconnect checks the notification before queued deliveries.
+func TestConsumerExpirationPrioritizesDisconnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		inbound := expirationInbox(t, "consumer")
+		subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+		if err := target.storeMessage(deliveryMessage(0)); err != nil {
+			t.Fatalf("storeMessage(0) error = %v, want nil", err)
+		}
+		synctest.Wait()
+		<-time.After(consumerTimeout)
+		synctest.Wait()
+		if !waitTopicWorkers(t, target) {
+			return
+		}
+		data := receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerConsumerDisconnect)
+		payload, ok := data.Payload().(*protocol.ServerConsumerDisconnectPayload)
+		if !ok || payload.ClientID() != "subscriber" {
+			t.Errorf("expiration notification before queued delivery = %#v, want disconnect for subscriber", data.Payload())
+		}
+		receiveDelivery(t, inbound, 0, deliveryMessage(0))
+		checkSavedOffset(t, manager, "subscriber", 0)
+	})
 }

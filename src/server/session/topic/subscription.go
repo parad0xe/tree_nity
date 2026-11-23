@@ -11,6 +11,9 @@ import (
 // consumerTimeout is the maximum inactivity after confirmation or an accepted notification.
 const consumerTimeout = 30 * time.Second
 
+// disconnectTimeout bounds the final notification before expiration cleanup.
+const disconnectTimeout = 100 * time.Millisecond
+
 // subscription snapshots metadata and a connection for one pair of workers.
 type subscription struct {
 	info           consumer.Info

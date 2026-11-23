@@ -194,11 +194,21 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 		defer t.waitGroup.Done()
 		cleanupOnce.Do(func() {
 			newConsumer.cancel()
-			// Worker cleanup is best-effort; explicit removals report cleanup errors.
-			_ = t.removeConsumer(newConsumer)
 			t.mu.Lock()
 			expired := newConsumer.liveness.expired
 			t.mu.Unlock()
+			if expired {
+				data, err := protocol.NewData(protocol.ServerConsumerDisconnect, protocol.NewServerMetadata(),
+					protocol.NewServerConsumerDisconnectPayload(string(newConsumer.info.ID())))
+				if err == nil {
+					notifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), disconnectTimeout)
+					// A full queue must not prevent expiration cleanup.
+					_ = newConsumer.connection.SendAhead(notifyCtx, data)
+					cancel()
+				}
+			}
+			// Worker cleanup is best-effort; explicit removals report cleanup errors.
+			_ = t.removeConsumer(newConsumer)
 			if expired {
 				// Keep the name reserved until closure and queue removal finish.
 				_ = newConsumer.connection.Drop()
