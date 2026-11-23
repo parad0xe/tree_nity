@@ -490,13 +490,18 @@ func TestSubscribeExecuteKeepsWaitingAfterRecvTimeout(t *testing.T) {
 
 func TestSubscribeExecuteReturnsConfirmationWriteError(t *testing.T) {
 	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
-	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
 	env.Stdout = failingWriter{}
 
 	code, err := executeWithTimeout(t, cmd, env)
 
 	if code != exitcode.General || !errors.Is(err, errTestWrite) {
 		t.Errorf("Execute() with a failing write of the confirmation = %d, %v, want %d, %v", code, err, exitcode.General, errTestWrite)
+	}
+	recvTestData(t, server)
+	want := newSubscriberData(t, env, protocol.ConsumerDisconnect, protocol.NewConsumerDisconnectPayload(string(cmd.subscriber)))
+	if got := recvTestData(t, server); !reflect.DeepEqual(got, want) {
+		t.Errorf("request of Execute() after a failing write of the confirmation = %+v, want %+v", got, want)
 	}
 }
 
