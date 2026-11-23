@@ -10,7 +10,7 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-// TestConsumerInfoRoundTrip checks that the queried subscriber is independent of the caller.
+// TestConsumerInfoRoundTrip checks that requests carry only the subscriber and route replies through metadata.
 func TestConsumerInfoRoundTrip(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -24,14 +24,14 @@ func TestConsumerInfoRoundTrip(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := protocol.NewConsumerInfoPayload("caller-1", tt.subscriber)
+			payload := protocol.NewConsumerInfoPayload(tt.subscriber)
 			data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata("/caller-1"), payload)
 			if err != nil {
 				t.Errorf("NewData(ConsumerInfo, caller-1, subscriber=%q) error = %v, want nil", tt.subscriber, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":2,"emitter":0,"metadata":{"clientIPC":"/caller-1"},"payload":{"clientId":"caller-1","subscriber":%q}}`, tt.subscriber)
+			wantFrame := fmt.Sprintf(`{"opcode":2,"emitter":0,"metadata":{"clientIPC":"/caller-1"},"payload":{"subscriber":%q}}`, tt.subscriber)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -115,7 +115,7 @@ func TestNewDataRejectsInvalidConsumerInfoPayloads(t *testing.T) {
 	}{
 		{name: "nil request", opcode: protocol.ConsumerInfo, metadata: client, payload: (*protocol.ConsumerInfoPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero request", opcode: protocol.ConsumerInfo, metadata: client, payload: &protocol.ConsumerInfoPayload{}, wantErr: protocol.ErrInvalidPayload},
-		{name: "invalid subscriber", opcode: protocol.ConsumerInfo, metadata: client, payload: protocol.NewConsumerInfoPayload("caller-1", "consumer/name"), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid subscriber", opcode: protocol.ConsumerInfo, metadata: client, payload: protocol.NewConsumerInfoPayload("consumer/name"), wantErr: protocol.ErrInvalidPayload},
 		{name: "nil reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: (*protocol.ConsumerInfoReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: &protocol.ConsumerInfoReplyPayload{}, wantErr: protocol.ErrInvalidPayload},
 		{name: "empty reply topic", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "", 0, "", ""), wantErr: protocol.ErrInvalidPayload},

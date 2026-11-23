@@ -49,8 +49,6 @@ func (p createTopicPayloadJSON) validate() error {
 }
 
 type consumerInfoPayloadJSON struct {
-	// ClientID is required and must match ^[a-zA-Z0-9_.-]{1,32}$.
-	ClientID *string `json:"clientId"`
 	// Subscriber is the required consumer name to query.
 	Subscriber *string `json:"subscriber"`
 }
@@ -59,7 +57,7 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	payload := &ConsumerInfoPayload{clientID: *p.ClientID, subscriber: *p.Subscriber}
+	payload := &ConsumerInfoPayload{subscriber: *p.Subscriber}
 	if err := payload.validate(); err != nil {
 		return nil, err
 	}
@@ -67,9 +65,6 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p consumerInfoPayloadJSON) validate() error {
-	if p.ClientID == nil {
-		return ErrMissingClientID
-	}
 	if p.Subscriber == nil {
 		return ErrMissingSubscriber
 	}

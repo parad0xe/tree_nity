@@ -24,7 +24,7 @@ func TestNewData(t *testing.T) {
 	}{
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), json: `{}`},
 		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), json: `{"topic":"orders"}`},
-		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), json: `{"clientId":"client-1","subscriber":"consumer-1"}`},
+		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1"), json: `{"subscriber":"consumer-1"}`},
 		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "orders", "", nil), json: `{"clientId":"client-1","topic":"orders","prefix":""}`},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 0), json: `{"clientId":"client-1","offset":0}`},
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), json: `{"topic":"orders"}`},
@@ -138,7 +138,7 @@ func TestNewDataRejectsClientPayloadsFromServer(t *testing.T) {
 	}{
 		{name: "list topic", opcode: protocol.ListTopic, payload: protocol.NewListTopicPayload(), wantErr: protocol.ErrInvalidPayload},
 		{name: "create topic", opcode: protocol.CreateTopic, payload: protocol.NewCreateTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},
-		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: protocol.ErrInvalidPayload},
+		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1"), wantErr: protocol.ErrInvalidPayload},
 		{name: "topic subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("client-1", "orders", "", nil), wantErr: protocol.ErrInvalidPayload},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 0), wantErr: protocol.ErrInvalidPayload},
 		{name: "check topic", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("orders"), wantErr: protocol.ErrInvalidPayload},

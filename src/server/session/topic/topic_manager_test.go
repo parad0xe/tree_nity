@@ -141,7 +141,7 @@ func TestManagerConsumerInfoRepliesWithStoredMetadata(t *testing.T) {
 			if err := manager.consumerManager.UpdateInfo(consumerID, nil, &tt.offset, nil, nil); err != nil {
 				t.Fatalf("UpdateInfo(%q, offset %d) during setup error = %v, want nil", consumerID, tt.offset, err)
 			}
-			payload := *protocol.NewConsumerInfoPayload("caller-1", string(consumerID))
+			payload := *protocol.NewConsumerInfoPayload(string(consumerID))
 			if err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
 				t.Errorf("ConsumerInfo(%q) error = %v, want nil", consumerID, err)
 				return
@@ -200,7 +200,7 @@ func TestManagerConsumerInfoRejectsUnknownSubscriber(t *testing.T) {
 			}
 			ctx := topicManagerContext(t)
 			inbound := newTopicManagerInbox(t)
-			payload := *protocol.NewConsumerInfoPayload("consumer-000", "missing")
+			payload := *protocol.NewConsumerInfoPayload("missing")
 			if err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload); err != nil {
 				t.Errorf("ConsumerInfo(missing) error = %v, want nil after rejection", err)
 				return
@@ -241,7 +241,7 @@ func TestManagerConsumerInfoPropagatesQueueErrors(t *testing.T) {
 					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
 				}
 			}
-			payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+			payload := *protocol.NewConsumerInfoPayload("subscriber")
 			if err := manager.ConsumerInfo(topicManagerContext(t), *protocol.NewClientMetadata(tt.ipcPath), payload); !errors.Is(err, tt.wantErr) {
 				t.Errorf("ConsumerInfo(subscriber) with reply queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
 			}
@@ -275,7 +275,7 @@ func TestManagerConsumerInfoPropagatesStoppedContexts(t *testing.T) {
 				}
 			}
 			inbound := newTopicManagerInbox(t)
-			payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+			payload := *protocol.NewConsumerInfoPayload("subscriber")
 			err := manager.ConsumerInfo(tt.ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload)
 			if !errors.Is(err, tt.wantErr) || !errors.Is(err, response.ErrReply) {
 				t.Errorf("ConsumerInfo(subscriber) with %s error = %v, want %v and %v", tt.name, err, tt.wantErr, response.ErrReply)
@@ -305,7 +305,7 @@ func TestManagerConsumerInfoTimesOutOnFullQueue(t *testing.T) {
 			fillSubscriptionInbox(t, inbound)
 			ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 			defer cancel()
-			payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+			payload := *protocol.NewConsumerInfoPayload("subscriber")
 			err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload)
 			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, response.ErrReply) {
 				t.Errorf("ConsumerInfo(subscriber) with a full reply queue error = %v, want %v and %v", err, context.DeadlineExceeded, response.ErrReply)
@@ -318,7 +318,7 @@ func TestManagerConsumerInfoTimesOutOnFullQueue(t *testing.T) {
 func TestManagerConsumerInfoPropagatesLookupErrors(t *testing.T) {
 	manager := NewManager()
 	manager.consumerManager = nil
-	payload := *protocol.NewConsumerInfoPayload("caller-1", "subscriber")
+	payload := *protocol.NewConsumerInfoPayload("subscriber")
 	err := manager.ConsumerInfo(t.Context(), *protocol.NewClientMetadata("/invalid/queue"), payload)
 	if !errors.Is(err, consumer.ErrManagerUninitialized) {
 		t.Errorf("ConsumerInfo(subscriber) with an uninitialized consumer manager error = %v, want %v", err, consumer.ErrManagerUninitialized)
