@@ -1257,7 +1257,7 @@ func TestListenDisconnectsConsumer(t *testing.T) {
 	request(protocol.ConsumerDisconnect, protocol.NewConsumerDisconnectPayload("subscriber"))
 	request(protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "user/", nil))
 	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
-	request(protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("caller", "subscriber"))
+	request(protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("subscriber"))
 	data := receiveServerReply(t, inbound, protocol.ConsumerInfoReply)
 	info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
 	if !ok || info.Client() != "subscriber" || info.Topic() != "events" || info.Offset() != offset || info.Prefix() != "user/" || info.IPC() != inbound.IPCPath() {
