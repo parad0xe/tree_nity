@@ -740,7 +740,7 @@ func TestDispatchConsumerDisconnectReleasesName(t *testing.T) {
 	}
 }
 
-// TestDispatchConsumerHeartbeatRoutesActiveConsumer checks successful one-way dispatch.
+// TestDispatchConsumerHeartbeatRoutesActiveConsumer checks the empty heartbeat response.
 func TestDispatchConsumerHeartbeatRoutesActiveConsumer(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
@@ -762,10 +762,7 @@ func TestDispatchConsumerHeartbeatRoutesActiveConsumer(t *testing.T) {
 	dispatch(protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
 	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
 	dispatch(protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("subscriber"))
-	if err := response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
-		t.Fatalf("SendToClient(marker) after ConsumerHeartbeat error = %v, want nil", err)
-	}
-	receiveServerReply(t, inbound, protocol.ServerShutdown)
+	receiveServerReply(t, inbound, protocol.ConsumerHeartbeatReply)
 }
 
 // TestDispatchRejectsServerFrames checks rejection of server opcodes overlapping client opcodes.
