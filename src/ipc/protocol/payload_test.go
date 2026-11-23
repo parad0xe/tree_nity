@@ -20,7 +20,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{subscriber: "consumer-1"}},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"id":"consumer-1"}`, want: &ConsumerInfoPayload{id: "consumer-1"}},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{"clientId":"client-1","topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{"clientId":"client-1","offset":0}`, want: &AcknowledgementPayload{clientID: "client-1"}},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
@@ -63,7 +63,7 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{"unexpected":true}`},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders","unexpected":true}`},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1","unexpected":true}`},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"id":"consumer-1","unexpected":true}`},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{"clientId":"client-1","topic":"orders","prefix":"","unexpected":true}`},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{"clientId":"client-1","offset":0,"unexpected":true}`},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders","unexpected":true}`},

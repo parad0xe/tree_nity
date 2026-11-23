@@ -100,7 +100,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 
 // ConsumerInfo replies with saved subscriber metadata; ctx bounds reply delivery.
 func (m *Manager) ConsumerInfo(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerInfoPayload) error {
-	c, err := m.consumerManager.GetConsumer(id.ID(payload.Subscriber()))
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.ID()))
 	if errors.Is(err, consumer.ErrNotFound) {
 		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.ClientNotFound, err.Error()))

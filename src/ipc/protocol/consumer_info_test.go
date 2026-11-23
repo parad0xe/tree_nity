@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestConsumerInfoPayloadToJSONRejectsInvalidInput checks subscriber names and routing.
+// TestConsumerInfoPayloadToJSONRejectsInvalidInput checks id names and routing.
 func TestConsumerInfoPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -19,11 +19,11 @@ func TestConsumerInfoPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}{
 		{name: "nil payload", emitter: Client, opcode: ConsumerInfo, wantErr: ErrMissingPayload},
 		{name: "zero value", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{}, wantErr: ErrInvalidPayload},
-		{name: "long subscriber", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: strings.Repeat("c", 33)}, wantErr: ErrInvalidPayload},
-		{name: "invalid subscriber", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer/name"}, wantErr: ErrInvalidPayload},
-		{name: "invalid UTF-8", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "\xff"}, wantErr: ErrInvalidPayload},
-		{name: "wrong opcode", emitter: Client, opcode: ListTopic, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, wantErr: ErrInvalidPayload},
-		{name: "server emitter", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, wantErr: ErrInvalidPayload},
+		{name: "long id", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{id: strings.Repeat("c", 33)}, wantErr: ErrInvalidPayload},
+		{name: "invalid id", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{id: "consumer/name"}, wantErr: ErrInvalidPayload},
+		{name: "invalid UTF-8", emitter: Client, opcode: ConsumerInfo, payload: &ConsumerInfoPayload{id: "\xff"}, wantErr: ErrInvalidPayload},
+		{name: "wrong opcode", emitter: Client, opcode: ListTopic, payload: &ConsumerInfoPayload{id: "consumer-1"}, wantErr: ErrInvalidPayload},
+		{name: "server emitter", emitter: Server, opcode: ConsumerInfoReply, payload: &ConsumerInfoPayload{id: "consumer-1"}, wantErr: ErrInvalidPayload},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -63,27 +63,28 @@ func TestConsumerInfoReplyPayloadToJSONRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsInvalidConsumerInfo checks the required subscriber and strict JSON fields.
+// TestDecodeRejectsInvalidConsumerInfo checks the required id and strict JSON fields.
 func TestDecodeRejectsInvalidConsumerInfo(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload string
 		wantErr error
 	}{
-		{name: "missing subscriber", payload: `{}`, wantErr: ErrMissingSubscriber},
-		{name: "null subscriber", payload: `{"subscriber":null}`, wantErr: ErrMissingSubscriber},
-		{name: "empty subscriber", payload: `{"subscriber":""}`, wantErr: ErrInvalidPayload},
-		{name: "long subscriber", payload: `{"subscriber":"` + strings.Repeat("c", 33) + `"}`, wantErr: ErrInvalidPayload},
-		{name: "large subscriber", payload: `{"subscriber":"` + strings.Repeat("c", 4096) + `"}`, wantErr: ErrInvalidPayload},
-		{name: "space in subscriber", payload: `{"subscriber":"consumer name"}`, wantErr: ErrInvalidPayload},
-		{name: "slash in subscriber", payload: `{"subscriber":"consumer/name"}`, wantErr: ErrInvalidPayload},
-		{name: "non-ASCII subscriber", payload: `{"subscriber":"consommateur-é"}`, wantErr: ErrInvalidPayload},
-		{name: "numeric subscriber", payload: `{"subscriber":1}`},
-		{name: "boolean subscriber", payload: `{"subscriber":false}`},
-		{name: "array subscriber", payload: `{"subscriber":[]}`},
-		{name: "object subscriber", payload: `{"subscriber":{}}`},
-		{name: "removed client ID", payload: `{"clientId":"caller-1","subscriber":"consumer-1"}`, wantErr: ErrUnknownField},
-		{name: "unknown field", payload: `{"subscriber":"consumer-1","extra":true}`},
+		{name: "missing id", payload: `{}`, wantErr: ErrMissingID},
+		{name: "null id", payload: `{"id":null}`, wantErr: ErrMissingID},
+		{name: "empty id", payload: `{"id":""}`, wantErr: ErrInvalidPayload},
+		{name: "long id", payload: `{"id":"` + strings.Repeat("c", 33) + `"}`, wantErr: ErrInvalidPayload},
+		{name: "large id", payload: `{"id":"` + strings.Repeat("c", 4096) + `"}`, wantErr: ErrInvalidPayload},
+		{name: "space in id", payload: `{"id":"consumer name"}`, wantErr: ErrInvalidPayload},
+		{name: "slash in id", payload: `{"id":"consumer/name"}`, wantErr: ErrInvalidPayload},
+		{name: "non-ASCII id", payload: `{"id":"consommateur-é"}`, wantErr: ErrInvalidPayload},
+		{name: "numeric id", payload: `{"id":1}`},
+		{name: "boolean id", payload: `{"id":false}`},
+		{name: "array id", payload: `{"id":[]}`},
+		{name: "object id", payload: `{"id":{}}`},
+		{name: "old subscriber field", payload: `{"subscriber":"consumer-1"}`, wantErr: ErrUnknownField},
+		{name: "removed client ID", payload: `{"clientId":"caller-1","id":"consumer-1"}`, wantErr: ErrUnknownField},
+		{name: "unknown field", payload: `{"id":"consumer-1","extra":true}`},
 		{name: "null payload", payload: `null`, wantErr: ErrMissingPayload},
 		{name: "array payload", payload: `[]`},
 	}
@@ -178,7 +179,7 @@ func TestDecodeRejectsInvalidConsumerInfoReplyFields(t *testing.T) {
 		{name: "boolean IPC", field: "ipc", value: `false`},
 		{name: "array IPC", field: "ipc", value: `[]`},
 		{name: "object IPC", field: "ipc", value: `{}`},
-		{name: "request field", field: "subscriber", value: `"consumer-1"`},
+		{name: "request field", field: "id", value: `"consumer-1"`},
 		{name: "unknown field", field: "extra", value: `true`},
 	}
 	for _, tt := range tests {
