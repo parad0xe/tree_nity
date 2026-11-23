@@ -134,7 +134,7 @@ func (cmd *subscribeCommand) consume(ctx context.Context, recvCtx context.Contex
 
 		messagePayload, code, err := env.recv[*protocol.MessageDeliveryPayload](recvCtx, protocol.MessageDelivery)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				continue
 			}
 			if env.Shutdown.IsRequested() {
