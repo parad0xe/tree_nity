@@ -210,6 +210,21 @@ func (m *Manager) ConsumerDisconnect(ctx context.Context, metadata protocol.Clie
 	return target.disconnect(ctx, c.Info.ID(), metadata.ClientIPC())
 }
 
+// ConsumerHeartbeat postpones the active consumer's expiration without sending a reply.
+func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerHeartbeatPayload) error {
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.ClientID()))
+	if err != nil {
+		return err
+	}
+	m.mu.RLock()
+	target, exists := m.topicMap.Get(id.ID(c.Info.Topic()))
+	m.mu.RUnlock()
+	if !exists {
+		return consumer.ErrNotFound
+	}
+	return target.heartbeat(ctx, c.Info.ID(), metadata.ClientIPC())
+}
+
 // CheckTopic replies with existence or rejection status; ctx bounds delivery.
 func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.CheckTopicPayload) error {
 	topicID := id.ID(payload.Topic())

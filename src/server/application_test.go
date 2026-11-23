@@ -25,7 +25,7 @@ import (
 const (
 	// testTimeout is the longest a test waits for an event before it fails.
 	testTimeout = 5 * time.Second
-	// validFrame decodes to a heartbeat whose handler is not implemented yet.
+	// validFrame decodes to a heartbeat for an unknown consumer.
 	validFrame = `{"opcode":8,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1"}}`
 	// invalidFrame does not decode to protocol data.
 	invalidFrame = "not json"
@@ -418,7 +418,7 @@ func TestRunStopsAfterSignal(t *testing.T) {
 
 	// The frame shows that listen is running before the signal arrives.
 	send(t, app.inbound.IPCPath(), validFrame)
-	stderr.waitFor(t, errUnhandledOpcode.Error())
+	stderr.waitFor(t, consumer.ErrNotFound.Error())
 	// Requesting shutdown plays the role of SIGINT without canceling run's context.
 	close(requestedChan)
 
@@ -440,7 +440,7 @@ func TestRunStopsWhenCancelled(t *testing.T) {
 	})
 
 	send(t, app.inbound.IPCPath(), validFrame)
-	stderr.waitFor(t, errUnhandledOpcode.Error())
+	stderr.waitFor(t, consumer.ErrNotFound.Error())
 	c.cancel()
 
 	res := c.wait(t)
@@ -670,7 +670,7 @@ func TestDispatchDoesNotReplyToNotifications(t *testing.T) {
 		wantErr error
 	}{
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload("client-1", 1), wantErr: consumer.ErrNotFound},
-		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: errUnhandledOpcode},
+		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload("client-1"), wantErr: consumer.ErrNotFound},
 		{name: "disconnect", opcode: protocol.ConsumerDisconnect, payload: protocol.NewConsumerDisconnectPayload("client-1"), wantErr: consumer.ErrNotFound},
 	}
 	for _, tt := range tests {
@@ -738,6 +738,34 @@ func TestDispatchConsumerDisconnectReleasesName(t *testing.T) {
 			receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
 		})
 	}
+}
+
+// TestDispatchConsumerHeartbeatRoutesActiveConsumer checks successful one-way dispatch.
+func TestDispatchConsumerHeartbeatRoutesActiveConsumer(t *testing.T) {
+	app := &application{topicManager: topic.NewManager()}
+	inbound := newServerClientInbox(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	dispatch := func(opcode protocol.Opcode, payload protocol.Payload) {
+		t.Helper()
+		data, err := protocol.NewData(opcode, &metadata, payload)
+		if err != nil {
+			t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+		}
+		if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.Success || err != nil {
+			t.Fatalf("dispatch(%v) = %d, %v, want %d and nil", opcode, code, err, exitcode.Success)
+		}
+	}
+	dispatch(protocol.CreateTopic, protocol.NewCreateTopicPayload("events"))
+	receiveServerReply(t, inbound, protocol.CreateTopicReply)
+	dispatch(protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
+	receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+	dispatch(protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("subscriber"))
+	if err := response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+		t.Fatalf("SendToClient(marker) after ConsumerHeartbeat error = %v, want nil", err)
+	}
+	receiveServerReply(t, inbound, protocol.ServerShutdown)
 }
 
 // TestDispatchRejectsServerFrames checks rejection of server opcodes overlapping client opcodes.

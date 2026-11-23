@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tree_nity/src/ipc/id"
@@ -533,6 +534,87 @@ func TestTopicConsumerWorkersAwaitConfirmation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Error("consumer-1 heartbeat after confirmation was not consumed within 5s, want consumed")
 	}
+}
+
+// TestConsumerTimeoutStartsAfterConfirmation checks that a pending reply cannot expire a consumer.
+func TestConsumerTimeoutStartsAfterConfirmation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		target, ctx, cancel := newTestTopic(t)
+		c := connectedTopicConsumer(t, "events/", "pending-expiration")
+		if c == nil {
+			return
+		}
+		connection := c.Connection()
+		confirmed := make(chan struct{})
+		if err := target.upsertConsumer(ctx, c, confirmed, nil, nil); err != nil {
+			t.Errorf("upsertConsumer(consumer-1) before confirmation error = %v, want nil", err)
+			return
+		}
+		synctest.Wait()
+		<-time.After(2 * consumerTimeout)
+		synctest.Wait()
+		if got := subscriptionDeadline(t, target, "consumer-1"); !got.IsZero() {
+			t.Errorf("deadline before confirmation after %v = %v, want zero", 2*consumerTimeout, got)
+		}
+		select {
+		case <-connection.Done():
+			t.Error("Done(consumer-1) before confirmation is closed, want open")
+		default:
+		}
+		close(confirmed)
+		synctest.Wait()
+		want := time.Now().Add(consumerTimeout)
+		if got := subscriptionDeadline(t, target, "consumer-1"); !got.Equal(want) {
+			t.Errorf("deadline after confirmation = %v, want %v", got, want)
+		}
+		cancel()
+		if !waitTopicWorkers(t, target) {
+			return
+		}
+		sender, err := mqueue.NewSender(c.Info.IPCPath())
+		if err != nil {
+			t.Errorf("NewSender(%q) after ordinary cancellation error = %v, want nil", c.Info.IPCPath(), err)
+			return
+		}
+		if err := sender.Close(); err != nil {
+			t.Errorf("Close(%q) after ordinary cancellation error = %v, want nil", c.Info.IPCPath(), err)
+		}
+	})
+}
+
+// TestReplacedConsumerStopsItsTimer checks that an old worker cannot expire its replacement.
+func TestReplacedConsumerStopsItsTimer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		target, ctx, cancel := newTestTopic(t)
+		first := connectedTopicConsumer(t, "events/", "first-timer")
+		second := connectedTopicConsumer(t, "events/", "second-timer")
+		if first == nil || second == nil {
+			return
+		}
+		if err := target.upsertConsumer(ctx, first, nil, nil, nil); err != nil {
+			t.Errorf("upsertConsumer(first connection) error = %v, want nil", err)
+			return
+		}
+		synctest.Wait()
+		<-time.After(20 * time.Second)
+		if err := target.upsertConsumer(ctx, second, nil, nil, nil); err != nil {
+			t.Errorf("upsertConsumer(replacement connection) at 20s error = %v, want nil", err)
+			return
+		}
+		synctest.Wait()
+		<-time.After(11 * time.Second)
+		synctest.Wait()
+		if got := subscribedConnection(t, target, "consumer-1"); got != second.Connection() {
+			t.Errorf("connection at 31s = %p, want replacement %p", got, second.Connection())
+		}
+		select {
+		case <-second.Connection().Done():
+			t.Error("replacement connection at old deadline is closed, want open")
+		default:
+		}
+		cancel()
+		waitTopicWorkers(t, target)
+	})
 }
 
 // TestTopicPendingConsumerShutdown checks cleanup without confirmation.

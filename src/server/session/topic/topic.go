@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
@@ -57,7 +58,13 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready 
 		return fmt.Errorf("%w: %v", ErrInvalidConsumer, err)
 	}
 
-	newConsumer := &subscription{info: c.Info, connection: c.Connection(), onAck: onAck, done: make(chan struct{})}
+	newConsumer := &subscription{
+		info:       c.Info,
+		connection: c.Connection(),
+		onAck:      onAck,
+		done:       make(chan struct{}),
+		liveness:   &consumerLiveness{changed: make(chan struct{}, 1)},
+	}
 	if err := newConsumer.validate(); err != nil {
 		return err
 	}
@@ -185,12 +192,21 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 
 	workDone := func() {
 		defer t.waitGroup.Done()
-		newConsumer.cancel()
-		// Worker cleanup is best-effort; explicit removals report cleanup errors.
-		_ = t.removeConsumer(newConsumer)
-		if onStop != nil {
-			cleanupOnce.Do(onStop)
-		}
+		cleanupOnce.Do(func() {
+			newConsumer.cancel()
+			// Worker cleanup is best-effort; explicit removals report cleanup errors.
+			_ = t.removeConsumer(newConsumer)
+			t.mu.Lock()
+			expired := newConsumer.liveness.expired
+			t.mu.Unlock()
+			if expired {
+				// Keep the name reserved until closure and queue removal finish.
+				_ = newConsumer.connection.Drop()
+			}
+			if onStop != nil {
+				onStop()
+			}
+		})
 		t.mu.Lock()
 		workersLeft--
 		if workersLeft == 0 {
@@ -217,6 +233,16 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 		case <-newConsumer.connection.Done():
 			return
 		default:
+		}
+		t.mu.Lock()
+		stored, exists := t.consumerMap.Get(newConsumer.info.ID())
+		active := exists && stored.connection == newConsumer.connection && !t.stopping
+		if active && newConsumer.liveness.deadline.IsZero() {
+			newConsumer.liveness.deadline = time.Now().Add(consumerTimeout)
+		}
+		t.mu.Unlock()
+		if !active {
+			return
 		}
 		work(ctx, newConsumer)
 	}
@@ -461,6 +487,10 @@ func (t *Topic) deliverMessage(ctx context.Context, c *subscription, offset uint
 		t.mu.Unlock()
 		return false
 	}
+	if _, err := t.activeConsumer(c.info.ID(), c.info.IPCPath()); err != nil {
+		t.mu.Unlock()
+		return false
+	}
 	message := t.messages[offset]
 	stored.expectedOffset, stored.awaitingACK = offset+1, true
 	t.mu.Unlock()
@@ -495,17 +525,9 @@ func (t *Topic) acknowledge(ctx context.Context, consumerID id.ID, ipcPath strin
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	c, exists := t.consumerMap.Get(consumerID)
-	if !exists || c.info.IPCPath() != ipcPath {
-		return consumer.ErrNotFound
-	}
-	select {
-	case <-c.connection.Done():
-		return context.Canceled
-	default:
-	}
-	if t.stopping {
-		return context.Canceled
+	c, err := t.activeConsumer(consumerID, ipcPath)
+	if err != nil {
+		return err
 	}
 	if !c.awaitingACK || c.expectedOffset != offset {
 		return fmt.Errorf("%w: unexpected acknowledgement offset %d", protocol.ErrInvalidPayload, offset)
@@ -515,29 +537,101 @@ func (t *Topic) acknowledge(ctx context.Context, consumerID id.ID, ipcPath strin
 			return err
 		}
 	}
+	t.refreshConsumer(c)
 	c.awaitingACK = false
 	// The worker drains this single ACK before arming the next delivery.
 	c.connection.AcknowledgedChan <- offset
 	return nil
 }
 
-// listenHeartbeat is the heartbeat goroutine's entry point for one subscribed consumer.
-func (t *Topic) listenHeartbeat(ctx context.Context, consumer *subscription) {
-	// TODO: reset the consumer's timeout on each heartbeat and stop the
-	// connection if that timeout expires.
+func (t *Topic) heartbeat(ctx context.Context, consumerID id.ID, ipcPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, err := t.activeConsumer(consumerID, ipcPath)
+	if err != nil {
+		return err
+	}
+	t.refreshConsumer(c)
+	return nil
+}
 
+// activeConsumer checks routing and expires overdue subscriptions under t.mu.
+func (t *Topic) activeConsumer(consumerID id.ID, ipcPath string) (*subscription, error) {
+	c, exists := t.consumerMap.Get(consumerID)
+	if !exists || c.info.IPCPath() != ipcPath {
+		return nil, consumer.ErrNotFound
+	}
+	select {
+	case <-c.connection.Done():
+		return nil, context.Canceled
+	default:
+	}
+	if t.stopping {
+		return nil, context.Canceled
+	}
+	if c.liveness != nil && !c.liveness.deadline.IsZero() && !time.Now().Before(c.liveness.deadline) {
+		c.liveness.expired = true
+		c.cancel()
+		return nil, context.DeadlineExceeded
+	}
+	return c, nil
+}
+
+// refreshConsumer postpones expiration under t.mu; confirmation starts the clock.
+func (t *Topic) refreshConsumer(c *subscription) {
+	if c.liveness == nil || c.liveness.deadline.IsZero() {
+		return
+	}
+	c.liveness.deadline = time.Now().Add(consumerTimeout)
+	select {
+	case c.liveness.changed <- struct{}{}:
+	default:
+	}
+}
+
+// listenHeartbeat is the heartbeat goroutine's entry point for one subscribed consumer.
+func (t *Topic) listenHeartbeat(ctx context.Context, c *subscription) {
+	timer := time.NewTimer(consumerTimeout)
+	defer timer.Stop()
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		t.mu.Lock()
+		stored, exists := t.consumerMap.Get(c.info.ID())
+		if !exists || stored.connection != c.connection {
+			t.mu.Unlock()
+			return
+		}
+		_, activeErr := t.activeConsumer(c.info.ID(), c.info.IPCPath())
+		remaining := time.Until(c.liveness.deadline)
+		t.mu.Unlock()
+		if activeErr != nil {
+			return
+		}
+		timer.Reset(remaining)
 		select {
 		case <-ctx.Done():
 			return
-
-		case <-consumer.connection.Done():
+		case <-c.connection.Done():
 			return
-
-		case _, ok := <-consumer.connection.HeartbeatChan:
+		case <-timer.C:
+		case <-c.liveness.changed:
+		case _, ok := <-c.connection.HeartbeatChan:
 			if !ok {
 				return
 			}
+			t.mu.Lock()
+			stored, exists := t.consumerMap.Get(c.info.ID())
+			if exists && stored.connection == c.connection {
+				if _, err := t.activeConsumer(c.info.ID(), c.info.IPCPath()); err == nil {
+					t.refreshConsumer(c)
+				}
+			}
+			t.mu.Unlock()
 		}
 	}
 }
