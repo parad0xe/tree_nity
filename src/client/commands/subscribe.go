@@ -2,12 +2,14 @@ package commands
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strconv"
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc/id"
+	"tree_nity/src/ipc/protocol"
 )
 
 type subscribeCommand struct {
@@ -64,6 +66,144 @@ func ParseSubscribe(args []string) (Command, error) {
 	return cmd, nil
 }
 
+// Execute prints each message delivered from the topic.
 func (cmd *subscribeCommand) Execute(ctx context.Context, env Env) (int, error) {
-	return exitcode.General, fmt.Errorf("subscribe: %w", errors.ErrUnsupported)
+	subscriptionData, err := env.createData(
+		protocol.TopicSubscription,
+		protocol.NewTopicSubscriptionPayload(
+			string(cmd.subscriber),
+			string(cmd.topic),
+			cmd.prefix,
+			cmd.offset,
+		),
+	)
+	if err != nil {
+		return exitcode.General, fmt.Errorf("subscribe: %w", err)
+	}
+
+	if code, err := env.send(ctx, subscriptionData); err != nil {
+		return code, fmt.Errorf("subscribe: %w", err)
+	}
+
+	_, code, err := env.recv[*protocol.TopicSubscriptionReplyPayload](ctx, protocol.TopicSubscriptionReply)
+	if err != nil {
+		return code, fmt.Errorf("subscribe: %w", err)
+	}
+
+	if err := env.println(fmt.Sprintf("subscribed to %s", cmd.topic)); err != nil {
+		if _, disconnectErr := cmd.disconnect(ctx, env); disconnectErr != nil {
+			err = errors.Join(err, disconnectErr)
+		}
+		return exitcode.General, fmt.Errorf("subscribe: %w", err)
+	}
+
+	recvCtx, recvCancel := context.WithCancel(ctx)
+	defer recvCancel()
+	go func() {
+		select {
+		case <-env.Shutdown.Requested():
+		case <-recvCtx.Done():
+		}
+		recvCancel()
+	}()
+
+	code, err = cmd.consume(ctx, recvCtx, env)
+	if err != nil {
+		err = fmt.Errorf("subscribe: %w", err)
+	}
+
+	if ctx.Err() == nil && code != exitcode.IPC {
+		if disconnectCode, disconnectErr := cmd.disconnect(ctx, env); disconnectErr != nil {
+			disconnectErr = fmt.Errorf("subscribe: %w", disconnectErr)
+			if err == nil {
+				return disconnectCode, disconnectErr
+			}
+			err = errors.Join(err, disconnectErr)
+		}
+	}
+
+	return code, err
+}
+
+// consume prints and acknowledges the delivered messages.
+func (cmd *subscribeCommand) consume(ctx context.Context, recvCtx context.Context, env Env) (int, error) {
+	for {
+		if env.Shutdown.IsRequested() {
+			return exitcode.Success, nil
+		}
+
+		messagePayload, code, err := env.recv[*protocol.MessageDeliveryPayload](recvCtx, protocol.MessageDelivery)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				continue
+			}
+			if env.Shutdown.IsRequested() {
+				return exitcode.Success, nil
+			}
+			return code, err
+		}
+
+		message := messagePayload.Message()
+
+		if err := cmd.printMessage(env, message); err != nil {
+			return exitcode.General, err
+		}
+
+		ackData, err := env.createData(
+			protocol.Acknowledgement,
+			protocol.NewAcknowledgementPayload(
+				string(cmd.subscriber),
+				message.Offset()+1,
+			),
+		)
+		if err != nil {
+			return exitcode.General, err
+		}
+		if code, err := env.send(ctx, ackData); err != nil {
+			return code, err
+		}
+	}
+}
+
+// disconnect ends the subscription on the server.
+func (cmd *subscribeCommand) disconnect(ctx context.Context, env Env) (int, error) {
+	disconnectPayload, err := env.createData(
+		protocol.ConsumerDisconnect,
+		protocol.NewConsumerDisconnectPayload(string(cmd.subscriber)),
+	)
+	if err != nil {
+		return exitcode.General, err
+	}
+
+	if code, err := env.send(ctx, disconnectPayload); err != nil {
+		return code, err
+	}
+
+	return exitcode.Success, nil
+}
+
+// printMessage writes a delivered message to the command output.
+func (cmd *subscribeCommand) printMessage(env Env, message protocol.Message) error {
+	if cmd.raw {
+		buffer := make([]byte, 0)
+		buffer = binary.LittleEndian.AppendUint32(buffer, message.Offset())
+		buffer = binary.LittleEndian.AppendUint32(buffer, uint32(len(message.Key())))
+		buffer = append(buffer, message.Key()...)
+		buffer = binary.LittleEndian.AppendUint32(buffer, uint32(len(message.Value())))
+		buffer = append(buffer, message.Value()...)
+
+		if err := env.print(buffer); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	output := fmt.Sprintf("%s:%s", message.Key(), message.Value())
+
+	if err := env.println(output); err != nil {
+		return err
+	}
+
+	return nil
 }

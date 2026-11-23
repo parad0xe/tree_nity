@@ -15,6 +15,7 @@ import (
 	"tree_nity/src/ipc"
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 )
 
 const (
@@ -34,6 +35,12 @@ type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, errTestWrite
+}
+
+// executeResult is what Execute returned.
+type executeResult struct {
+	code int
+	err  error
 }
 
 // testIPCPath returns a queue name unique to the test and to the role.
@@ -157,6 +164,52 @@ func cancelledContext() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	return ctx
+}
+
+// sendTestReplies adds the replies, in order, to the inbound of env.
+func sendTestReplies(t *testing.T, env Env, replies ...protocol.Data) {
+	t.Helper()
+	server := newTestOutbound(t, env.Inbound.IPCPath())
+	for _, reply := range replies {
+		if err := server.Send(context.Background(), reply); err != nil {
+			t.Fatalf("Send(%d) error = %v, want nil", reply.Opcode(), err)
+		}
+	}
+}
+
+// requestedShutdown returns a shutdown that is already requested.
+func requestedShutdown() lifecycle.GracefulShutdown {
+	requested := make(chan struct{})
+	close(requested)
+	return lifecycle.NewGracefulShutdown(requested)
+}
+
+// startExecute runs cmd in its own goroutine and returns where its result arrives.
+func startExecute(cmd Command, env Env) <-chan executeResult {
+	result := make(chan executeResult, 1)
+	go func() {
+		code, err := cmd.Execute(context.Background(), env)
+		result <- executeResult{code: code, err: err}
+	}()
+	return result
+}
+
+// waitExecute returns the result of Execute, and fails the test if it does not arrive within testTimeout.
+func waitExecute(t *testing.T, result <-chan executeResult) (int, error) {
+	t.Helper()
+	select {
+	case res := <-result:
+		return res.code, res.err
+	case <-time.After(testTimeout):
+		t.Fatalf("Execute() did not return within %v", testTimeout)
+		return 0, nil
+	}
+}
+
+// executeWithTimeout runs cmd, and fails the test if it does not return within testTimeout.
+func executeWithTimeout(t *testing.T, cmd Command, env Env) (int, error) {
+	t.Helper()
+	return waitExecute(t, startExecute(cmd, env))
 }
 
 func TestCreateDataSetsClientQueue(t *testing.T) {
