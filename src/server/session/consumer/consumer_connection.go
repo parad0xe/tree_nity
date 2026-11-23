@@ -2,7 +2,9 @@ package consumer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"tree_nity/src/ipc"
@@ -24,6 +26,8 @@ type Connection struct {
 	cancel    context.CancelFunc
 	closeOnce sync.Once
 	closeErr  error
+	dropOnce  sync.Once
+	dropErr   error
 }
 
 // newConnection opens IPC with a cancellable context.
@@ -126,6 +130,29 @@ func (c *Connection) Close() error {
 		}
 	})
 	return c.closeErr
+}
+
+// Drop closes the connection and removes its queue once, for an expired consumer.
+// Queue removal uses the Linux mqueue filesystem mounted at /dev/mqueue.
+// An already absent queue is ignored. Repeated calls preserve a replacement queue.
+func (c *Connection) Drop() error {
+	if err := c.validate(); err != nil {
+		return nil
+	}
+	err := c.Close()
+	c.dropOnce.Do(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.outbound != nil {
+			// NewOutbound validates the queue name before opening it.
+			unlinkErr := os.Remove("/dev/mqueue" + c.outbound.IPCPath())
+			// The consumer may already have removed its queue before disappearing.
+			if unlinkErr != nil && !errors.Is(unlinkErr, os.ErrNotExist) {
+				c.dropErr = fmt.Errorf("unlink expired consumer outbound %q: %w", c.outbound.IPCPath(), unlinkErr)
+			}
+		}
+	})
+	return errors.Join(err, c.dropErr)
 }
 
 // closed reports whether shutdown was requested.
