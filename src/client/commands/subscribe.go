@@ -91,6 +91,9 @@ func (cmd *subscribeCommand) Execute(ctx context.Context, env Env) (int, error) 
 	}
 
 	if err := env.println(fmt.Sprintf("subscribed to %s", cmd.topic)); err != nil {
+		if _, disconnectErr := cmd.disconnect(ctx, env); disconnectErr != nil {
+			err = errors.Join(err, disconnectErr)
+		}
 		return exitcode.General, fmt.Errorf("subscribe: %w", err)
 	}
 
