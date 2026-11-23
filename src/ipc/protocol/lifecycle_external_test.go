@@ -9,7 +9,7 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-// TestLifecyclePayloadRoundTrip checks client IDs and emitter-specific decoding of opcode seven.
+// TestLifecyclePayloadRoundTrip checks lifecycle frames in both directions.
 func TestLifecyclePayloadRoundTrip(t *testing.T) {
 	client := protocol.NewClientMetadata("/client-1")
 	server := protocol.NewServerMetadata()
@@ -24,6 +24,9 @@ func TestLifecyclePayloadRoundTrip(t *testing.T) {
 	}{
 		{name: "disconnect constructor", opcode: protocol.ConsumerDisconnect, emitter: protocol.Client, metadata: client, json: `{"clientIPC":"/client-1"}`, body: `{"clientId":"client-1"}`, payload: protocol.NewConsumerDisconnectPayload("client-1")},
 		{name: "heartbeat constructor", opcode: protocol.ConsumerHeartbeat, emitter: protocol.Client, metadata: client, json: `{"clientIPC":"/client-1"}`, body: `{"clientId":"client-1"}`, payload: protocol.NewConsumerHeartbeatPayload("client-1")},
+		{name: "server disconnect", opcode: protocol.ServerConsumerDisconnect, emitter: protocol.Server, metadata: server, json: `{}`, body: `{"clientId":"client-1"}`, payload: protocol.NewServerConsumerDisconnectPayload("client-1")},
+		{name: "heartbeat reply constructor", opcode: protocol.ConsumerHeartbeatReply, emitter: protocol.Server, metadata: server, json: `{}`, body: `{}`, payload: protocol.NewConsumerHeartbeatReplyPayload()},
+		{name: "heartbeat reply zero value", opcode: protocol.ConsumerHeartbeatReply, emitter: protocol.Server, metadata: server, json: `{}`, body: `{}`, payload: &protocol.ConsumerHeartbeatReplyPayload{}},
 		{name: "shutdown constructor", opcode: protocol.ServerShutdown, emitter: protocol.Server, metadata: server, json: `{}`, body: `{}`, payload: protocol.NewServerShutdownPayload()},
 		{name: "shutdown zero value", opcode: protocol.ServerShutdown, emitter: protocol.Server, metadata: server, json: `{}`, body: `{}`, payload: &protocol.ServerShutdownPayload{}},
 	}

@@ -47,6 +47,10 @@ const (
 	ServerShutdown
 	// ProduceMessageReply identifies a message production response.
 	ProduceMessageReply
+	// ServerConsumerDisconnect identifies a server-initiated consumer disconnection.
+	ServerConsumerDisconnect
+	// ConsumerHeartbeatReply confirms a consumer heartbeat.
+	ConsumerHeartbeatReply
 )
 
 func (o Opcode) validate(emitter Emitter) error {
@@ -60,7 +64,8 @@ func (o Opcode) validate(emitter Emitter) error {
 	case Server:
 		switch o {
 		case ListTopicReply, CreateTopicReply, ConsumerInfoReply, TopicSubscriptionReply,
-			CheckTopicReply, ErrorReply, MessageDelivery, ServerShutdown, ProduceMessageReply:
+			CheckTopicReply, ErrorReply, MessageDelivery, ServerShutdown, ProduceMessageReply,
+			ServerConsumerDisconnect, ConsumerHeartbeatReply:
 			return nil
 		}
 	default:

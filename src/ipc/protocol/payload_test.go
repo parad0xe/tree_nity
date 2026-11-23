@@ -87,6 +87,10 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 
 // TestPayloadDecodingRejectsInvalidOperations checks opcode selection and required fields.
 func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
+	var firstUnknown Opcode
+	for opcode := range serverPayloadJSONFactories {
+		firstUnknown = max(firstUnknown, opcode+1)
+	}
 	tests := []struct {
 		name    string
 		emitter Emitter
@@ -101,7 +105,7 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
 		{name: "missing delivery message", emitter: Server, opcode: MessageDelivery, wantErr: ErrMissingMessage},
 		{name: "negative server opcode", emitter: Server, opcode: -1, wantErr: ErrUnknownOpcode},
-		{name: "unknown server opcode", emitter: Server, opcode: 9, wantErr: ErrUnknownOpcode},
+		{name: "unknown server opcode", emitter: Server, opcode: firstUnknown, wantErr: ErrUnknownOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
