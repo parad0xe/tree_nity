@@ -175,9 +175,13 @@ func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *sub
 
 // startConsumerWorkers waits for ready; either worker exiting cancels its sibling.
 func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription, ready <-chan struct{}, onStop func()) {
-	t.waitGroup.Add(2)
+	workers := []func(context.Context, *subscription){
+		t.listenHeartbeat,
+		t.deliverMessages,
+	}
+	t.waitGroup.Add(len(workers))
 	var cleanupOnce sync.Once
-	workersLeft := 2
+	workersLeft := len(workers)
 
 	workDone := func() {
 		defer t.waitGroup.Done()
@@ -217,8 +221,9 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 		work(ctx, newConsumer)
 	}
 
-	go runWorker(t.listenHeartbeat)
-	go runWorker(t.deliverMessages)
+	for _, work := range workers {
+		go runWorker(work)
+	}
 }
 
 // RemoveConsumer detaches and closes c's registered connection.
