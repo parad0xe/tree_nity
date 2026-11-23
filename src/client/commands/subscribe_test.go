@@ -558,3 +558,24 @@ func TestSubscribeExecuteReturnsDisconnectError(t *testing.T) {
 		t.Errorf("Execute() with a full server queue at disconnection = %d, %v, want %d, %v", code, err, exitcode.IPC, context.DeadlineExceeded)
 	}
 }
+
+func TestSubscribeExecuteStopsWhenContextDeadlineExpires(t *testing.T) {
+	const deadline = 200 * time.Millisecond
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+
+	result := make(chan executeResult, 1)
+	go func() {
+		code, err := cmd.Execute(ctx, env)
+		result <- executeResult{code: code, err: err}
+	}()
+	code, err := waitExecute(t, result)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Execute() with a context expiring after %v = %d, %v, want %d, %v", deadline, code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+	recvTestData(t, server)
+	assertNoTestData(t, server)
+}
