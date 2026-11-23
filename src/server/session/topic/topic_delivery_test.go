@@ -331,6 +331,182 @@ func TestDeliveryResumesUnacknowledgedMessages(t *testing.T) {
 	expectNoDelivery(t, second)
 }
 
+// TestDeliveryDisconnectResumesUnacknowledgedMessages checks immediate reuse and saved progress.
+func TestDeliveryDisconnectResumesUnacknowledgedMessages(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	for index := 0; index < 3; index++ {
+		if err := target.ProduceMessage(topicManagerContext(t), deliveryMessage(index)); err != nil {
+			t.Fatalf("ProduceMessage(%d) during setup error = %v, want nil", index, err)
+		}
+	}
+	first := deliveryInbox(t, "first")
+	subscribeForDelivery(t, manager, lifetime, first, "subscriber", "", nil)
+	receiveDelivery(t, first, 0, deliveryMessage(0))
+	acknowledgeDelivery(t, manager, first, "subscriber", 1)
+	receiveDelivery(t, first, 1, deliveryMessage(1))
+	before := subscriptionSnapshot(t, target, "subscriber")
+	saved, err := manager.consumerManager.GetConsumer("subscriber")
+	if err != nil {
+		t.Fatalf("GetConsumer(subscriber) before disconnect error = %v, want nil", err)
+	}
+	if err := manager.ConsumerDisconnect(topicManagerContext(t), *protocol.NewClientMetadata(first.IPCPath()), *protocol.NewConsumerDisconnectPayload("subscriber")); err != nil {
+		t.Fatalf("ConsumerDisconnect(subscriber) waiting for ACK(2) error = %v, want nil", err)
+	}
+	select {
+	case <-before.done:
+	default:
+		t.Error("subscription done after ConsumerDisconnect(subscriber) is open, want closed")
+	}
+	after, err := manager.consumerManager.GetConsumer("subscriber")
+	if err != nil || after.Info != saved.Info {
+		t.Errorf("saved subscriber after disconnect = %+v, %v, want metadata %+v and nil", after, err, saved.Info)
+	}
+	if err := before.connection.Send(t.Context(), protocol.Data{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Send(subscriber) after disconnect error = %v, want %v", err, context.Canceled)
+	}
+	if err := target.ProduceMessage(topicManagerContext(t), deliveryMessage(3)); err != nil {
+		t.Fatalf("ProduceMessage(3) after disconnect error = %v, want nil", err)
+	}
+	expectNoDelivery(t, first)
+	// The original queue remains owned by the client and can be used immediately.
+	subscribeForDelivery(t, manager, lifetime, first, "subscriber", "", nil)
+	for offset := uint32(1); offset < 4; offset++ {
+		receiveDelivery(t, first, offset, deliveryMessage(int(offset)))
+		acknowledgeDelivery(t, manager, first, "subscriber", offset+1)
+	}
+	checkSavedOffset(t, manager, "subscriber", 4)
+}
+
+// TestDeliveryDisconnectStopsWaits checks idle, pending-ACK, and full-queue shutdown.
+func TestDeliveryDisconnectStopsWaits(t *testing.T) {
+	tests := []struct {
+		name      string
+		message   bool
+		fullQueue bool
+	}{
+		{name: "idle subscription"},
+		{name: "waiting for ACK", message: true},
+		{name: "full consumer queue", message: true, fullQueue: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			target, lifetime, _ := subscriptionTarget(t, manager, "events")
+			observed := &deliverySendContext{Context: lifetime, sending: make(chan struct{})}
+			inbound := deliveryInbox(t, "consumer")
+			subscribeForDelivery(t, manager, observed, inbound, "subscriber", "user/", nil)
+			before := subscriptionSnapshot(t, target, "subscriber")
+			if tt.fullQueue {
+				fillSubscriptionInbox(t, inbound)
+			}
+			if tt.message {
+				if err := target.ProduceMessage(topicManagerContext(t), deliveryMessage(0)); err != nil {
+					t.Fatalf("ProduceMessage(0) during setup error = %v, want nil", err)
+				}
+				if tt.fullQueue {
+					select {
+					case <-observed.sending:
+					case <-time.After(5 * time.Second):
+						t.Fatal("delivery into a full queue did not start within 5s, want an active send")
+					}
+				} else {
+					receiveDelivery(t, inbound, 0, deliveryMessage(0))
+				}
+			}
+			if err := manager.ConsumerDisconnect(topicManagerContext(t), *protocol.NewClientMetadata(inbound.IPCPath()), *protocol.NewConsumerDisconnectPayload("subscriber")); err != nil {
+				t.Fatalf("ConsumerDisconnect(subscriber) during %s error = %v, want nil", tt.name, err)
+			}
+			select {
+			case <-before.done:
+			default:
+				t.Errorf("subscription done after disconnect during %s is open, want closed", tt.name)
+			}
+			checkSavedOffset(t, manager, "subscriber", 0)
+			target.mu.Lock()
+			count := target.consumerMap.Len()
+			matches, err := target.consumerTrie.Search("user/item")
+			target.mu.Unlock()
+			if count != 0 || err != nil || len(matches) != 0 {
+				t.Errorf("subscription indexes after disconnect during %s = %d, %v, %v, want 0, empty and nil", tt.name, count, matches, err)
+			}
+			replacement := deliveryInbox(t, "replacement")
+			subscribeForDelivery(t, manager, lifetime, replacement, "subscriber", "user/", nil)
+			if tt.message {
+				receiveDelivery(t, replacement, 0, deliveryMessage(0))
+				acknowledgeDelivery(t, manager, replacement, "subscriber", 1)
+			}
+		})
+	}
+}
+
+// TestDeliveryDisconnectLeavesOtherConsumersActive checks that completion is scoped to one subscription.
+func TestDeliveryDisconnectLeavesOtherConsumersActive(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	first := deliveryInbox(t, "first")
+	second := deliveryInbox(t, "second")
+	subscribeForDelivery(t, manager, lifetime, first, "first", "", nil)
+	subscribeForDelivery(t, manager, lifetime, second, "second", "", nil)
+	if err := manager.ConsumerDisconnect(topicManagerContext(t), *protocol.NewClientMetadata(first.IPCPath()), *protocol.NewConsumerDisconnectPayload("first")); err != nil {
+		t.Fatalf("ConsumerDisconnect(first) while second is active error = %v, want nil", err)
+	}
+	if err := target.ProduceMessage(topicManagerContext(t), deliveryMessage(0)); err != nil {
+		t.Fatalf("ProduceMessage(0) after disconnecting first error = %v, want nil", err)
+	}
+	receiveDelivery(t, second, 0, deliveryMessage(0))
+	acknowledgeDelivery(t, manager, second, "second", 1)
+	checkSavedOffset(t, manager, "first", 0)
+	checkSavedOffset(t, manager, "second", 1)
+	expectNoDelivery(t, first)
+}
+
+// TestDeliveryConcurrentAcknowledgementAndDisconnect checks atomic saved progress during shutdown.
+func TestDeliveryConcurrentAcknowledgementAndDisconnect(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := deliveryInbox(t, "consumer")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	if err := target.ProduceMessage(topicManagerContext(t), deliveryMessage(0)); err != nil {
+		t.Fatalf("ProduceMessage(0) during setup error = %v, want nil", err)
+	}
+	receiveDelivery(t, inbound, 0, deliveryMessage(0))
+	ctx := topicManagerContext(t)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	start := make(chan struct{})
+	ackResult := make(chan error, 1)
+	disconnectResult := make(chan error, 1)
+	go func() {
+		<-start
+		ackResult <- manager.Acknowledgement(ctx, metadata, *protocol.NewAcknowledgementPayload("subscriber", 1))
+	}()
+	go func() {
+		<-start
+		disconnectResult <- manager.ConsumerDisconnect(ctx, metadata, *protocol.NewConsumerDisconnectPayload("subscriber"))
+	}()
+	close(start)
+	var wantOffset uint32
+	select {
+	case err := <-ackResult:
+		if err == nil {
+			wantOffset = 1
+		} else if !errors.Is(err, consumer.ErrNotFound) {
+			t.Errorf("Acknowledgement(subscriber, 1) racing with disconnect error = %v, want nil or %v", err, consumer.ErrNotFound)
+		}
+	case <-ctx.Done():
+		t.Fatalf("Acknowledgement(subscriber, 1) racing with disconnect error = %v, want a completed call", ctx.Err())
+	}
+	select {
+	case err := <-disconnectResult:
+		if err != nil {
+			t.Errorf("ConsumerDisconnect(subscriber) racing with ACK(1) error = %v, want nil", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("ConsumerDisconnect(subscriber) racing with ACK(1) error = %v, want a completed call", ctx.Err())
+	}
+	checkSavedOffset(t, manager, "subscriber", wantOffset)
+}
+
 // TestDeliverySlowConsumerDoesNotBlockOthers checks independent delivery and storage.
 func TestDeliverySlowConsumerDoesNotBlockOthers(t *testing.T) {
 	manager := NewManager()

@@ -193,6 +193,23 @@ func (m *Manager) Acknowledgement(ctx context.Context, metadata protocol.ClientM
 	return target.acknowledge(ctx, c.Info.ID(), metadata.ClientIPC(), payload.Offset())
 }
 
+// ConsumerDisconnect stops the matching subscription without sending a reply.
+// On success it returns after cleanup and ID release; saved metadata and the client queue remain.
+// ctx bounds the wait for worker cleanup.
+func (m *Manager) ConsumerDisconnect(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerDisconnectPayload) error {
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.ClientID()))
+	if err != nil {
+		return err
+	}
+	m.mu.RLock()
+	target, exists := m.topicMap.Get(id.ID(c.Info.Topic()))
+	m.mu.RUnlock()
+	if !exists {
+		return consumer.ErrNotFound
+	}
+	return target.disconnect(ctx, c.Info.ID(), metadata.ClientIPC())
+}
+
 // CheckTopic replies with existence or rejection status; ctx bounds delivery.
 func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.CheckTopicPayload) error {
 	topicID := id.ID(payload.Topic())

@@ -151,9 +151,10 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 		err = app.topicManager.NewSubscription(sendCtx, ctx, shutdown, *metadata, *payload)
 	case *protocol.AcknowledgementPayload:
 		err = app.topicManager.Acknowledgement(sendCtx, *metadata, *payload)
-	case *protocol.ConsumerHeartbeatPayload,
-		*protocol.ConsumerDisconnectPayload:
-		// TODO: route notifications to consumer handlers once they are implemented.
+	case *protocol.ConsumerDisconnectPayload:
+		err = app.topicManager.ConsumerDisconnect(sendCtx, *metadata, *payload)
+	case *protocol.ConsumerHeartbeatPayload:
+		// TODO: route heartbeat notifications to a consumer handler.
 		return exitcode.General, errUnhandledOpcode
 	default:
 		err = response.SendToClient(

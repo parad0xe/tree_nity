@@ -96,6 +96,104 @@ func connectedTopicConsumer(t *testing.T, prefix, suffix string) *consumer.Consu
 	return c
 }
 
+func blockingDisconnectCleanup(t *testing.T) (*Topic, *consumer.Consumer, <-chan struct{}, func()) {
+	t.Helper()
+	target, ctx, _ := newTestTopic(t)
+	c := connectedTopicConsumer(t, "events/", "disconnect")
+	if c == nil {
+		t.Fatal("connectedTopicConsumer(events/) = nil, want an initialized consumer")
+	}
+	entered := make(chan struct{})
+	finish := make(chan struct{})
+	release := sync.OnceFunc(func() { close(finish) })
+	t.Cleanup(release)
+	onStop := func() {
+		close(entered)
+		<-finish
+	}
+	if err := target.upsertConsumer(ctx, c, nil, onStop, nil); err != nil {
+		t.Fatalf("upsertConsumer(consumer-1) with blocked cleanup error = %v, want nil", err)
+	}
+	return target, c, entered, release
+}
+
+// TestTopicDisconnectWaitsForCleanup checks the per-subscription completion signal.
+func TestTopicDisconnectWaitsForCleanup(t *testing.T) {
+	target, c, entered, release := blockingDisconnectCleanup(t)
+	before := subscriptionSnapshot(t, target, "consumer-1")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- target.disconnect(ctx, c.Info.ID(), c.Info.IPCPath()) }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Errorf("disconnect(consumer-1) cleanup error = %v, want cleanup started", ctx.Err())
+		return
+	}
+	select {
+	case err := <-result:
+		t.Errorf("disconnect(consumer-1) returned %v before onStop finished, want a pending call", err)
+	default:
+	}
+	select {
+	case <-before.done:
+		t.Error("subscription done before onStop finished is closed, want open")
+	default:
+	}
+	release()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Errorf("disconnect(consumer-1) after onStop finished error = %v, want nil", err)
+		}
+	case <-ctx.Done():
+		t.Errorf("disconnect(consumer-1) after onStop finished error = %v, want nil", ctx.Err())
+		return
+	}
+	select {
+	case <-before.done:
+	default:
+		t.Error("subscription done after disconnect(consumer-1) returned is open, want closed")
+	}
+	waitTopicWorkers(t, target)
+}
+
+// TestTopicDisconnectCancelsCleanupWait checks cancellation without abandoning worker cleanup.
+func TestTopicDisconnectCancelsCleanupWait(t *testing.T) {
+	target, c, entered, release := blockingDisconnectCleanup(t)
+	before := subscriptionSnapshot(t, target, "consumer-1")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- target.disconnect(ctx, c.Info.ID(), c.Info.IPCPath()) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Error("disconnect(consumer-1) cleanup did not start within 5s, want started")
+		return
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("disconnect(consumer-1) during blocked cleanup error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("disconnect(consumer-1) after cancellation did not return within 5s, want returned")
+		return
+	}
+	release()
+	if !waitTopicWorkers(t, target) {
+		return
+	}
+	select {
+	case <-before.done:
+	default:
+		t.Error("subscription done after releasing canceled disconnect cleanup is open, want closed")
+	}
+}
+
 // TestTopicCancellationStopsLoop checks rollback without stopping the parent context.
 func TestTopicCancellationStopsLoop(t *testing.T) {
 	parent := t.Context()

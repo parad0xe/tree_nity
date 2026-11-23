@@ -57,7 +57,7 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready 
 		return fmt.Errorf("%w: %v", ErrInvalidConsumer, err)
 	}
 
-	newConsumer := &subscription{info: c.Info, connection: c.Connection(), onAck: onAck}
+	newConsumer := &subscription{info: c.Info, connection: c.Connection(), onAck: onAck, done: make(chan struct{})}
 	if err := newConsumer.validate(); err != nil {
 		return err
 	}
@@ -177,6 +177,7 @@ func (t *Topic) updateConsumerSubscription(consumerID id.ID, storedConsumer *sub
 func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscription, ready <-chan struct{}, onStop func()) {
 	t.waitGroup.Add(2)
 	var cleanupOnce sync.Once
+	workersLeft := 2
 
 	workDone := func() {
 		defer t.waitGroup.Done()
@@ -186,6 +187,12 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 		if onStop != nil {
 			cleanupOnce.Do(onStop)
 		}
+		t.mu.Lock()
+		workersLeft--
+		if workersLeft == 0 {
+			close(newConsumer.done)
+		}
+		t.mu.Unlock()
 	}
 
 	runWorker := func(work func(context.Context, *subscription)) {
@@ -228,6 +235,50 @@ func (t *Topic) RemoveConsumer(c *consumer.Consumer) error {
 	}
 
 	return t.removeConsumer(&subscription{info: c.Info, connection: c.Connection()})
+}
+
+// disconnect matches and detaches the active connection before canceling its workers.
+// The completion signal belongs to that subscription, so replacements are unaffected.
+func (t *Topic) disconnect(ctx context.Context, consumerID id.ID, ipcPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := t.validate(); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	c, exists := t.consumerMap.Get(consumerID)
+	if !exists || c.info.IPCPath() != ipcPath {
+		t.mu.Unlock()
+		return consumer.ErrNotFound
+	}
+	if err := c.validate(); err != nil {
+		t.mu.Unlock()
+		return err
+	}
+	select {
+	case <-c.connection.Done():
+		t.mu.Unlock()
+		return context.Canceled
+	default:
+	}
+	if t.stopping {
+		t.mu.Unlock()
+		return context.Canceled
+	}
+	removed, err := t.unregisterConsumer(c)
+	t.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	removed.cancel()
+	err = removed.connection.Close()
+	select {
+	case <-removed.done:
+		return err
+	case <-ctx.Done():
+		return errors.Join(err, ctx.Err())
+	}
 }
 
 func (t *Topic) removeConsumer(c *subscription) error {
