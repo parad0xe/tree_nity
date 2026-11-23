@@ -338,7 +338,7 @@ func TestListenRejectsUnknownSubscriber(t *testing.T) {
 		return app.listen(ctx, lifecycle.NewGracefulShutdown(requestedChan))
 	})
 
-	data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata(inbound.IPCPath()), protocol.NewConsumerInfoPayload("client-1", "consumer-1"))
+	data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata(inbound.IPCPath()), protocol.NewConsumerInfoPayload("consumer-1"))
 	if err != nil {
 		t.Fatalf("NewData(ConsumerInfo, %q) error = %v, want nil", inbound.IPCPath(), err)
 	}
@@ -636,7 +636,7 @@ func TestDispatchRejectsUnknownSubscriber(t *testing.T) {
 		opcode  protocol.Opcode
 		payload protocol.Payload
 	}{
-		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
+		{name: "consumer info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -719,7 +719,7 @@ func TestDispatchPropagatesRejectionErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := &application{topicManager: topic.NewManager()}
-			data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata(tt.ipcPath), protocol.NewConsumerInfoPayload("client-1", "consumer-1"))
+			data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata(tt.ipcPath), protocol.NewConsumerInfoPayload("consumer-1"))
 			if err != nil {
 				t.Fatalf("NewData(ConsumerInfo, %q) during setup error = %v, want nil", tt.ipcPath, err)
 			}
@@ -753,8 +753,8 @@ func TestDispatchPropagatesStoppedContexts(t *testing.T) {
 		{name: "expired production rejection", ctx: expired, opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil)), wantErr: context.DeadlineExceeded},
 		{name: "canceled subscription rejection", ctx: cancelledContext(), opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil), wantErr: context.Canceled},
 		{name: "expired subscription rejection", ctx: expired, opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil), wantErr: context.DeadlineExceeded},
-		{name: "canceled consumer info", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.Canceled},
-		{name: "expired consumer info", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1"), wantErr: context.DeadlineExceeded},
+		{name: "canceled consumer info", ctx: cancelledContext(), opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1"), wantErr: context.Canceled},
+		{name: "expired consumer info", ctx: expired, opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1"), wantErr: context.DeadlineExceeded},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -818,7 +818,7 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 		{name: "check", opcode: protocol.CheckTopic, payload: protocol.NewCheckTopicPayload("events")},
 		{name: "production rejection", opcode: protocol.ProduceMessage, payload: protocol.NewProduceMessagePayload("missing", protocol.NewMessage(nil, nil))},
 		{name: "subscription rejection", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload("consumer-1", "missing", "", nil)},
-		{name: "consumer info rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("client-1", "consumer-1")},
+		{name: "consumer info rejection", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload("consumer-1")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1104,7 +1104,7 @@ func TestListenRepliesWithConsumerInfo(t *testing.T) {
 	send(t, app.inbound.IPCPath(), string(frame))
 	receiveServerReply(t, subscriber, protocol.TopicSubscriptionReply)
 	data, err = protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata(inbound.IPCPath()),
-		protocol.NewConsumerInfoPayload("caller-1", "subscriber-1"))
+		protocol.NewConsumerInfoPayload("subscriber-1"))
 	if err != nil {
 		t.Fatalf("NewData(ConsumerInfo, subscriber-1) error = %v, want nil", err)
 	}
@@ -1171,7 +1171,7 @@ func TestListenCommitsAcknowledgements(t *testing.T) {
 			t.Errorf("MessageDelivery(%d) = offset %d, key %x, value %x, want key and value %x", offset, message.Offset(), message.Key(), message.Value(), []byte{byte(offset)})
 		}
 		request(inbound.IPCPath(), protocol.Acknowledgement, protocol.NewAcknowledgementPayload("subscriber", offset+1))
-		request(producer.IPCPath(), protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("caller", "subscriber"))
+		request(producer.IPCPath(), protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("subscriber"))
 		data = receiveServerReply(t, producer, protocol.ConsumerInfoReply)
 		info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
 		if !ok || info.Offset() != offset+1 {

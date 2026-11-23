@@ -67,25 +67,20 @@ func (p *CreateTopicPayload) validate() error {
 	return nil
 }
 
-// ConsumerInfoPayload identifies the requesting client and subscriber to query.
+// ConsumerInfoPayload identifies the subscriber to query.
+// Reply routing is supplied by the frame's ClientMetadata.
 type ConsumerInfoPayload struct {
-	clientID   string
 	subscriber string
 }
 
 // NewConsumerInfoPayload returns an info request for subscriber.
-func NewConsumerInfoPayload(clientID, subscriber string) *ConsumerInfoPayload {
-	return &ConsumerInfoPayload{clientID: clientID, subscriber: subscriber}
+func NewConsumerInfoPayload(subscriber string) *ConsumerInfoPayload {
+	return &ConsumerInfoPayload{subscriber: subscriber}
 }
 
 // Subscriber returns the queried consumer's name.
 func (p ConsumerInfoPayload) Subscriber() string {
 	return p.subscriber
-}
-
-// ClientID returns the client's identifier.
-func (p ConsumerInfoPayload) ClientID() string {
-	return p.clientID
 }
 
 func (p *ConsumerInfoPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
@@ -95,15 +90,12 @@ func (p *ConsumerInfoPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSO
 	if emitter != Client || opcode != ConsumerInfo {
 		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
 	}
-	return &consumerInfoPayloadJSON{ClientID: &p.clientID, Subscriber: &p.subscriber}, nil
+	return &consumerInfoPayloadJSON{Subscriber: &p.subscriber}, nil
 }
 
 func (p *ConsumerInfoPayload) validate() error {
 	if p == nil {
 		return ErrMissingPayload
-	}
-	if err := id.ID(p.clientID).Validate(); err != nil {
-		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
 	}
 	if err := id.ID(p.subscriber).Validate(); err != nil {
 		return fmt.Errorf("%w: invalid subscriber %q", ErrInvalidPayload, p.subscriber)

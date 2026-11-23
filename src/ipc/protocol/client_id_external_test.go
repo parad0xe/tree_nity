@@ -24,7 +24,6 @@ func consumerPayloadCases(clientID string) []struct {
 		payload protocol.Payload
 		json    string
 	}{
-		{name: "info", opcode: protocol.ConsumerInfo, payload: protocol.NewConsumerInfoPayload(clientID, "subscriber-1"), json: fmt.Sprintf(`{"clientId":%q,"subscriber":"subscriber-1"}`, clientID)},
 		{name: "subscription", opcode: protocol.TopicSubscription, payload: protocol.NewTopicSubscriptionPayload(clientID, "orders", "", nil), json: fmt.Sprintf(`{"clientId":%q,"topic":"orders","prefix":""}`, clientID)},
 		{name: "acknowledgement", opcode: protocol.Acknowledgement, payload: protocol.NewAcknowledgementPayload(clientID, 0), json: fmt.Sprintf(`{"clientId":%q,"offset":0}`, clientID)},
 		{name: "heartbeat", opcode: protocol.ConsumerHeartbeat, payload: protocol.NewConsumerHeartbeatPayload(clientID), json: fmt.Sprintf(`{"clientId":%q}`, clientID)},
@@ -32,7 +31,7 @@ func consumerPayloadCases(clientID string) []struct {
 	}
 }
 
-// TestConsumerClientIDRoundTrip checks that each consumer request carries its ID only in its payload.
+// TestConsumerClientIDRoundTrip checks that requests identifying their caller carry its ID only in their payload.
 func TestConsumerClientIDRoundTrip(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -74,7 +73,7 @@ func TestConsumerClientIDRoundTrip(t *testing.T) {
 	}
 }
 
-// TestNewDataRejectsInvalidConsumerClientIDs checks ID validation on all public consumer constructors.
+// TestNewDataRejectsInvalidConsumerClientIDs checks IDs on requests identifying their caller.
 func TestNewDataRejectsInvalidConsumerClientIDs(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -160,7 +159,7 @@ func TestDecodeRejectsInvalidConsumerClientIDs(t *testing.T) {
 	}
 }
 
-// TestNewDataRejectsZeroConsumerPayloads checks that consumer payload zero values lack a required ID.
+// TestNewDataRejectsZeroConsumerPayloads checks that consumer payload zero values lack a required identifier.
 func TestNewDataRejectsZeroConsumerPayloads(t *testing.T) {
 	tests := []struct {
 		name    string
