@@ -17,6 +17,8 @@ var (
 	errUnexpectedPayload = errors.New("unexpected payload")
 	// errServerShuttingDown reports a request refused because the server is stopping.
 	errServerShuttingDown = errors.New("server shutting down")
+	// errSubscriptionEnded reports a subscription that the server ended.
+	errSubscriptionEnded = errors.New("subscription ended by the server")
 	// errRequestRejected reports a request that the server refused.
 	errRequestRejected = errors.New("request rejected")
 	// errInvalidLine reports a text message without a key and value separator.

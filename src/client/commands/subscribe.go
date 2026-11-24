@@ -136,7 +136,9 @@ func (cmd *subscribeCommand) consume(ctx context.Context, recvCtx context.Contex
 			return exitcode.Success, nil
 		}
 
-		messagePayload, code, err := env.recv[*protocol.MessageDeliveryPayload](recvCtx, protocol.MessageDelivery)
+		waitCtx, waitCancel := context.WithTimeout(recvCtx, env.RecvTimeout)
+		data, code, err := env.recvData(waitCtx)
+		waitCancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				continue
@@ -147,26 +149,46 @@ func (cmd *subscribeCommand) consume(ctx context.Context, recvCtx context.Contex
 			return code, err
 		}
 
-		message := messagePayload.Message()
-
-		if err := cmd.printMessage(env, message); err != nil {
-			return exitcode.General, err
-		}
-
-		ackData, err := env.createData(
-			protocol.Acknowledgement,
-			protocol.NewAcknowledgementPayload(
-				string(cmd.subscriber),
-				message.Offset()+1,
-			),
-		)
-		if err != nil {
-			return exitcode.General, err
-		}
-		if code, err := env.send(ctx, ackData); err != nil {
-			return code, err
+		switch data.Opcode() {
+		case protocol.MessageDelivery:
+			if code, err := cmd.deliver(ctx, env, data); err != nil {
+				return code, err
+			}
+		case protocol.ServerConsumerDisconnect:
+			return exitcode.IPC, errSubscriptionEnded
+		default:
+			if code, err := replyError(data); err != nil {
+				return code, err
+			}
+			return exitcode.General, fmt.Errorf("recv: %w: %d", errUnexpectedOpcode, data.Opcode())
 		}
 	}
+}
+
+// deliver prints and acknowledges a delivered message.
+func (cmd *subscribeCommand) deliver(ctx context.Context, env Env, data protocol.Data) (int, error) {
+	messagePayload, ok := data.Payload().(*protocol.MessageDeliveryPayload)
+	if !ok {
+		return exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
+	}
+
+	message := messagePayload.Message()
+
+	if err := cmd.printMessage(env, message); err != nil {
+		return exitcode.General, err
+	}
+
+	ackData, err := env.createData(
+		protocol.Acknowledgement,
+		protocol.NewAcknowledgementPayload(
+			string(cmd.subscriber),
+			message.Offset()+1,
+		),
+	)
+	if err != nil {
+		return exitcode.General, err
+	}
+	return env.send(ctx, ackData)
 }
 
 // disconnect ends the subscription on the server.

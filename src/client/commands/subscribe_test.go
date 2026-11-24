@@ -486,6 +486,54 @@ func TestSubscribeExecuteReturnsIPCCodeOnServerShutdownBeforeSubscription(t *tes
 	}
 }
 
+func TestSubscribeExecuteReturnsIPCCodeOnServerConsumerDisconnect(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	disconnect := newServerData(t, protocol.ServerConsumerDisconnect, protocol.NewServerConsumerDisconnectPayload(string(cmd.subscriber)))
+	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t), disconnect)
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.IPC || !errors.Is(err, errSubscriptionEnded) {
+		t.Errorf("Execute() after a server consumer disconnect = %d, %v, want %d, %v", code, err, exitcode.IPC, errSubscriptionEnded)
+	}
+}
+
+func TestSubscribeExecuteSkipsDisconnectOnServerConsumerDisconnect(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	disconnect := newServerData(t, protocol.ServerConsumerDisconnect, protocol.NewServerConsumerDisconnectPayload(string(cmd.subscriber)))
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t), disconnect)
+
+	if code, err := executeWithTimeout(t, cmd, env); code != exitcode.IPC || !errors.Is(err, errSubscriptionEnded) {
+		t.Fatalf("Execute() after a server consumer disconnect = %d, %v, want %d, %v", code, err, exitcode.IPC, errSubscriptionEnded)
+	}
+	recvTestData(t, server)
+	assertNoTestData(t, server)
+}
+
+func TestSubscribeExecuteReturnsTopicCodeOnErrorReplyDuringConsumption(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	reply := protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic not found")
+	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t), newServerData(t, protocol.ErrorReply, reply))
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.Topic || !errors.Is(err, errRequestRejected) {
+		t.Errorf("Execute() with an error reply of kind %d during consumption = %d, %v, want %d, %v", reply.Kind(), code, err, exitcode.Topic, errRequestRejected)
+	}
+}
+
+func TestSubscribeExecuteRejectsUnexpectedOpcodeDuringConsumption(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	unexpected := newServerData(t, protocol.ListTopicReply, protocol.NewListTopicReplyPayload(nil))
+	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t), unexpected)
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.General || !errors.Is(err, errUnexpectedOpcode) {
+		t.Errorf("Execute() with opcode %d during consumption = %d, %v, want %d, %v", unexpected.Opcode(), code, err, exitcode.General, errUnexpectedOpcode)
+	}
+}
+
 func TestSubscribeExecuteKeepsWaitingAfterRecvTimeout(t *testing.T) {
 	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
 	env, server, stdout := newSubscribeEnv(t, newSubscriptionReply(t))
