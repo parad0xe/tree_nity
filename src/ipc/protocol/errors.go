@@ -16,8 +16,8 @@ var (
 	ErrMissingPayload = errors.New("missing payload")
 	// ErrMissingTopic indicates a missing topic field.
 	ErrMissingTopic = errors.New("missing topic")
-	// ErrMissingSubscriber indicates a missing subscriber field.
-	ErrMissingSubscriber = errors.New("missing subscriber")
+	// ErrMissingID indicates a missing id field.
+	ErrMissingID = errors.New("missing id")
 	// ErrMissingClient indicates a missing client field.
 	ErrMissingClient = errors.New("missing client")
 	// ErrMissingIPC indicates a missing ipc field.

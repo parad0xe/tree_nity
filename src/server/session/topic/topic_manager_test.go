@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tree_nity/src/ipc"
@@ -94,6 +95,382 @@ func subscriptionSnapshot(t *testing.T, target *Topic, name id.ID) subscription 
 		t.Fatalf("subscription %q = %+v, exists %t, want a registered subscription", name, c, exists)
 	}
 	return *c
+}
+
+func expirationInbox(t *testing.T, suffix string) *ipc.Inbound {
+	t.Helper()
+	path := fmt.Sprintf("/expiry.%d.%s.%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."), suffix)
+	inbound, err := ipc.NewInbound(path, protocol.Decode)
+	if err != nil {
+		t.Fatalf("NewInbound(%q) error = %v, want nil", path, err)
+	}
+	t.Cleanup(func() {
+		// The expiration tests intentionally let the server unlink this queue.
+		if err := inbound.Drop(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Drop(%q) after expiration error = %v, want nil or %v", path, err, os.ErrNotExist)
+		}
+	})
+	return inbound
+}
+
+func subscribedConnection(t *testing.T, target *Topic, name id.ID) *consumer.Connection {
+	t.Helper()
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	c, exists := target.consumerMap.Get(name)
+	if !exists || c.connection == nil {
+		t.Fatalf("subscription %q = %+v, exists %t, want an active connection", name, c, exists)
+	}
+	return c.connection
+}
+
+func subscriptionDeadline(t *testing.T, target *Topic, name id.ID) time.Time {
+	t.Helper()
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	c, exists := target.consumerMap.Get(name)
+	if !exists || c.liveness == nil {
+		t.Fatalf("subscription %q = %+v, exists %t, want liveness state", name, c, exists)
+	}
+	return c.liveness.deadline
+}
+
+// TestConsumerExpirationReleasesName checks queue removal and resumption at the saved offset.
+func TestConsumerExpirationReleasesName(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		inbound := expirationInbox(t, "consumer")
+		subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+		if err := target.storeMessage(deliveryMessage(0)); err != nil {
+			t.Fatalf("storeMessage(0) error = %v, want nil", err)
+		}
+		synctest.Wait()
+		receiveDelivery(t, inbound, 0, deliveryMessage(0))
+		acknowledgeDelivery(t, manager, inbound, "subscriber", 1)
+		synctest.Wait()
+		connection := subscribedConnection(t, target, "subscriber")
+
+		// Timers advance the virtual clock; Wait synchronizes worker completion.
+		<-time.After(consumerTimeout)
+		synctest.Wait()
+		if !waitTopicWorkers(t, target) {
+			return
+		}
+		data := receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerConsumerDisconnect)
+		payload, ok := data.Payload().(*protocol.ServerConsumerDisconnectPayload)
+		if !ok || payload.ClientID() != "subscriber" {
+			t.Errorf("expiration notification payload = %#v, want ServerConsumerDisconnectPayload for subscriber", data.Payload())
+		}
+		select {
+		case <-connection.Done():
+		default:
+			t.Errorf("Done(subscriber) after %v of inactivity is open, want closed", consumerTimeout)
+		}
+		target.mu.Lock()
+		count := target.consumerMap.Len()
+		matches, searchErr := target.consumerTrie.Search("user/item")
+		target.mu.Unlock()
+		if count != 0 || searchErr != nil || len(matches) != 0 {
+			t.Errorf("subscription indexes after expiration = %d, %v, %v, want 0, empty matches and nil", count, matches, searchErr)
+		}
+		sender, err := mqueue.NewSender(inbound.IPCPath())
+		if err == nil {
+			if closeErr := sender.Close(); closeErr != nil {
+				t.Errorf("Close(%q) for unexpected sender error = %v, want nil", inbound.IPCPath(), closeErr)
+			}
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("NewSender(%q) after expiration error = %v, want %v", inbound.IPCPath(), err, os.ErrNotExist)
+		}
+		checkSavedOffset(t, manager, "subscriber", 1)
+		if err := target.storeMessage(deliveryMessage(1)); err != nil {
+			t.Fatalf("storeMessage(1) after expiration error = %v, want nil", err)
+		}
+		if err := connection.Send(t.Context(), protocol.Data{}); !errors.Is(err, context.Canceled) {
+			t.Errorf("Send(subscriber) after expiration error = %v, want %v", err, context.Canceled)
+		}
+		replacement := expirationInbox(t, "consumer")
+		subscribeForDelivery(t, manager, lifetime, replacement, "subscriber", "", nil)
+		synctest.Wait()
+		receiveDelivery(t, replacement, 1, deliveryMessage(1))
+		acknowledgeDelivery(t, manager, replacement, "subscriber", 2)
+		checkSavedOffset(t, manager, "subscriber", 2)
+	})
+}
+
+// TestConsumerNotificationsRenewDeadline checks both activity sources across the original deadline.
+func TestConsumerNotificationsRenewDeadline(t *testing.T) {
+	tests := []struct {
+		name   string
+		reply  bool
+		notify func(*Manager, context.Context, protocol.ClientMetadata) error
+	}{
+		{name: "heartbeat", reply: true, notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber"))
+		}},
+		{name: "acknowledgement", notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.Acknowledgement(ctx, metadata, *protocol.NewAcknowledgementPayload("subscriber", 1))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				inbound := expirationInbox(t, "consumer")
+				subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+				if err := target.storeMessage(deliveryMessage(0)); err != nil {
+					t.Fatalf("storeMessage(0) error = %v, want nil", err)
+				}
+				synctest.Wait()
+				receiveDelivery(t, inbound, 0, deliveryMessage(0))
+				connection := subscribedConnection(t, target, "subscriber")
+				<-time.After(20 * time.Second)
+				metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+				if err := tt.notify(manager, t.Context(), metadata); err != nil {
+					t.Errorf("%s(subscriber) at 20s error = %v, want nil", tt.name, err)
+					return
+				}
+				if tt.reply {
+					receiveTopicManagerReply(t, t.Context(), inbound, protocol.ConsumerHeartbeatReply)
+				}
+				synctest.Wait()
+				want := time.Now().Add(consumerTimeout)
+				if got := subscriptionDeadline(t, target, "subscriber"); !got.Equal(want) {
+					t.Errorf("deadline after %s at 20s = %v, want %v", tt.name, got, want)
+				}
+				if err := response.SendToClient(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+					t.Fatalf("SendToClient(marker) after %s error = %v, want nil", tt.name, err)
+				}
+				receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerShutdown)
+				<-time.After(11 * time.Second)
+				synctest.Wait()
+				select {
+				case <-connection.Done():
+					t.Errorf("Done(subscriber) at 31s after %s at 20s is closed, want open until 50s", tt.name)
+				default:
+				}
+				<-time.After(19 * time.Second)
+				synctest.Wait()
+				select {
+				case <-connection.Done():
+				default:
+					t.Errorf("Done(subscriber) at 50s after %s at 20s is open, want closed", tt.name)
+				}
+			})
+		})
+	}
+}
+
+// TestManagerConsumerHeartbeatRejectsMissingConnections checks one-way lookup failures.
+func TestManagerConsumerHeartbeatRejectsMissingConnections(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing bool
+		topic    bool
+	}{
+		{name: "unknown consumer"},
+		{name: "missing topic", existing: true},
+		{name: "disconnected consumer", existing: true, topic: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			if tt.topic {
+				subscriptionTarget(t, manager, "events")
+			}
+			if tt.existing {
+				if err := manager.consumerManager.AddConsumer("subscriber", "events", 17, "", "/subscriber"); err != nil {
+					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
+				}
+			}
+			err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata("/subscriber"), *protocol.NewConsumerHeartbeatPayload("subscriber"))
+			if !errors.Is(err, consumer.ErrNotFound) {
+				t.Errorf("ConsumerHeartbeat(subscriber) with %s error = %v, want %v", tt.name, err, consumer.ErrNotFound)
+			}
+		})
+	}
+}
+
+// TestConsumerHeartbeatRejectsInvalidSession checks that rejected notifications preserve the deadline.
+func TestConsumerHeartbeatRejectsInvalidSession(t *testing.T) {
+	tests := []struct {
+		name     string
+		wrongIPC bool
+		canceled bool
+		wantErr  error
+	}{
+		{name: "wrong IPC", wrongIPC: true, wantErr: consumer.ErrNotFound},
+		{name: "canceled context", canceled: true, wantErr: context.Canceled},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				inbound := expirationInbox(t, "consumer")
+				subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+				synctest.Wait()
+				before := subscriptionDeadline(t, target, "subscriber")
+				<-time.After(time.Second)
+				path := inbound.IPCPath()
+				if tt.wrongIPC {
+					path += ".stale"
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if tt.canceled {
+					cancel()
+				}
+				err := manager.ConsumerHeartbeat(ctx, *protocol.NewClientMetadata(path), *protocol.NewConsumerHeartbeatPayload("subscriber"))
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("ConsumerHeartbeat(subscriber) with %s error = %v, want %v", tt.name, err, tt.wantErr)
+				}
+				if got := subscriptionDeadline(t, target, "subscriber"); !got.Equal(before) {
+					t.Errorf("deadline after rejected heartbeat with %s = %v, want %v", tt.name, got, before)
+				}
+			})
+		})
+	}
+}
+
+// TestInvalidAcknowledgementPreservesDeadline checks that incorrect offsets are not activity.
+func TestInvalidAcknowledgementPreservesDeadline(t *testing.T) {
+	for _, offset := range []uint32{0, 2, ^uint32(0)} {
+		t.Run(fmt.Sprintf("offset_%d", offset), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				inbound := expirationInbox(t, "consumer")
+				subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+				if err := target.storeMessage(deliveryMessage(0)); err != nil {
+					t.Fatalf("storeMessage(0) error = %v, want nil", err)
+				}
+				synctest.Wait()
+				receiveDelivery(t, inbound, 0, deliveryMessage(0))
+				before := subscriptionDeadline(t, target, "subscriber")
+				<-time.After(time.Second)
+				err := manager.Acknowledgement(t.Context(), *protocol.NewClientMetadata(inbound.IPCPath()), *protocol.NewAcknowledgementPayload("subscriber", offset))
+				if !errors.Is(err, protocol.ErrInvalidPayload) {
+					t.Errorf("Acknowledgement(subscriber, %d) error = %v, want %v", offset, err, protocol.ErrInvalidPayload)
+				}
+				if got := subscriptionDeadline(t, target, "subscriber"); !got.Equal(before) {
+					t.Errorf("deadline after rejected ACK(%d) = %v, want %v", offset, got, before)
+				}
+				checkSavedOffset(t, manager, "subscriber", 0)
+			})
+		})
+	}
+}
+
+// TestConsumerHeartbeatRejectsReplacedIPC checks a notification from an earlier connection.
+func TestConsumerHeartbeatRejectsReplacedIPC(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	first := newTopicManagerInbox(t)
+	stopFirst := subscribeForDelivery(t, manager, lifetime, first, "subscriber", "", nil)
+	stopFirst()
+	if !waitTopicWorkers(t, target) {
+		return
+	}
+	second := expirationInbox(t, "replacement")
+	subscribeForDelivery(t, manager, lifetime, second, "subscriber", "", nil)
+	err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(first.IPCPath()), *protocol.NewConsumerHeartbeatPayload("subscriber"))
+	if !errors.Is(err, consumer.ErrNotFound) {
+		t.Errorf("ConsumerHeartbeat(subscriber) from replaced IPC error = %v, want %v", err, consumer.ErrNotFound)
+	}
+	if err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(second.IPCPath()), *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+		t.Errorf("ConsumerHeartbeat(subscriber) from current IPC error = %v, want nil", err)
+	}
+	receiveTopicManagerReply(t, t.Context(), second, protocol.ConsumerHeartbeatReply)
+}
+
+// TestConsumerNotificationsRejectExpiredDeadline checks late activity before timer dispatch.
+func TestConsumerNotificationsRejectExpiredDeadline(t *testing.T) {
+	tests := []struct {
+		name   string
+		notify func(*Manager, context.Context, protocol.ClientMetadata) error
+	}{
+		{name: "heartbeat", notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber"))
+		}},
+		{name: "acknowledgement", notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.Acknowledgement(ctx, metadata, *protocol.NewAcknowledgementPayload("subscriber", 1))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				inbound := expirationInbox(t, "consumer")
+				subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+				if err := target.storeMessage(deliveryMessage(0)); err != nil {
+					t.Fatalf("storeMessage(0) error = %v, want nil", err)
+				}
+				synctest.Wait()
+				receiveDelivery(t, inbound, 0, deliveryMessage(0))
+				connection := subscribedConnection(t, target, "subscriber")
+				target.mu.Lock()
+				c, _ := target.consumerMap.Get("subscriber")
+				c.liveness.deadline = time.Now()
+				target.mu.Unlock()
+				err := tt.notify(manager, t.Context(), *protocol.NewClientMetadata(inbound.IPCPath()))
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Errorf("%s(subscriber) at its elapsed deadline error = %v, want %v", tt.name, err, context.DeadlineExceeded)
+				}
+				synctest.Wait()
+				select {
+				case <-connection.Done():
+				default:
+					t.Errorf("Done(subscriber) after expired %s is open, want closed", tt.name)
+				}
+				checkSavedOffset(t, manager, "subscriber", 0)
+			})
+		})
+	}
+}
+
+// TestConsumerExpirationCancelsBlockedDelivery checks timeout cleanup while the queue is full.
+func TestConsumerExpirationCancelsBlockedDelivery(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := expirationInbox(t, "consumer")
+	entered := make(chan struct{})
+	consumerCtx := subscriptionReplyContext{
+		Context:    lifetime,
+		beforeSend: sync.OnceFunc(func() { close(entered) }),
+	}
+	subscribeForDelivery(t, manager, consumerCtx, inbound, "subscriber", "", nil)
+	fillSubscriptionInbox(t, inbound)
+	if err := target.storeMessage(deliveryMessage(0)); err != nil {
+		t.Fatalf("storeMessage(0) with a full consumer queue error = %v, want nil", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Error("delivery to a full consumer queue did not start within 5s, want started")
+		return
+	}
+	connection := subscribedConnection(t, target, "subscriber")
+	target.mu.Lock()
+	c, _ := target.consumerMap.Get("subscriber")
+	c.liveness.deadline = time.Now()
+	c.liveness.changed <- struct{}{}
+	target.mu.Unlock()
+	if !waitTopicWorkers(t, target) {
+		return
+	}
+	select {
+	case <-connection.Done():
+	default:
+		t.Error("Done(subscriber) after expiration during blocked delivery is open, want closed")
+	}
+	checkSavedOffset(t, manager, "subscriber", 0)
+	replacement := expirationInbox(t, "consumer")
+	subscribeForDelivery(t, manager, lifetime, replacement, "subscriber", "", nil)
+	receiveDelivery(t, replacement, 0, deliveryMessage(0))
 }
 
 // TestManagerConsumerInfoRepliesWithStoredMetadata checks current state without connection changes.
@@ -2071,4 +2448,133 @@ func TestManagerCreateTopicRejectsConcurrentDuplicates(t *testing.T) {
 	if stored, exists := manager.topicMap.Get("events"); !exists || stored == nil {
 		t.Errorf("Get(events) after concurrent creation = %p, exists = %t, want an initialized topic and true", stored, exists)
 	}
+}
+
+// TestConsumerExpirationPrioritizesDisconnect checks the notification before queued deliveries.
+func TestConsumerExpirationPrioritizesDisconnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		inbound := expirationInbox(t, "consumer")
+		subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+		if err := target.storeMessage(deliveryMessage(0)); err != nil {
+			t.Fatalf("storeMessage(0) error = %v, want nil", err)
+		}
+		synctest.Wait()
+		<-time.After(consumerTimeout)
+		synctest.Wait()
+		if !waitTopicWorkers(t, target) {
+			return
+		}
+		data := receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerConsumerDisconnect)
+		payload, ok := data.Payload().(*protocol.ServerConsumerDisconnectPayload)
+		if !ok || payload.ClientID() != "subscriber" {
+			t.Errorf("expiration notification before queued delivery = %#v, want disconnect for subscriber", data.Payload())
+		}
+		receiveDelivery(t, inbound, 0, deliveryMessage(0))
+		checkSavedOffset(t, manager, "subscriber", 0)
+	})
+}
+
+// TestConsumerHeartbeatSelectsConsumer checks that only the identified session is refreshed.
+func TestConsumerHeartbeatSelectsConsumer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		firstTopic, firstLifetime, _ := subscriptionTarget(t, manager, "events")
+		secondTopic, secondLifetime, _ := subscriptionTarget(t, manager, "other")
+		first := expirationInbox(t, "first")
+		second := expirationInbox(t, "second")
+		subscribeForDelivery(t, manager, firstLifetime, first, "first", "", nil)
+		ctx := topicManagerContext(t)
+		if err := manager.NewSubscription(ctx, secondLifetime, lifecycle.GracefulShutdown{},
+			*protocol.NewClientMetadata(second.IPCPath()), *protocol.NewTopicSubscriptionPayload("second", "other", "", nil)); err != nil {
+			t.Fatalf("NewSubscription(second, other) error = %v, want nil", err)
+		}
+		receiveTopicManagerReply(t, ctx, second, protocol.TopicSubscriptionReply)
+		synctest.Wait()
+		firstDeadline := subscriptionDeadline(t, firstTopic, "first")
+		<-time.After(time.Second)
+		if err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(second.IPCPath()), *protocol.NewConsumerHeartbeatPayload("second")); err != nil {
+			t.Errorf("ConsumerHeartbeat(second, second IPC) error = %v, want nil", err)
+		}
+		receiveTopicManagerReply(t, ctx, second, protocol.ConsumerHeartbeatReply)
+		if got := subscriptionDeadline(t, firstTopic, "first"); !got.Equal(firstDeadline) {
+			t.Errorf("first deadline after second heartbeat = %v, want unchanged %v", got, firstDeadline)
+		}
+		want := time.Now().Add(consumerTimeout)
+		if got := subscriptionDeadline(t, secondTopic, "second"); !got.Equal(want) {
+			t.Errorf("second deadline after heartbeat = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestConsumerHeartbeatSelectsIDOnSharedIPC checks consumers sharing a client queue.
+func TestConsumerHeartbeatSelectsIDOnSharedIPC(t *testing.T) {
+	for _, consumerID := range []string{"first", "second"} {
+		t.Run(consumerID, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				inbound := expirationInbox(t, "shared")
+				subscribeForDelivery(t, manager, lifetime, inbound, "first", "", nil)
+				subscribeForDelivery(t, manager, lifetime, inbound, "second", "", nil)
+				synctest.Wait()
+				initialDeadline := subscriptionDeadline(t, target, "first")
+				<-time.After(time.Second)
+				err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(inbound.IPCPath()), *protocol.NewConsumerHeartbeatPayload(consumerID))
+				if err != nil {
+					t.Fatalf("ConsumerHeartbeat(%q, shared IPC) error = %v, want nil", consumerID, err)
+				}
+				receiveTopicManagerReply(t, t.Context(), inbound, protocol.ConsumerHeartbeatReply)
+				for _, name := range []string{"first", "second"} {
+					want := initialDeadline
+					if name == consumerID {
+						want = time.Now().Add(consumerTimeout)
+					}
+					if got := subscriptionDeadline(t, target, id.ID(name)); !got.Equal(want) {
+						t.Errorf("deadline(%q) after heartbeat(%q) = %v, want %v", name, consumerID, got, want)
+					}
+				}
+			})
+		})
+	}
+}
+
+// TestConsumerHeartbeatDropsReplyOnFullQueue checks renewal without waiting for the client.
+func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := newTopicManagerInbox(t)
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	count := fillSubscriptionInbox(t, inbound)
+	target.mu.Lock()
+	c, _ := target.consumerMap.Get("subscriber")
+	before := time.Now().Add(consumerTimeout / 2)
+	c.liveness.deadline = before
+	target.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	for i := range 3 {
+		if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+			t.Fatalf("ConsumerHeartbeat(subscriber) with a full queue at attempt %d error = %v, want nil", i, err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("caller context after heartbeats on a full queue error = %v, want nil", err)
+	}
+	if got := subscriptionDeadline(t, target, "subscriber"); !got.After(before) {
+		t.Errorf("deadline after heartbeats on a full queue = %v, want later than %v", got, before)
+	}
+	for range count {
+		receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+	}
+	if err := response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+		t.Fatalf("SendToClient(marker) after draining the queue error = %v, want nil", err)
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+	if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+		t.Fatalf("ConsumerHeartbeat(subscriber) after draining the queue error = %v, want nil", err)
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.ConsumerHeartbeatReply)
 }

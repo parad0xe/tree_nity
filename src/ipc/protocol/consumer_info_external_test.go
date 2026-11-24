@@ -10,28 +10,28 @@ import (
 	"tree_nity/src/ipc/protocol"
 )
 
-// TestConsumerInfoRoundTrip checks that requests carry only the subscriber and route replies through metadata.
+// TestConsumerInfoRoundTrip checks that requests carry only the id and route replies through metadata.
 func TestConsumerInfoRoundTrip(t *testing.T) {
 	tests := []struct {
-		name       string
-		subscriber string
+		name string
+		id   string
 	}{
-		{name: "minimal name", subscriber: "c"},
-		{name: "different subscriber", subscriber: "consumer-1"},
-		{name: "maximum length", subscriber: strings.Repeat("c", 32)},
-		{name: "mixed characters", subscriber: "Consumer_09.events-1"},
-		{name: "punctuation", subscriber: "_.-"},
+		{name: "minimal name", id: "c"},
+		{name: "different id", id: "consumer-1"},
+		{name: "maximum length", id: strings.Repeat("c", 32)},
+		{name: "mixed characters", id: "Consumer_09.events-1"},
+		{name: "punctuation", id: "_.-"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := protocol.NewConsumerInfoPayload(tt.subscriber)
+			payload := protocol.NewConsumerInfoPayload(tt.id)
 			data, err := protocol.NewData(protocol.ConsumerInfo, protocol.NewClientMetadata("/caller-1"), payload)
 			if err != nil {
-				t.Errorf("NewData(ConsumerInfo, caller-1, subscriber=%q) error = %v, want nil", tt.subscriber, err)
+				t.Errorf("NewData(ConsumerInfo, caller-1, id=%q) error = %v, want nil", tt.id, err)
 				return
 			}
 			frame, err := protocol.Encode(data)
-			wantFrame := fmt.Sprintf(`{"opcode":2,"emitter":0,"metadata":{"clientIPC":"/caller-1"},"payload":{"subscriber":%q}}`, tt.subscriber)
+			wantFrame := fmt.Sprintf(`{"opcode":2,"emitter":0,"metadata":{"clientIPC":"/caller-1"},"payload":{"id":%q}}`, tt.id)
 			if err != nil || string(frame) != wantFrame {
 				t.Errorf("Encode(%#v) = %q, error = %v, want %q and nil", data, frame, err, wantFrame)
 				return
@@ -45,8 +45,8 @@ func TestConsumerInfoRoundTrip(t *testing.T) {
 				t.Errorf("Decode(%q).Payload() type = %T, want *ConsumerInfoPayload", frame, decoded.Payload())
 				return
 			}
-			if got.Subscriber() != tt.subscriber {
-				t.Errorf("Decode(%q).Subscriber() = %q, want %q", frame, got.Subscriber(), tt.subscriber)
+			if got.ID() != tt.id {
+				t.Errorf("Decode(%q).ID() = %q, want %q", frame, got.ID(), tt.id)
 			}
 		})
 	}
@@ -115,7 +115,7 @@ func TestNewDataRejectsInvalidConsumerInfoPayloads(t *testing.T) {
 	}{
 		{name: "nil request", opcode: protocol.ConsumerInfo, metadata: client, payload: (*protocol.ConsumerInfoPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero request", opcode: protocol.ConsumerInfo, metadata: client, payload: &protocol.ConsumerInfoPayload{}, wantErr: protocol.ErrInvalidPayload},
-		{name: "invalid subscriber", opcode: protocol.ConsumerInfo, metadata: client, payload: protocol.NewConsumerInfoPayload("consumer/name"), wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid id", opcode: protocol.ConsumerInfo, metadata: client, payload: protocol.NewConsumerInfoPayload("consumer/name"), wantErr: protocol.ErrInvalidPayload},
 		{name: "nil reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: (*protocol.ConsumerInfoReplyPayload)(nil), wantErr: protocol.ErrMissingPayload},
 		{name: "zero reply", opcode: protocol.ConsumerInfoReply, metadata: server, payload: &protocol.ConsumerInfoReplyPayload{}, wantErr: protocol.ErrInvalidPayload},
 		{name: "empty reply topic", opcode: protocol.ConsumerInfoReply, metadata: server, payload: protocol.NewConsumerInfoReplyPayload("c", "", 0, "", ""), wantErr: protocol.ErrInvalidPayload},

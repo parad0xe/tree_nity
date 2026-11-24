@@ -3,9 +3,16 @@ package topic
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"tree_nity/src/server/session/consumer"
 )
+
+// consumerTimeout is the maximum inactivity after confirmation or an accepted notification.
+const consumerTimeout = 30 * time.Second
+
+// disconnectTimeout bounds the final notification before expiration cleanup.
+const disconnectTimeout = 100 * time.Millisecond
 
 // subscription snapshots metadata and a connection for one pair of workers.
 type subscription struct {
@@ -15,8 +22,17 @@ type subscription struct {
 	onAck          func(uint32) error
 	awaitingACK    bool
 	expectedOffset uint32
+	liveness       *consumerLiveness
 	// done closes after both workers finish cleanup, including onStop.
 	done chan struct{}
+}
+
+// consumerLiveness is shared by the stored subscription and its workers.
+// The topic mutex protects deadline and expired.
+type consumerLiveness struct {
+	changed  chan struct{}
+	deadline time.Time
+	expired  bool
 }
 
 func (s *subscription) validate() error {

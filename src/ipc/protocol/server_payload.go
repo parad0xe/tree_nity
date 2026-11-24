@@ -323,3 +323,63 @@ func (p *ProduceMessageReplyPayload) validate() error {
 	}
 	return nil
 }
+
+// ServerConsumerDisconnectPayload notifies a consumer that its subscription ended.
+type ServerConsumerDisconnectPayload struct {
+	clientID string
+}
+
+// NewServerConsumerDisconnectPayload returns a server disconnection notification.
+func NewServerConsumerDisconnectPayload(clientID string) *ServerConsumerDisconnectPayload {
+	return &ServerConsumerDisconnectPayload{clientID: clientID}
+}
+
+// ClientID returns the disconnected consumer's identifier.
+func (p ServerConsumerDisconnectPayload) ClientID() string {
+	return p.clientID
+}
+
+func (p *ServerConsumerDisconnectPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ServerConsumerDisconnect {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &serverConsumerDisconnectPayloadJSON{ClientID: &p.clientID}, nil
+}
+
+func (p *ServerConsumerDisconnectPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	if err := id.ID(p.clientID).Validate(); err != nil {
+		return fmt.Errorf("%w: clientId: %w", ErrInvalidPayload, err)
+	}
+	return nil
+}
+
+// ConsumerHeartbeatReplyPayload confirms a heartbeat with no payload fields.
+type ConsumerHeartbeatReplyPayload struct{}
+
+// NewConsumerHeartbeatReplyPayload returns an empty heartbeat response.
+func NewConsumerHeartbeatReplyPayload() *ConsumerHeartbeatReplyPayload {
+	return &ConsumerHeartbeatReplyPayload{}
+}
+
+func (p *ConsumerHeartbeatReplyPayload) toJSON(emitter Emitter, opcode Opcode) (payloadJSON, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	if emitter != Server || opcode != ConsumerHeartbeatReply {
+		return nil, fmt.Errorf("%w for emitter %d and opcode %d: %T", ErrInvalidPayload, emitter, opcode, p)
+	}
+	return &consumerHeartbeatReplyPayloadJSON{}, nil
+}
+
+func (p *ConsumerHeartbeatReplyPayload) validate() error {
+	if p == nil {
+		return ErrMissingPayload
+	}
+	return nil
+}

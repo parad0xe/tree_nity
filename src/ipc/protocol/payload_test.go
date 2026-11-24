@@ -20,7 +20,7 @@ func TestClientPayloadDecoding(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{subscriber: "consumer-1"}},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"id":"consumer-1"}`, want: &ConsumerInfoPayload{id: "consumer-1"}},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{"clientId":"client-1","topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{"clientId":"client-1","offset":0}`, want: &AcknowledgementPayload{clientID: "client-1"}},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
@@ -63,7 +63,7 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, input: `{"unexpected":true}`},
 		{name: "create topic", opcode: CreateTopic, input: `{"topic":"orders","unexpected":true}`},
-		{name: "consumer info", opcode: ConsumerInfo, input: `{"subscriber":"consumer-1","unexpected":true}`},
+		{name: "consumer info", opcode: ConsumerInfo, input: `{"id":"consumer-1","unexpected":true}`},
 		{name: "topic subscription", opcode: TopicSubscription, input: `{"clientId":"client-1","topic":"orders","prefix":"","unexpected":true}`},
 		{name: "acknowledgement", opcode: Acknowledgement, input: `{"clientId":"client-1","offset":0,"unexpected":true}`},
 		{name: "check topic", opcode: CheckTopic, input: `{"topic":"orders","unexpected":true}`},
@@ -87,6 +87,10 @@ func TestClientPayloadDecodingRejectsUnknownFields(t *testing.T) {
 
 // TestPayloadDecodingRejectsInvalidOperations checks opcode selection and required fields.
 func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
+	var firstUnknown Opcode
+	for opcode := range serverPayloadJSONFactories {
+		firstUnknown = max(firstUnknown, opcode+1)
+	}
 	tests := []struct {
 		name    string
 		emitter Emitter
@@ -101,7 +105,7 @@ func TestPayloadDecodingRejectsInvalidOperations(t *testing.T) {
 		{name: "missing error kind", emitter: Server, opcode: ErrorReply, wantErr: ErrMissingErrorKind},
 		{name: "missing delivery message", emitter: Server, opcode: MessageDelivery, wantErr: ErrMissingMessage},
 		{name: "negative server opcode", emitter: Server, opcode: -1, wantErr: ErrUnknownOpcode},
-		{name: "unknown server opcode", emitter: Server, opcode: 9, wantErr: ErrUnknownOpcode},
+		{name: "unknown server opcode", emitter: Server, opcode: firstUnknown, wantErr: ErrUnknownOpcode},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

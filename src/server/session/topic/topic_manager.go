@@ -100,7 +100,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 
 // ConsumerInfo replies with saved subscriber metadata; ctx bounds reply delivery.
 func (m *Manager) ConsumerInfo(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerInfoPayload) error {
-	c, err := m.consumerManager.GetConsumer(id.ID(payload.Subscriber()))
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.ID()))
 	if errors.Is(err, consumer.ErrNotFound) {
 		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.ClientNotFound, err.Error()))
@@ -208,6 +208,27 @@ func (m *Manager) ConsumerDisconnect(ctx context.Context, metadata protocol.Clie
 		return consumer.ErrNotFound
 	}
 	return target.disconnect(ctx, c.Info.ID(), metadata.ClientIPC())
+}
+
+// ConsumerHeartbeat refreshes the consumer's deadline and attempts an immediate reply.
+func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerHeartbeatPayload) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c, err := m.consumerManager.GetConsumer(id.ID(payload.ClientID()))
+	if err != nil {
+		return err
+	}
+	m.mu.RLock()
+	target, exists := m.topicMap.Get(id.ID(c.Info.Topic()))
+	m.mu.RUnlock()
+	if !exists {
+		return consumer.ErrNotFound
+	}
+	if err := target.heartbeat(ctx, c.Info.ID(), metadata.ClientIPC()); err != nil {
+		return err
+	}
+	return response.TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload())
 }
 
 // CheckTopic replies with existence or rejection status; ctx bounds delivery.

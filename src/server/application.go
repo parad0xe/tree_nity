@@ -154,8 +154,7 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	case *protocol.ConsumerDisconnectPayload:
 		err = app.topicManager.ConsumerDisconnect(sendCtx, *metadata, *payload)
 	case *protocol.ConsumerHeartbeatPayload:
-		// TODO: route heartbeat notifications to a consumer handler.
-		return exitcode.General, errUnhandledOpcode
+		err = app.topicManager.ConsumerHeartbeat(sendCtx, *metadata, *payload)
 	default:
 		err = response.SendToClient(
 			sendCtx,

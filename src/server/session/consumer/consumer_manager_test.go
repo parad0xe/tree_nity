@@ -1658,6 +1658,49 @@ func TestManagerReconnect(t *testing.T) {
 	}
 }
 
+// TestManagerRetainsReservationUntilExpiredCleanup checks the release order and saved metadata.
+func TestManagerRetainsReservationUntilExpiredCleanup(t *testing.T) {
+	path, _ := newExpiringConsumerQueue(t)
+	manager := NewManager()
+	offset := uint32(17)
+	c, _, err := manager.Subscribe(t.Context(), "subscriber", "events", &offset, "user/", path)
+	if err != nil {
+		t.Fatalf("Subscribe(subscriber, offset 17) error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.DisconnectConsumer(c); err != nil {
+			t.Errorf("DisconnectConsumer(subscriber) during cleanup error = %v, want nil", err)
+		}
+	})
+	if err := c.Connection().Drop(); err != nil {
+		t.Errorf("Drop(subscriber) before reservation release error = %v, want nil", err)
+	}
+	replacementPath := newTestConsumerQueue(t, "replacement")
+	if replacementPath == "" {
+		return
+	}
+	if _, _, err := manager.Subscribe(t.Context(), "subscriber", "events", nil, "user/", replacementPath); !errors.Is(err, ErrAlreadyConnected) {
+		t.Errorf("Subscribe(subscriber) before DisconnectConsumer() error = %v, want %v", err, ErrAlreadyConnected)
+	}
+	if err := manager.DisconnectConsumer(c); err != nil {
+		t.Errorf("DisconnectConsumer(subscriber) after Drop() error = %v, want nil", err)
+		return
+	}
+	replacement, _, err := manager.Subscribe(t.Context(), "subscriber", "events", nil, "user/", replacementPath)
+	if err != nil {
+		t.Errorf("Subscribe(subscriber) after expired cleanup error = %v, want nil", err)
+		return
+	}
+	t.Cleanup(func() {
+		if err := manager.DisconnectConsumer(replacement); err != nil {
+			t.Errorf("DisconnectConsumer(replacement subscriber) error = %v, want nil", err)
+		}
+	})
+	if got := replacement.Info.Offset(); got != offset {
+		t.Errorf("resumed subscriber offset after expired cleanup = %d, want %d", got, offset)
+	}
+}
+
 // TestManagerConcurrentLifecycle checks concurrent lifecycle calls.
 func TestManagerConcurrentLifecycle(t *testing.T) {
 	ipcPath := newTestConsumerQueue(t)

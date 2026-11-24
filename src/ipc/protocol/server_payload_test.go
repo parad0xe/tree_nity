@@ -24,6 +24,8 @@ func TestServerOpcodeValues(t *testing.T) {
 		{name: "message delivery", opcode: MessageDelivery, want: 6},
 		{name: "server shutdown", opcode: ServerShutdown, want: 7},
 		{name: "produce message reply", opcode: ProduceMessageReply, want: 8},
+		{name: "server consumer disconnect", opcode: ServerConsumerDisconnect, want: 9},
+		{name: "consumer heartbeat reply", opcode: ConsumerHeartbeatReply, want: 10},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

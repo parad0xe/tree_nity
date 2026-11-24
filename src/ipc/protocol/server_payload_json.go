@@ -1,15 +1,17 @@
 package protocol
 
 var serverPayloadJSONFactories = map[Opcode]func() payloadJSON{
-	ListTopicReply:         func() payloadJSON { return &listTopicReplyPayloadJSON{} },
-	CreateTopicReply:       func() payloadJSON { return &createTopicReplyPayloadJSON{} },
-	ConsumerInfoReply:      func() payloadJSON { return &consumerInfoReplyPayloadJSON{} },
-	TopicSubscriptionReply: func() payloadJSON { return &topicSubscriptionReplyPayloadJSON{} },
-	CheckTopicReply:        func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
-	ErrorReply:             func() payloadJSON { return &errorReplyPayloadJSON{} },
-	MessageDelivery:        func() payloadJSON { return &messageDeliveryPayloadJSON{} },
-	ServerShutdown:         func() payloadJSON { return &serverShutdownPayloadJSON{} },
-	ProduceMessageReply:    func() payloadJSON { return &produceMessageReplyPayloadJSON{} },
+	ListTopicReply:           func() payloadJSON { return &listTopicReplyPayloadJSON{} },
+	CreateTopicReply:         func() payloadJSON { return &createTopicReplyPayloadJSON{} },
+	ConsumerInfoReply:        func() payloadJSON { return &consumerInfoReplyPayloadJSON{} },
+	TopicSubscriptionReply:   func() payloadJSON { return &topicSubscriptionReplyPayloadJSON{} },
+	CheckTopicReply:          func() payloadJSON { return &checkTopicReplyPayloadJSON{} },
+	ErrorReply:               func() payloadJSON { return &errorReplyPayloadJSON{} },
+	MessageDelivery:          func() payloadJSON { return &messageDeliveryPayloadJSON{} },
+	ServerShutdown:           func() payloadJSON { return &serverShutdownPayloadJSON{} },
+	ProduceMessageReply:      func() payloadJSON { return &produceMessageReplyPayloadJSON{} },
+	ServerConsumerDisconnect: func() payloadJSON { return &serverConsumerDisconnectPayloadJSON{} },
+	ConsumerHeartbeatReply:   func() payloadJSON { return &consumerHeartbeatReplyPayloadJSON{} },
 }
 
 type listTopicReplyPayloadJSON struct {
@@ -203,5 +205,40 @@ func (p produceMessageReplyPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p produceMessageReplyPayloadJSON) validate() error {
+	return nil
+}
+
+type serverConsumerDisconnectPayloadJSON struct {
+	ClientID *string `json:"clientId"`
+}
+
+func (p serverConsumerDisconnectPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	payload := NewServerConsumerDisconnectPayload(*p.ClientID)
+	if err := payload.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (p serverConsumerDisconnectPayloadJSON) validate() error {
+	if p.ClientID == nil {
+		return ErrMissingClientID
+	}
+	return nil
+}
+
+type consumerHeartbeatReplyPayloadJSON struct{}
+
+func (p consumerHeartbeatReplyPayloadJSON) toPayload() (Payload, error) {
+	if err := p.validate(); err != nil {
+		return nil, err
+	}
+	return &ConsumerHeartbeatReplyPayload{}, nil
+}
+
+func (p consumerHeartbeatReplyPayloadJSON) validate() error {
 	return nil
 }

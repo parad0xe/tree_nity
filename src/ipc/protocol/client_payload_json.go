@@ -49,15 +49,15 @@ func (p createTopicPayloadJSON) validate() error {
 }
 
 type consumerInfoPayloadJSON struct {
-	// Subscriber is the required consumer name to query.
-	Subscriber *string `json:"subscriber"`
+	// ID is the required consumer identifier to query.
+	ID *string `json:"id"`
 }
 
 func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	payload := &ConsumerInfoPayload{subscriber: *p.Subscriber}
+	payload := &ConsumerInfoPayload{id: *p.ID}
 	if err := payload.validate(); err != nil {
 		return nil, err
 	}
@@ -65,8 +65,8 @@ func (p consumerInfoPayloadJSON) toPayload() (Payload, error) {
 }
 
 func (p consumerInfoPayloadJSON) validate() error {
-	if p.Subscriber == nil {
-		return ErrMissingSubscriber
+	if p.ID == nil {
+		return ErrMissingID
 	}
 	return nil
 }

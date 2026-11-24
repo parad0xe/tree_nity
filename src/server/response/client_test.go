@@ -175,3 +175,91 @@ func TestSendToClientPropagatesSendErrors(t *testing.T) {
 		t.Errorf("SendToClient(ListTopicReply, %d topics) error = %v, want %v and %v", len(topics), err, mqueue.ErrFrameTooLarge, ErrReply)
 	}
 }
+
+// TestTrySendToClientSendsServerFrame checks that an available queue receives the reply.
+func TestTrySendToClientSendsServerFrame(t *testing.T) {
+	ctx := testContext(t)
+	inbound := newTestInbound(t, testIPCPath(t), protocol.Decode)
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	if err := TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload()); err != nil {
+		t.Fatalf("TrySendToClient(%q, ConsumerHeartbeatReply) error = %v, want nil", inbound.IPCPath(), err)
+	}
+	data, err := inbound.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv(%q) after TrySendToClient error = %v, want nil", inbound.IPCPath(), err)
+	}
+	if data.Emitter() != protocol.Server || data.Opcode() != protocol.ConsumerHeartbeatReply {
+		t.Errorf("TrySendToClient envelope = emitter %v, opcode %v, want %v and %v", data.Emitter(), data.Opcode(), protocol.Server, protocol.ConsumerHeartbeatReply)
+	}
+	if _, ok := data.Metadata().(*protocol.ServerMetadata); !ok {
+		t.Errorf("TrySendToClient metadata = %T, want *protocol.ServerMetadata", data.Metadata())
+	}
+	if _, ok := data.Payload().(*protocol.ConsumerHeartbeatReplyPayload); !ok {
+		t.Errorf("TrySendToClient payload = %T, want *protocol.ConsumerHeartbeatReplyPayload", data.Payload())
+	}
+}
+
+// TestTrySendToClientDropsFullQueue checks completion before the caller's deadline.
+func TestTrySendToClientDropsFullQueue(t *testing.T) {
+	inbound := newTestInbound(t, testIPCPath(t), protocol.Decode)
+	fillInbound(t, inbound)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	if err := TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload()); err != nil {
+		t.Errorf("TrySendToClient(%q) with a full queue error = %v, want nil", inbound.IPCPath(), err)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("caller context after TrySendToClient on a full queue error = %v, want nil", err)
+	}
+}
+
+// TestTrySendToClientPropagatesErrors checks failures other than queue capacity.
+func TestTrySendToClientPropagatesErrors(t *testing.T) {
+	topics := make([]string, 1024)
+	for i := range topics {
+		topics[i] = "events"
+	}
+	tests := []struct {
+		name      string
+		ipcPath   string
+		opcode    protocol.Opcode
+		payload   protocol.Payload
+		canceled  bool
+		expired   bool
+		wantErr   error
+		wantReply bool
+	}{
+		{name: "invalid payload", ipcPath: "/missing", opcode: protocol.ConsumerHeartbeatReply, wantErr: protocol.ErrMissingPayload},
+		{name: "invalid queue", ipcPath: "/invalid/queue", opcode: protocol.ConsumerHeartbeatReply, payload: protocol.NewConsumerHeartbeatReplyPayload(), wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: testIPCPath(t) + ".missing", opcode: protocol.ConsumerHeartbeatReply, payload: protocol.NewConsumerHeartbeatReplyPayload(), wantErr: os.ErrNotExist},
+		{name: "canceled context", opcode: protocol.ConsumerHeartbeatReply, payload: protocol.NewConsumerHeartbeatReplyPayload(), canceled: true, wantErr: context.Canceled, wantReply: true},
+		{name: "expired context", opcode: protocol.ConsumerHeartbeatReply, payload: protocol.NewConsumerHeartbeatReplyPayload(), expired: true, wantErr: context.DeadlineExceeded, wantReply: true},
+		{name: "oversized frame", opcode: protocol.ListTopicReply, payload: protocol.NewListTopicReplyPayload(topics), wantErr: mqueue.ErrFrameTooLarge, wantReply: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := tt.ipcPath
+			if path == "" {
+				path = newTestInbound(t, testIPCPath(t), protocol.Decode).IPCPath()
+			}
+			ctx := testContext(t)
+			if tt.canceled {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				ctx = canceled
+			} else if tt.expired {
+				expired, cancel := context.WithDeadline(ctx, time.Unix(0, 0))
+				defer cancel()
+				ctx = expired
+			}
+			err := TrySendToClient(ctx, *protocol.NewClientMetadata(path), tt.opcode, tt.payload)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("TrySendToClient(%q, %v) with %s error = %v, want %v", path, tt.opcode, tt.name, err, tt.wantErr)
+			}
+			if got := errors.Is(err, ErrReply); got != tt.wantReply {
+				t.Errorf("TrySendToClient(%q) with %s matches ErrReply = %t, want %t", path, tt.name, got, tt.wantReply)
+			}
+		})
+	}
+}

@@ -42,6 +42,22 @@ func cleanupTestConnection(t *testing.T, connection *Connection) {
 	})
 }
 
+func newExpiringConsumerQueue(t *testing.T) (string, *mqueue.Receiver) {
+	t.Helper()
+	path := fmt.Sprintf("/expired.%d.%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."))
+	receiver, err := mqueue.NewReceiver(path)
+	if err != nil {
+		t.Fatalf("NewReceiver(%q) error = %v, want nil", path, err)
+	}
+	t.Cleanup(func() {
+		// Expiration removes the queue through the connection rather than its owner.
+		if err := receiver.Drop(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Drop(%q) after expiration error = %v, want nil or %v", path, err, os.ErrNotExist)
+		}
+	})
+	return path, receiver
+}
+
 func newTestEncodedConnection(t *testing.T, parent context.Context, ipcPath string, encode ipc.EncodeFunc) *Connection {
 	t.Helper()
 	outbound, err := ipc.NewOutbound(ipcPath, encode)
@@ -469,6 +485,139 @@ func TestConnectionCloseWithoutCancel(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestConnectionDropWithoutResources checks repeatable cleanup of missing resources.
+func TestConnectionDropWithoutResources(t *testing.T) {
+	tests := []struct {
+		name       string
+		connection *Connection
+	}{
+		{name: "nil receiver"},
+		{name: "zero value", connection: &Connection{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for i := 0; i < 2; i++ {
+				if err := tt.connection.Drop(); err != nil {
+					t.Errorf("Drop() call %d for %s error = %v, want nil", i+1, tt.name, err)
+				}
+			}
+		})
+	}
+}
+
+// TestConnectionDropPreservesReplacement checks cancellation and concurrent repeat cleanup.
+func TestConnectionDropPreservesReplacement(t *testing.T) {
+	path, _ := newExpiringConsumerQueue(t)
+	connection, err := newConnection(t.Context(), path)
+	if err != nil {
+		t.Fatalf("newConnection(%q) error = %v, want nil", path, err)
+	}
+	cleanupTestConnection(t, connection)
+	if err := connection.Drop(); err != nil {
+		t.Errorf("Drop(%q) error = %v, want nil", path, err)
+	}
+	select {
+	case <-connection.Done():
+	default:
+		t.Errorf("Done(%q) after Drop() is open, want closed", path)
+	}
+	sender, err := mqueue.NewSender(path)
+	if err == nil {
+		if closeErr := sender.Close(); closeErr != nil {
+			t.Errorf("Close(%q) for unexpected sender error = %v, want nil", path, closeErr)
+		}
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("NewSender(%q) after Drop() error = %v, want %v", path, err, os.ErrNotExist)
+		return
+	}
+	replacement, err := mqueue.NewReceiver(path)
+	if err != nil {
+		t.Fatalf("NewReceiver(%q) after Drop() error = %v, want nil", path, err)
+	}
+	t.Cleanup(func() {
+		if err := replacement.Drop(); err != nil {
+			t.Errorf("Drop(%q) for replacement queue error = %v, want nil", path, err)
+		}
+	})
+	var group sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if err := connection.Drop(); err != nil {
+				t.Errorf("concurrent Drop(%q) error = %v, want nil", path, err)
+			}
+			if err := connection.Close(); err != nil {
+				t.Errorf("concurrent Close(%q) after Drop() error = %v, want nil", path, err)
+			}
+		}()
+	}
+	group.Wait()
+	sender, err = mqueue.NewSender(path)
+	if err != nil {
+		t.Errorf("NewSender(%q) after repeated Drop() error = %v, want nil for the replacement queue", path, err)
+		return
+	}
+	if err := sender.Close(); err != nil {
+		t.Errorf("Close(%q) for replacement sender error = %v, want nil", path, err)
+	}
+}
+
+// TestConnectionDropAcceptsMissingQueue checks a consumer that already removed its queue.
+func TestConnectionDropAcceptsMissingQueue(t *testing.T) {
+	path, receiver := newExpiringConsumerQueue(t)
+	connection, err := newConnection(t.Context(), path)
+	if err != nil {
+		t.Fatalf("newConnection(%q) error = %v, want nil", path, err)
+	}
+	cleanupTestConnection(t, connection)
+	if err := receiver.Unlink(); err != nil {
+		t.Errorf("Unlink(%q) before Drop() error = %v, want nil", path, err)
+		return
+	}
+	if err := connection.Drop(); err != nil {
+		t.Errorf("Drop(%q) after owner Unlink() error = %v, want nil", path, err)
+	}
+}
+
+// TestConnectionDropCancelsBlockedSend checks expiration with a full queue.
+func TestConnectionDropCancelsBlockedSend(t *testing.T) {
+	path, _ := newExpiringConsumerQueue(t)
+	if !fillTestConsumerQueue(t, path) {
+		return
+	}
+	entered := make(chan struct{})
+	connection := newTestEncodedConnection(t, t.Context(), path, func(protocol.Data) ([]byte, error) {
+		close(entered)
+		return []byte("frame"), nil
+	})
+	if connection == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- connection.Send(ctx, protocol.Data{}) }()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Errorf("Send(%q) before expiration error = %v, want encoding started", path, ctx.Err())
+		return
+	}
+	if err := connection.Drop(); err != nil {
+		t.Errorf("Drop(%q) during a blocked Send() error = %v, want nil", path, err)
+	}
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Send(%q) after Drop() error = %v, want %v", path, err, context.Canceled)
+		}
+	case <-ctx.Done():
+		t.Errorf("Send(%q) after Drop() did not stop: %v, want %v", path, ctx.Err(), context.Canceled)
 	}
 }
 

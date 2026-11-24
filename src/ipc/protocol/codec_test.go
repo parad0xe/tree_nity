@@ -58,7 +58,7 @@ func TestEncode(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, json: `{}`},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, json: `{"subscriber":"consumer-1"}`},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{id: "consumer-1"}, json: `{"id":"consumer-1"}`},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}, json: `{"clientId":"client-1","topic":"orders","prefix":""}`},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{clientID: "client-1"}, json: `{"clientId":"client-1","offset":0}`},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, json: `{"topic":"orders"}`},
@@ -322,7 +322,7 @@ func TestEncodeRejectsIncompatiblePayloads(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, nilPtr: (*ListTopicPayload)(nil)},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, nilPtr: (*CreateTopicPayload)(nil)},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, nilPtr: (*ConsumerInfoPayload)(nil)},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{id: "consumer-1"}, nilPtr: (*ConsumerInfoPayload)(nil)},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}, nilPtr: (*TopicSubscriptionPayload)(nil)},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{clientID: "client-1"}, nilPtr: (*AcknowledgementPayload)(nil)},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, nilPtr: (*CheckTopicPayload)(nil)},
@@ -363,7 +363,7 @@ func TestDecode(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: `{}`, want: &ListTopicPayload{}},
 		{name: "create topic", opcode: CreateTopic, payload: `{"topic":"orders"}`, want: &CreateTopicPayload{topic: "orders"}},
-		{name: "consumer info", opcode: ConsumerInfo, payload: `{"subscriber":"consumer-1"}`, want: &ConsumerInfoPayload{subscriber: "consumer-1"}},
+		{name: "consumer info", opcode: ConsumerInfo, payload: `{"id":"consumer-1"}`, want: &ConsumerInfoPayload{id: "consumer-1"}},
 		{name: "topic subscription", opcode: TopicSubscription, payload: `{"clientId":"client-1","topic":"orders","prefix":""}`, want: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: `{"clientId":"client-1","offset":0}`, want: &AcknowledgementPayload{clientID: "client-1"}},
 		{name: "check topic", opcode: CheckTopic, payload: `{"topic":"orders"}`, want: &CheckTopicPayload{topic: "orders"}},
@@ -433,7 +433,7 @@ func TestEncodeRejectsClientPayloadsFromServer(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, payload: &ListTopicPayload{}, wantErr: ErrInvalidPayload},
 		{name: "create topic", opcode: CreateTopic, payload: &CreateTopicPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
-		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{subscriber: "consumer-1"}, wantErr: ErrInvalidPayload},
+		{name: "consumer info", opcode: ConsumerInfo, payload: &ConsumerInfoPayload{id: "consumer-1"}, wantErr: ErrInvalidPayload},
 		{name: "topic subscription", opcode: TopicSubscription, payload: &TopicSubscriptionPayload{clientID: "client-1", topic: "orders"}, wantErr: ErrInvalidPayload},
 		{name: "acknowledgement", opcode: Acknowledgement, payload: &AcknowledgementPayload{clientID: "client-1"}, wantErr: ErrInvalidPayload},
 		{name: "check topic", opcode: CheckTopic, payload: &CheckTopicPayload{topic: "orders"}, wantErr: ErrInvalidPayload},
@@ -466,7 +466,7 @@ func TestDecodeRejectsInvalidServerPayloads(t *testing.T) {
 	}{
 		{name: "list topic", opcode: ListTopic, json: `{}`, wantErr: ErrMissingTopics},
 		{name: "create topic", opcode: CreateTopic, json: `{"topic":"orders"}`},
-		{name: "consumer info", opcode: ConsumerInfo, json: `{"subscriber":"consumer-1"}`},
+		{name: "consumer info", opcode: ConsumerInfo, json: `{"id":"consumer-1"}`},
 		{name: "topic subscription", opcode: TopicSubscription, json: `{"clientId":"client-1","topic":"orders","prefix":""}`},
 		{name: "acknowledgement", opcode: Acknowledgement, json: `{"clientId":"client-1","offset":42}`},
 		{name: "check topic", opcode: CheckTopic, json: `{"topic":"orders"}`},
