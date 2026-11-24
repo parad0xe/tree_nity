@@ -6,11 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
 )
+
+// maxMissedHeartbeats is the number of unanswered heartbeats that stops the subscriber.
+const maxMissedHeartbeats = 3
 
 type subscribeCommand struct {
 	topic      id.ID
@@ -129,18 +133,40 @@ func (cmd *subscribeCommand) Execute(ctx context.Context, env Env) (int, error) 
 	return code, err
 }
 
-// consume prints and acknowledges the delivered messages.
+// consume prints and acknowledges the delivered messages, and sends the heartbeats.
 func (cmd *subscribeCommand) consume(ctx context.Context, recvCtx context.Context, env Env) (int, error) {
+	heartbeatData, err := env.createData(
+		protocol.ConsumerHeartbeat,
+		protocol.NewConsumerHeartbeatPayload(string(cmd.subscriber)),
+	)
+	if err != nil {
+		return exitcode.General, err
+	}
+
+	missed := 0
+	nextHeartbeat := time.Now().Add(env.HeartbeatInterval)
+
 	for {
 		if env.Shutdown.IsRequested() {
 			return exitcode.Success, nil
 		}
 
-		waitCtx, waitCancel := context.WithTimeout(recvCtx, env.RecvTimeout)
+		waitCtx, waitCancel := context.WithDeadline(recvCtx, nextHeartbeat)
 		data, code, err := env.recvData(waitCtx)
 		waitCancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				if missed >= maxMissedHeartbeats {
+					return exitcode.IPC, errServerUnresponsive
+				}
+
+				sendCtx, sendCancel := context.WithTimeout(ctx, env.HeartbeatSendTimeout)
+				// An unsent heartbeat counts as unanswered.
+				_ = env.Outbound.Send(sendCtx, heartbeatData)
+				sendCancel()
+
+				missed++
+				nextHeartbeat = time.Now().Add(env.HeartbeatInterval)
 				continue
 			}
 			if env.Shutdown.IsRequested() {
@@ -149,11 +175,16 @@ func (cmd *subscribeCommand) consume(ctx context.Context, recvCtx context.Contex
 			return code, err
 		}
 
+		// Any data from the server answers the heartbeats.
+		missed = 0
+
 		switch data.Opcode() {
 		case protocol.MessageDelivery:
 			if code, err := cmd.deliver(ctx, env, data); err != nil {
 				return code, err
 			}
+		case protocol.ConsumerHeartbeatReply:
+			// Nothing to do: the counter was reset above.
 		case protocol.ServerConsumerDisconnect:
 			return exitcode.IPC, errSubscriptionEnded
 		default:

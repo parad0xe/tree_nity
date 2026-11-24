@@ -24,6 +24,9 @@ const defaultGracePeriod = 4 * time.Second
 // defaultCancelTimeout is the time the command has to stop once cancelled.
 const defaultCancelTimeout = 1 * time.Second
 
+// defaultHeartbeatInterval is the time between two heartbeats of a subscriber.
+const defaultHeartbeatInterval = 5 * time.Second
+
 // commandParsers maps each command name to the function that parses its arguments.
 var commandParsers = map[string]func(args []string) (commands.Command, error){
 	"produce":   commands.ParseProduce,
@@ -51,11 +54,12 @@ func run(ctx context.Context) (code int) {
 	}
 
 	app, err := newApplication(appConfig{
-		serverIPCPath: serverIPCPath,
-		encoder:       protocol.Encode,
-		decoder:       protocol.Decode,
-		gracePeriod:   defaultGracePeriod,
-		cancelTimeout: defaultCancelTimeout,
+		serverIPCPath:     serverIPCPath,
+		encoder:           protocol.Encode,
+		decoder:           protocol.Decode,
+		gracePeriod:       defaultGracePeriod,
+		cancelTimeout:     defaultCancelTimeout,
+		heartbeatInterval: defaultHeartbeatInterval,
 	})
 	if err != nil {
 		logError("client:", err)

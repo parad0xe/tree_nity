@@ -18,6 +18,8 @@ const (
 	DefaultRecvTimeout = 2 * time.Second
 	// DefaultSendTimeout is the longest a request waits while the server queue is full.
 	DefaultSendTimeout = 2 * time.Second
+	// DefaultHeartbeatSendTimeout is the longest a heartbeat waits while the server queue is full.
+	DefaultHeartbeatSendTimeout = 100 * time.Millisecond
 )
 
 // Env holds what every command can use while it runs.
@@ -36,6 +38,10 @@ type Env struct {
 	RecvTimeout time.Duration
 	// SendTimeout is the longest a request waits while the server queue is full.
 	SendTimeout time.Duration
+	// HeartbeatInterval is the time between two heartbeats of a subscriber.
+	HeartbeatInterval time.Duration
+	// HeartbeatSendTimeout is the longest a heartbeat waits while the server queue is full.
+	HeartbeatSendTimeout time.Duration
 }
 
 // createData returns a client request.

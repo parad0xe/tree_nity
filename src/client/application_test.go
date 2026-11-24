@@ -398,6 +398,30 @@ func TestRunPassesDefaultTimeoutsToCommand(t *testing.T) {
 	if got.SendTimeout != commands.DefaultSendTimeout {
 		t.Errorf("run() env.SendTimeout = %v, want %v", got.SendTimeout, commands.DefaultSendTimeout)
 	}
+	if got.HeartbeatSendTimeout != commands.DefaultHeartbeatSendTimeout {
+		t.Errorf("run() env.HeartbeatSendTimeout = %v, want %v", got.HeartbeatSendTimeout, commands.DefaultHeartbeatSendTimeout)
+	}
+}
+
+func TestRunPassesHeartbeatIntervalToCommand(t *testing.T) {
+	app := &application{
+		inbound:           &ipc.Inbound{},
+		outbound:          &ipc.Outbound{},
+		heartbeatInterval: testTimeout,
+	}
+	var got commands.Env
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		got = env
+		return exitcode.Success, nil
+	})
+
+	if _, err := app.run(context.Background(), command); err != nil {
+		t.Errorf("run() error = %v, want nil", err)
+	}
+
+	if got.HeartbeatInterval != app.heartbeatInterval {
+		t.Errorf("run() env.HeartbeatInterval = %v, want %v", got.HeartbeatInterval, app.heartbeatInterval)
+	}
 }
 
 func TestRunDoesNotRequestShutdownWithoutSignal(t *testing.T) {

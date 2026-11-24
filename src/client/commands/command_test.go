@@ -25,6 +25,8 @@ const (
 	shortSendTimeout = 20 * time.Millisecond
 	// shortRecvTimeout is a receive timeout short enough to wait for in a test.
 	shortRecvTimeout = 20 * time.Millisecond
+	// shortHeartbeatInterval is a heartbeat interval short enough to wait for in a test.
+	shortHeartbeatInterval = 50 * time.Millisecond
 )
 
 // errTestWrite is the error that failingWriter returns.
@@ -132,7 +134,7 @@ func newReplyEnv(t *testing.T, reply protocol.Data) Env {
 	if err := server.Send(context.Background(), reply); err != nil {
 		t.Fatalf("Send(%d) error = %v, want nil", reply.Opcode(), err)
 	}
-	return Env{Inbound: inbound, RecvTimeout: testTimeout, SendTimeout: testTimeout}
+	return Env{Inbound: inbound, RecvTimeout: testTimeout, SendTimeout: testTimeout, HeartbeatInterval: testTimeout, HeartbeatSendTimeout: testTimeout}
 }
 
 // newCommandEnv returns an Env whose inbound already holds the reply, with the

@@ -534,6 +534,114 @@ func TestSubscribeExecuteRejectsUnexpectedOpcodeDuringConsumption(t *testing.T) 
 	}
 }
 
+func TestSubscribeExecuteSendsHeartbeat(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.HeartbeatInterval = shortHeartbeatInterval
+	shutdown, requestShutdown := newShutdown()
+	env.Shutdown = shutdown
+
+	result := startExecute(cmd, env)
+	recvTestData(t, server)
+	got := recvTestData(t, server)
+	requestShutdown()
+
+	if code, err := waitExecute(t, result); err != nil || code != exitcode.Success {
+		t.Fatalf("Execute() after a heartbeat and a shutdown = %d, %v, want %d, nil", code, err, exitcode.Success)
+	}
+	want := newSubscriberData(t, env, protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload(string(cmd.subscriber)))
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request of Execute() after %v = %+v, want %+v", env.HeartbeatInterval, got, want)
+	}
+}
+
+func TestSubscribeExecuteReturnsIPCCodeAfterMissedHeartbeats(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.HeartbeatInterval = shortHeartbeatInterval
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.IPC || !errors.Is(err, errServerUnresponsive) {
+		t.Errorf("Execute() after %d unanswered heartbeats = %d, %v, want %d, %v", maxMissedHeartbeats, code, err, exitcode.IPC, errServerUnresponsive)
+	}
+}
+
+func TestSubscribeExecuteSkipsDisconnectAfterMissedHeartbeats(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.HeartbeatInterval = shortHeartbeatInterval
+
+	if code, err := executeWithTimeout(t, cmd, env); code != exitcode.IPC || !errors.Is(err, errServerUnresponsive) {
+		t.Fatalf("Execute() after %d unanswered heartbeats = %d, %v, want %d, %v", maxMissedHeartbeats, code, err, exitcode.IPC, errServerUnresponsive)
+	}
+	// Skip the subscription request and the heartbeats.
+	for range maxMissedHeartbeats + 1 {
+		recvTestData(t, server)
+	}
+	assertNoTestData(t, server)
+}
+
+func TestSubscribeExecuteResetsMissedHeartbeatsOnReply(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.HeartbeatInterval = shortHeartbeatInterval
+
+	result := startExecute(cmd, env)
+	// Wait until one more unanswered heartbeat would stop the subscriber.
+	for range maxMissedHeartbeats {
+		recvTestData(t, server)
+	}
+	sendTestReplies(t, env, newServerData(t, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload()))
+	// Without a reset, Execute stops after the next heartbeat.
+	for range maxMissedHeartbeats {
+		recvTestData(t, server)
+	}
+
+	if code, err := waitExecute(t, result); code != exitcode.IPC || !errors.Is(err, errServerUnresponsive) {
+		t.Errorf("Execute() after a heartbeat reply and %d unanswered heartbeats = %d, %v, want %d, %v", maxMissedHeartbeats, code, err, exitcode.IPC, errServerUnresponsive)
+	}
+}
+
+func TestSubscribeExecuteResetsMissedHeartbeatsOnDelivery(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.HeartbeatInterval = shortHeartbeatInterval
+
+	result := startExecute(cmd, env)
+	// Wait until one more unanswered heartbeat would stop the subscriber.
+	for range maxMissedHeartbeats {
+		recvTestData(t, server)
+	}
+	sendTestReplies(t, env, newDeliveryData(t, 0, "a", "1"))
+	// Without a reset, Execute stops after the acknowledgement and the next heartbeat.
+	for range maxMissedHeartbeats + 1 {
+		recvTestData(t, server)
+	}
+
+	if code, err := waitExecute(t, result); code != exitcode.IPC || !errors.Is(err, errServerUnresponsive) {
+		t.Errorf("Execute() after a delivery and %d unanswered heartbeats = %d, %v, want %d, %v", maxMissedHeartbeats, code, err, exitcode.IPC, errServerUnresponsive)
+	}
+}
+
+func TestSubscribeExecuteCountsUnsentHeartbeatsAsMissed(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t))
+	env.HeartbeatInterval = shortHeartbeatInterval
+	env.HeartbeatSendTimeout = shortSendTimeout
+
+	result := startExecute(cmd, env)
+	recvTestData(t, server)
+	// Every heartbeat sent after this finds the queue full.
+	fillTestQueue(t, server.IPCPath())
+
+	code, err := waitExecute(t, result)
+
+	if code != exitcode.IPC || !errors.Is(err, errServerUnresponsive) {
+		t.Errorf("Execute() with a full server queue at each heartbeat = %d, %v, want %d, %v", code, err, exitcode.IPC, errServerUnresponsive)
+	}
+}
+
 func TestSubscribeExecuteKeepsWaitingAfterRecvTimeout(t *testing.T) {
 	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
 	env, server, stdout := newSubscribeEnv(t, newSubscriptionReply(t))

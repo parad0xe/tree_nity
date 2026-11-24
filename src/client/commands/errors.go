@@ -19,6 +19,8 @@ var (
 	errServerShuttingDown = errors.New("server shutting down")
 	// errSubscriptionEnded reports a subscription that the server ended.
 	errSubscriptionEnded = errors.New("subscription ended by the server")
+	// errServerUnresponsive reports a server that left the heartbeats unanswered.
+	errServerUnresponsive = errors.New("server not responding")
 	// errRequestRejected reports a request that the server refused.
 	errRequestRejected = errors.New("request rejected")
 	// errInvalidLine reports a text message without a key and value separator.
