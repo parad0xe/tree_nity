@@ -2539,3 +2539,42 @@ func TestConsumerHeartbeatSelectsIDOnSharedIPC(t *testing.T) {
 		})
 	}
 }
+
+// TestConsumerHeartbeatDropsReplyOnFullQueue checks renewal without waiting for the client.
+func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
+	manager := NewManager()
+	target, lifetime, _ := subscriptionTarget(t, manager, "events")
+	inbound := newTopicManagerInbox(t)
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	count := fillSubscriptionInbox(t, inbound)
+	target.mu.Lock()
+	c, _ := target.consumerMap.Get("subscriber")
+	before := time.Now().Add(consumerTimeout / 2)
+	c.liveness.deadline = before
+	target.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
+	for i := range 3 {
+		if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+			t.Fatalf("ConsumerHeartbeat(subscriber) with a full queue at attempt %d error = %v, want nil", i, err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("caller context after heartbeats on a full queue error = %v, want nil", err)
+	}
+	if got := subscriptionDeadline(t, target, "subscriber"); !got.After(before) {
+		t.Errorf("deadline after heartbeats on a full queue = %v, want later than %v", got, before)
+	}
+	for range count {
+		receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+	}
+	if err := response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+		t.Fatalf("SendToClient(marker) after draining the queue error = %v, want nil", err)
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+	if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+		t.Fatalf("ConsumerHeartbeat(subscriber) after draining the queue error = %v, want nil", err)
+	}
+	receiveTopicManagerReply(t, ctx, inbound, protocol.ConsumerHeartbeatReply)
+}

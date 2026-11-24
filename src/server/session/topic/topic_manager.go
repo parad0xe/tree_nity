@@ -210,7 +210,7 @@ func (m *Manager) ConsumerDisconnect(ctx context.Context, metadata protocol.Clie
 	return target.disconnect(ctx, c.Info.ID(), metadata.ClientIPC())
 }
 
-// ConsumerHeartbeat refreshes the consumer's deadline and confirms its heartbeat.
+// ConsumerHeartbeat refreshes the consumer's deadline and attempts an immediate reply.
 func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerHeartbeatPayload) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -228,7 +228,7 @@ func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.Clien
 	if err := target.heartbeat(ctx, c.Info.ID(), metadata.ClientIPC()); err != nil {
 		return err
 	}
-	return response.SendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload())
+	return response.TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload())
 }
 
 // CheckTopic replies with existence or rejection status; ctx bounds delivery.
