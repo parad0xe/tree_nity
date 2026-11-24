@@ -279,6 +279,24 @@ func TestDropKeepsServerQueue(t *testing.T) {
 	}
 }
 
+func TestDropIgnoresRemovedClientQueue(t *testing.T) {
+	serverIPCPath := testServerIPCPath(os.Getpid())
+	newTestQueue(t, serverIPCPath)
+	app, err := newApplication(testConfig(serverIPCPath))
+	if err != nil {
+		t.Fatalf("newApplication() error = %v, want nil", err)
+	}
+	// The server removes the queue of an expired subscriber this way.
+	queuePath := "/dev/mqueue" + app.inbound.IPCPath()
+	if err := os.Remove(queuePath); err != nil {
+		t.Fatalf("Remove(%q) error = %v, want nil", queuePath, err)
+	}
+
+	if err := app.drop(); err != nil {
+		t.Errorf("drop() after the server removed the client queue error = %v, want nil", err)
+	}
+}
+
 func TestRunReturnsCommandResult(t *testing.T) {
 	errCommand := errors.New("command failed")
 	app := &application{}

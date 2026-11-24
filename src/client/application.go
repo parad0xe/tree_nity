@@ -128,7 +128,11 @@ func (app *application) drop() error {
 		if app.gracefulShutdownFailed {
 			err = errors.Join(err, app.inbound.Unlink())
 		} else {
-			err = errors.Join(err, app.inbound.Drop())
+			dropErr := app.inbound.Drop()
+			// The server may already have removed the queue of an expired subscriber.
+			if !errors.Is(dropErr, os.ErrNotExist) {
+				err = errors.Join(err, dropErr)
+			}
 		}
 	}
 
