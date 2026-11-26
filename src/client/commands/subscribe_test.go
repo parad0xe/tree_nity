@@ -453,17 +453,37 @@ func TestSubscribeExecuteDoesNotAcknowledgeUnprintedMessage(t *testing.T) {
 	}
 }
 
-func TestSubscribeExecuteReturnsIPCCodeOnServerShutdown(t *testing.T) {
+func TestSubscribeExecuteReturnsSuccessOnServerShutdown(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, _, _ := newSubscribeEnv(t, newSubscriptionReply(t), newServerData(t, protocol.ServerShutdown, protocol.NewServerShutdownPayload()))
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if err != nil || code != exitcode.Success {
+		t.Errorf("Execute() after a server shutdown = %d, %v, want %d, nil", code, err, exitcode.Success)
+	}
+}
+
+func TestSubscribeExecuteSkipsDisconnectOnServerShutdown(t *testing.T) {
 	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
 	env, server, _ := newSubscribeEnv(t, newSubscriptionReply(t), newServerData(t, protocol.ServerShutdown, protocol.NewServerShutdownPayload()))
+
+	if code, err := executeWithTimeout(t, cmd, env); err != nil || code != exitcode.Success {
+		t.Fatalf("Execute() after a server shutdown = %d, %v, want %d, nil", code, err, exitcode.Success)
+	}
+	recvTestData(t, server)
+	assertNoTestData(t, server)
+}
+
+func TestSubscribeExecuteReturnsIPCCodeOnServerShutdownBeforeSubscription(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	env, _, _ := newSubscribeEnv(t, newServerData(t, protocol.ServerShutdown, protocol.NewServerShutdownPayload()))
 
 	code, err := executeWithTimeout(t, cmd, env)
 
 	if code != exitcode.IPC || !errors.Is(err, errServerShuttingDown) {
-		t.Errorf("Execute() after a server shutdown = %d, %v, want %d, %v", code, err, exitcode.IPC, errServerShuttingDown)
+		t.Errorf("Execute() with a server shutdown as subscription reply = %d, %v, want %d, %v", code, err, exitcode.IPC, errServerShuttingDown)
 	}
-	recvTestData(t, server)
-	assertNoTestData(t, server)
 }
 
 func TestSubscribeExecuteKeepsWaitingAfterRecvTimeout(t *testing.T) {

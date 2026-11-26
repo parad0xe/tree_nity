@@ -108,6 +108,10 @@ func (cmd *subscribeCommand) Execute(ctx context.Context, env Env) (int, error) 
 	}()
 
 	code, err = cmd.consume(ctx, recvCtx, env)
+	// A stopping server ends the subscription itself, so no disconnect is sent.
+	if errors.Is(err, errServerShuttingDown) {
+		return exitcode.Success, nil
+	}
 	if err != nil {
 		err = fmt.Errorf("subscribe: %w", err)
 	}
