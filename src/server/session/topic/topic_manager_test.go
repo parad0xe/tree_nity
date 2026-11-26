@@ -2724,3 +2724,223 @@ func TestManagerShutdownRejectsNewOperations(t *testing.T) {
 		})
 	}
 }
+
+// TestHeartbeatChannelRenewsDeadline checks the worker's use of the shared renewal method.
+func TestHeartbeatChannelRenewsDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		inbound := expirationInbox(t, "heartbeat")
+		subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+		synctest.Wait()
+		connection := subscribedConnection(t, target, "subscriber")
+		<-time.After(20 * time.Second)
+		select {
+		case connection.HeartbeatChan <- struct{}{}:
+		case <-time.After(time.Second):
+			t.Fatal("HeartbeatChan(subscriber) at 20s was not consumed within 1s, want heartbeat accepted")
+		}
+		synctest.Wait()
+		if got, want := subscriptionDeadline(t, target, "subscriber"), time.Now().Add(consumerTimeout); !got.Equal(want) {
+			t.Errorf("deadline after heartbeat channel notification = %v, want %v", got, want)
+		}
+		<-time.After(11 * time.Second)
+		synctest.Wait()
+		select {
+		case <-connection.Done():
+			t.Error("Done(subscriber) at 31s is closed, want open until 50s")
+		default:
+		}
+		<-time.After(19 * time.Second)
+		synctest.Wait()
+		select {
+		case <-connection.Done():
+		default:
+			t.Error("Done(subscriber) at 50s is open, want closed")
+		}
+	})
+}
+
+// TestRenewConsumerDeadlineResolvesUniqueIPC checks matching requests with and without an ID.
+func TestRenewConsumerDeadlineResolvesUniqueIPC(t *testing.T) {
+	for _, consumerID := range []id.ID{"first", ""} {
+		t.Run(fmt.Sprintf("id_%q", consumerID), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				first := expirationInbox(t, "first")
+				second := expirationInbox(t, "second")
+				subscribeForDelivery(t, manager, lifetime, first, "first", "", nil)
+				subscribeForDelivery(t, manager, lifetime, second, "second", "", nil)
+				synctest.Wait()
+				secondDeadline := subscriptionDeadline(t, target, "second")
+				<-time.After(time.Second)
+				if err := manager.RenewConsumerDeadline(t.Context(), consumerID, first.IPCPath()); err != nil {
+					t.Errorf("RenewConsumerDeadline(%q, first IPC) error = %v, want nil", consumerID, err)
+				}
+				if got, want := subscriptionDeadline(t, target, "first"), time.Now().Add(consumerTimeout); !got.Equal(want) {
+					t.Errorf("first deadline after activity = %v, want %v", got, want)
+				}
+				if got := subscriptionDeadline(t, target, "second"); !got.Equal(secondDeadline) {
+					t.Errorf("second deadline after first activity = %v, want unchanged %v", got, secondDeadline)
+				}
+			})
+		})
+	}
+}
+
+// TestRenewConsumerDeadlineRejectsConflictingIdentity checks ambiguous and mismatched sessions.
+func TestRenewConsumerDeadlineRejectsConflictingIdentity(t *testing.T) {
+	tests := []struct {
+		name       string
+		consumerID id.ID
+		sharedIPC  bool
+		otherTopic bool
+		unknownIPC bool
+	}{
+		{name: "shared IPC", sharedIPC: true},
+		{name: "shared IPC across topics", sharedIPC: true, otherTopic: true},
+		{name: "unknown ID", consumerID: "unknown"},
+		{name: "mismatched ID", consumerID: "second"},
+		{name: "unknown IPC", unknownIPC: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager()
+				firstTopic, lifetime, _ := subscriptionTarget(t, manager, "events")
+				secondTopic, secondLifetime, topicName := firstTopic, lifetime, "events"
+				if tt.otherTopic {
+					secondTopic, secondLifetime, _ = subscriptionTarget(t, manager, "other")
+					topicName = "other"
+				}
+				first := expirationInbox(t, "first")
+				second := first
+				if !tt.sharedIPC {
+					second = expirationInbox(t, "second")
+				}
+				subscribeForDelivery(t, manager, lifetime, first, "first", "", nil)
+				if err := manager.NewSubscription(t.Context(), secondLifetime, lifecycle.GracefulShutdown{},
+					*protocol.NewClientMetadata(second.IPCPath()), *protocol.NewTopicSubscriptionPayload("second", topicName, "", nil)); err != nil {
+					t.Fatalf("NewSubscription(second, %q) error = %v, want nil", topicName, err)
+				}
+				receiveTopicManagerReply(t, t.Context(), second, protocol.TopicSubscriptionReply)
+				synctest.Wait()
+				firstDeadline := subscriptionDeadline(t, firstTopic, "first")
+				secondDeadline := subscriptionDeadline(t, secondTopic, "second")
+				<-time.After(time.Second)
+				ipcPath := first.IPCPath()
+				if tt.unknownIPC {
+					ipcPath += ".unknown"
+				}
+				if err := manager.RenewConsumerDeadline(t.Context(), tt.consumerID, ipcPath); !errors.Is(err, consumer.ErrNotFound) {
+					t.Errorf("RenewConsumerDeadline(%q, %q) error = %v, want %v", tt.consumerID, ipcPath, err, consumer.ErrNotFound)
+				}
+				if got := subscriptionDeadline(t, firstTopic, "first"); !got.Equal(firstDeadline) {
+					t.Errorf("first deadline after %s = %v, want %v", tt.name, got, firstDeadline)
+				}
+				if got := subscriptionDeadline(t, secondTopic, "second"); !got.Equal(secondDeadline) {
+					t.Errorf("second deadline after %s = %v, want unchanged %v", tt.name, got, secondDeadline)
+				}
+			})
+		})
+	}
+}
+
+// TestRenewConsumerDeadlineRejectsExpiredDeadline checks late requests before timer dispatch.
+func TestRenewConsumerDeadlineRejectsExpiredDeadline(t *testing.T) {
+	tests := []struct {
+		consumerID id.ID
+		wantErr    error
+	}{
+		{consumerID: "subscriber", wantErr: context.DeadlineExceeded},
+		{consumerID: "", wantErr: consumer.ErrNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("id_%q", tt.consumerID), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				consumerID := tt.consumerID
+				manager := NewManager()
+				target, lifetime, _ := subscriptionTarget(t, manager, "events")
+				inbound := expirationInbox(t, "expired")
+				subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+				synctest.Wait()
+				target.mu.Lock()
+				c, _ := target.consumerMap.Get("subscriber")
+				deadline := time.Now()
+				c.liveness.deadline = deadline
+				target.mu.Unlock()
+				if err := manager.RenewConsumerDeadline(t.Context(), consumerID, inbound.IPCPath()); !errors.Is(err, tt.wantErr) {
+					t.Errorf("RenewConsumerDeadline(%q, expired IPC) error = %v, want %v", consumerID, err, tt.wantErr)
+				}
+				target.mu.Lock()
+				got := c.liveness.deadline
+				target.mu.Unlock()
+				if !got.Equal(deadline) {
+					t.Errorf("expired deadline after RenewConsumerDeadline(%q) = %v, want unchanged %v", consumerID, got, deadline)
+				}
+				synctest.Wait()
+				select {
+				case <-c.connection.Done():
+				default:
+					t.Errorf("Done(subscriber) after expired RenewConsumerDeadline(%q) is open, want closed", consumerID)
+				}
+			})
+		})
+	}
+}
+
+// TestRenewConsumerDeadlinePreservesPendingConfirmation checks that dispatch cannot start the clock.
+func TestRenewConsumerDeadlinePreservesPendingConfirmation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		inbound := expirationInbox(t, "pending")
+		c, _, err := manager.consumerManager.Subscribe(lifetime, "subscriber", "events", nil, "", inbound.IPCPath())
+		if err != nil {
+			t.Fatalf("Subscribe(subscriber) error = %v, want nil", err)
+		}
+		t.Cleanup(func() {
+			if err := manager.consumerManager.DisconnectConsumer(c); err != nil {
+				t.Errorf("DisconnectConsumer(subscriber) error = %v, want nil", err)
+			}
+		})
+		confirmed := make(chan struct{})
+		if err := target.upsertConsumer(lifetime, c, confirmed, nil, nil); err != nil {
+			t.Fatalf("upsertConsumer(subscriber) error = %v, want nil", err)
+		}
+		<-time.After(consumerTimeout + time.Second)
+		if err := manager.RenewConsumerDeadline(t.Context(), "subscriber", inbound.IPCPath()); err != nil {
+			t.Errorf("RenewConsumerDeadline(subscriber) before confirmation error = %v, want nil", err)
+		}
+		if got := subscriptionDeadline(t, target, "subscriber"); !got.IsZero() {
+			t.Errorf("deadline before confirmation = %v, want zero", got)
+		}
+		close(confirmed)
+		synctest.Wait()
+		if got, want := subscriptionDeadline(t, target, "subscriber"), time.Now().Add(consumerTimeout); !got.Equal(want) {
+			t.Errorf("deadline after confirmation = %v, want %v", got, want)
+		}
+	})
+}
+
+// TestRenewConsumerDeadlineRejectsCanceledContext checks that cancellation cannot renew a session.
+func TestRenewConsumerDeadlineRejectsCanceledContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		inbound := expirationInbox(t, "canceled")
+		subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+		synctest.Wait()
+		before := subscriptionDeadline(t, target, "subscriber")
+		<-time.After(time.Second)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := manager.RenewConsumerDeadline(ctx, "subscriber", inbound.IPCPath()); !errors.Is(err, context.Canceled) {
+			t.Errorf("RenewConsumerDeadline(subscriber, canceled context) error = %v, want %v", err, context.Canceled)
+		}
+		if got := subscriptionDeadline(t, target, "subscriber"); !got.Equal(before) {
+			t.Errorf("deadline after canceled request = %v, want unchanged %v", got, before)
+		}
+	})
+}
