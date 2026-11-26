@@ -9,6 +9,7 @@ import (
 
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
 )
@@ -24,14 +25,16 @@ type Topic struct {
 	newMessageChan    chan protocol.Message
 	messages          []protocol.Message
 	done              chan struct{}
+	shutdown          lifecycle.GracefulShutdown
 	stopping          bool
 	// runErr is read only after done closes.
 	runErr error
 }
 
-// NewTopic initializes the indexes and starts message storage until ctx ends.
-func NewTopic(ctx context.Context) *Topic {
+// NewTopic starts storage and drains pending ACKs on shutdown; ctx forces cleanup.
+func NewTopic(ctx context.Context, shutdown lifecycle.GracefulShutdown) *Topic {
 	t := newTopic()
+	t.shutdown = shutdown
 	go t.run(ctx)
 	return t
 }
@@ -106,7 +109,7 @@ func (t *Topic) upsertConsumer(ctx context.Context, c *consumer.Consumer, ready 
 // newConsumer must be valid. The caller must hold t.mu and start the new
 // workers before unlocking.
 func (t *Topic) registerConsumer(ctx context.Context, newConsumer *subscription) (*subscription, error) {
-	if t.stopping {
+	if t.stopping || t.shutdown.IsRequested() {
 		return nil, context.Canceled
 	}
 	if err := ctx.Err(); err != nil {
@@ -197,7 +200,8 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 			t.mu.Lock()
 			expired := newConsumer.liveness.expired
 			t.mu.Unlock()
-			if expired {
+			draining := t.shutdown.IsRequested()
+			if expired && !draining {
 				data, err := protocol.NewData(protocol.ServerConsumerDisconnect, protocol.NewServerMetadata(),
 					protocol.NewServerConsumerDisconnectPayload(string(newConsumer.info.ID())))
 				if err == nil {
@@ -209,7 +213,7 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 			}
 			// Worker cleanup is best-effort; explicit removals report cleanup errors.
 			_ = t.removeConsumer(newConsumer)
-			if expired {
+			if expired || draining {
 				// Keep the name reserved until closure and queue removal finish.
 				_ = newConsumer.connection.Drop()
 			}
@@ -386,7 +390,12 @@ func (t *Topic) ProduceMessage(ctx context.Context, message protocol.Message) er
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-t.shutdown.Requested():
+		return context.Canceled
 	case <-t.done:
+		if t.runErr == nil {
+			return context.Canceled
+		}
 		return t.runErr
 	}
 }
@@ -412,6 +421,12 @@ func (t *Topic) run(ctx context.Context) {
 		case <-ctx.Done():
 			t.runErr = ctx.Err()
 			return
+		case <-t.shutdown.Requested():
+			// Registration adds workers under mu before shutdown can wait for them.
+			t.mu.Lock()
+			t.mu.Unlock()
+			t.waitGroup.Wait()
+			return
 		case message := <-t.newMessageChan:
 			if err := t.storeMessage(message); err != nil {
 				t.runErr = err
@@ -419,6 +434,26 @@ func (t *Topic) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (t *Topic) readyToFinish() bool {
+	select {
+	case <-t.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *Topic) notifyShutdown(ctx context.Context, c *subscription) {
+	data, err := protocol.NewData(protocol.ServerShutdown, protocol.NewServerMetadata(), protocol.NewServerShutdownPayload())
+	if err != nil {
+		return
+	}
+	notifyCtx, cancel := context.WithTimeout(ctx, disconnectTimeout)
+	defer cancel()
+	// Notification is best-effort; a full queue must not delay cleanup.
+	_ = c.connection.SendAhead(notifyCtx, data)
 }
 
 func (t *Topic) stopConsumerWorkers() {
@@ -468,18 +503,26 @@ func (t *Topic) storeMessage(message protocol.Message) error {
 
 // deliverMessages is the sending goroutine's entry point for one subscribed consumer.
 func (t *Topic) deliverMessages(ctx context.Context, c *subscription) {
+	notify := sync.OnceFunc(func() { t.notifyShutdown(ctx, c) })
+	defer func() {
+		if t.shutdown.IsRequested() {
+			notify()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.connection.Done():
 			return
+		case <-t.shutdown.Requested():
+			return
 		case offsets, ok := <-c.connection.MessageChan:
 			if !ok {
 				return
 			}
 			for _, offset := range offsets {
-				if !t.deliverMessage(ctx, c, offset) {
+				if !t.deliverMessage(ctx, c, offset, notify) {
 					return
 				}
 			}
@@ -487,13 +530,17 @@ func (t *Topic) deliverMessages(ctx context.Context, c *subscription) {
 	}
 }
 
-func (t *Topic) deliverMessage(ctx context.Context, c *subscription, offset uint32) bool {
+func (t *Topic) deliverMessage(ctx context.Context, c *subscription, offset uint32, notifyShutdown func()) bool {
 	if ctx.Err() != nil {
 		return false
 	}
 	t.mu.Lock()
 	stored, exists := t.consumerMap.Get(c.info.ID())
 	if !exists || stored.connection != c.connection || t.stopping {
+		t.mu.Unlock()
+		return false
+	}
+	if t.shutdown.IsRequested() {
 		t.mu.Unlock()
 		return false
 	}
@@ -512,12 +559,16 @@ func (t *Topic) deliverMessage(ctx context.Context, c *subscription, offset uint
 	if err := c.connection.Send(ctx, data); err != nil {
 		return false
 	}
+	shutdownRequested := t.shutdown.Requested()
 	for {
 		select {
 		case <-ctx.Done():
 			return false
 		case <-c.connection.Done():
 			return false
+		case <-shutdownRequested:
+			notifyShutdown()
+			shutdownRequested = nil
 		case acknowledged, ok := <-c.connection.AcknowledgedChan:
 			if !ok {
 				return false
@@ -582,7 +633,7 @@ func (t *Topic) activeConsumer(consumerID id.ID, ipcPath string) (*subscription,
 	if t.stopping {
 		return nil, context.Canceled
 	}
-	if c.liveness != nil && !c.liveness.deadline.IsZero() && !time.Now().Before(c.liveness.deadline) {
+	if !t.shutdown.IsRequested() && c.liveness != nil && !c.liveness.deadline.IsZero() && !time.Now().Before(c.liveness.deadline) {
 		c.liveness.expired = true
 		c.cancel()
 		return nil, context.DeadlineExceeded
@@ -618,6 +669,9 @@ func (t *Topic) listenHeartbeat(ctx context.Context, c *subscription) {
 		}
 		_, activeErr := t.activeConsumer(c.info.ID(), c.info.IPCPath())
 		remaining := time.Until(c.liveness.deadline)
+		if t.shutdown.IsRequested() {
+			remaining = consumerTimeout
+		}
 		t.mu.Unlock()
 		if activeErr != nil {
 			return

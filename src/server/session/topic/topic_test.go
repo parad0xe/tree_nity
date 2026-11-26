@@ -17,6 +17,7 @@ import (
 	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
+	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/utils/hashmap"
 	"tree_nity/src/server/utils/trie"
@@ -52,7 +53,7 @@ func waitTopicLoop(t *testing.T, topic *Topic) bool {
 func newTestTopic(t *testing.T) (*Topic, context.Context, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	topic := NewTopic(ctx)
+	topic := NewTopic(ctx, lifecycle.GracefulShutdown{})
 	t.Cleanup(func() {
 		cancel()
 		waitTopicLoop(t, topic)
@@ -199,7 +200,7 @@ func TestTopicDisconnectCancelsCleanupWait(t *testing.T) {
 func TestTopicCancellationStopsLoop(t *testing.T) {
 	parent := t.Context()
 	ctx, cancel := context.WithCancel(parent)
-	topic := NewTopic(ctx)
+	topic := NewTopic(ctx, lifecycle.GracefulShutdown{})
 	t.Cleanup(func() {
 		cancel()
 		waitTopicLoop(t, topic)
@@ -421,7 +422,7 @@ func TestTopicProduceMessageRejectsStoppedTopic(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topic := NewTopic(tt.ctx)
+			topic := NewTopic(tt.ctx, lifecycle.GracefulShutdown{})
 			if !waitTopicLoop(t, topic) {
 				return
 			}

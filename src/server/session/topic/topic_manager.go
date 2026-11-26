@@ -18,6 +18,7 @@ type Manager struct {
 	mu              sync.RWMutex
 	consumerManager *consumer.Manager
 	topicMap        *hashmap.HashMap[id.ID, *Topic]
+	shuttingDown    bool
 }
 
 // NewManager initializes topic and consumer state.
@@ -26,6 +27,46 @@ func NewManager() *Manager {
 		consumerManager: consumer.NewManager(),
 		topicMap:        hashmap.NewHashMap[id.ID, *Topic](),
 	}
+}
+
+// BeginShutdown rejects new topic creation while accepted requests finish.
+func (m *Manager) BeginShutdown() {
+	m.mu.Lock()
+	m.shuttingDown = true
+	m.mu.Unlock()
+}
+
+// Wait joins topic routines and their workers after shutdown or context cancellation.
+func (m *Manager) Wait() error {
+	m.mu.RLock()
+	topics, err := m.topicMap.Values()
+	m.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	for _, target := range topics {
+		<-target.done
+		if target.runErr != nil && !errors.Is(target.runErr, context.Canceled) {
+			err = errors.Join(err, target.runErr)
+		}
+	}
+	return err
+}
+
+// ReadyToFinish reports whether all topic routines and consumer workers have stopped.
+func (m *Manager) ReadyToFinish() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	topics, err := m.topicMap.Values()
+	if err != nil {
+		return false
+	}
+	for _, target := range topics {
+		if !target.readyToFinish() {
+			return false
+		}
+	}
+	return true
 }
 
 // ListTopics replies with topic names in unspecified order and returns internal or IPC errors.
@@ -54,7 +95,7 @@ func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetada
 
 // CreateTopic replies with creation or rejection status and returns internal or IPC errors.
 // ctx bounds the reply; topicCtx must cover the topic's lifetime. Both must be non-nil.
-func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
+func (m *Manager) CreateTopic(ctx, topicCtx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
 	topicID := id.ID(payload.Topic())
 	if err := topicID.Validate(); err != nil {
 		return response.SendToClient(
@@ -67,7 +108,12 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, metadata protocol.C
 
 	topicCtx, cancel := context.WithCancel(topicCtx)
 	m.mu.Lock()
-	target := NewTopic(topicCtx)
+	if m.shuttingDown {
+		m.mu.Unlock()
+		cancel()
+		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+	}
+	target := NewTopic(topicCtx, shutdown)
 	err := m.topicMap.Insert(topicID, target)
 	m.mu.Unlock()
 	defer func() {
@@ -122,8 +168,12 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 	}
 
 	m.mu.RLock()
+	shuttingDown := m.shuttingDown
 	target, exists := m.topicMap.Get(id.ID(payload.Topic()))
 	m.mu.RUnlock()
+	if shuttingDown {
+		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+	}
 	if !exists {
 		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic does not exist"))
@@ -283,8 +333,12 @@ func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.Gracefu
 	}
 
 	m.mu.RLock()
+	shuttingDown := m.shuttingDown
 	topic, exists := m.topicMap.Get(topicID)
 	m.mu.RUnlock()
+	if shuttingDown {
+		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+	}
 	if !exists {
 		return response.SendToClient(
 			ctx,

@@ -919,7 +919,7 @@ func TestDispatchTimesOutOnFullProductionReplyQueue(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
 	metadata := protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
 		return
 	}
@@ -981,7 +981,7 @@ func TestDispatchPropagatesProductionCancellation(t *testing.T) {
 			app := &application{topicManager: topic.NewManager()}
 			inbound := newServerClientInbox(t)
 			metadata := protocol.NewClientMetadata(inbound.IPCPath())
-			if err := app.topicManager.CreateTopic(t.Context(), t.Context(), *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+			if err := app.topicManager.CreateTopic(t.Context(), t.Context(), lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 				t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 			}
 			receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -1004,7 +1004,7 @@ func TestDispatchProducesWithoutManualReceiver(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
 	metadata := protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 	}
 	receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -1032,7 +1032,7 @@ func TestDispatchRejectsProductionDuringShutdown(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
 	metadata := protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
 		return
 	}
@@ -1394,7 +1394,7 @@ func TestListenKeepsExistingTopicState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Fatalf("CreateTopic(events) before listen() error = %v, want nil", err)
 	}
 	receiveServerReply(t, inbound, protocol.CreateTopicReply)

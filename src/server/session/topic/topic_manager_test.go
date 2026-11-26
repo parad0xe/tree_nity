@@ -1347,7 +1347,7 @@ func TestManagerListTopics(t *testing.T) {
 			want := make([]string, tt.count)
 			for i := range want {
 				want[i] = fmt.Sprintf("topic-%03d", i)
-				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
+				if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
 					t.Fatalf("CreateTopic(%q) during setup error = %v, want nil", want[i], err)
 				}
 				receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
@@ -1450,7 +1450,7 @@ func TestManagerListTopicsUsesEachRequestContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(topicCtx)
 	defer cancel()
 	manager := NewManager()
-	if err := manager.topicMap.Insert("events", NewTopic(topicCtx)); err != nil {
+	if err := manager.topicMap.Insert("events", NewTopic(topicCtx, lifecycle.GracefulShutdown{})); err != nil {
 		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 	}
 	inbound := newTopicManagerInbox(t)
@@ -1480,7 +1480,7 @@ func TestManagerListTopicsPropagatesSendErrors(t *testing.T) {
 	manager := NewManager()
 	for i := 0; i < 512; i++ {
 		topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-		if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+		if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 			t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 		}
 	}
@@ -1511,7 +1511,7 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		<-start
 		for i := 0; i < count; i++ {
 			name := fmt.Sprintf("topic-%03d", i)
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
 				return
 			}
@@ -1593,7 +1593,7 @@ func TestManagerCheckTopicConfirmsExistingTopics(t *testing.T) {
 			manager := NewManager()
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 				}
 			}
@@ -1637,7 +1637,7 @@ func TestManagerCheckTopicRejectsMissingTopics(t *testing.T) {
 			manager := NewManager()
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 				}
 			}
@@ -1740,7 +1740,7 @@ func TestManagerCheckTopicPropagatesStoppedContexts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := NewManager()
-			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context(), lifecycle.GracefulShutdown{})); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
@@ -1756,7 +1756,7 @@ func TestManagerCheckTopicPropagatesStoppedContexts(t *testing.T) {
 func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	ctx, cancel := context.WithCancel(topicManagerContext(t))
 	manager := NewManager()
-	if err := manager.topicMap.Insert("events", NewTopic(ctx)); err != nil {
+	if err := manager.topicMap.Insert("events", NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 		cancel()
 		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 	}
@@ -1776,7 +1776,7 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 		<-start
 		for i := 0; i < count; i++ {
 			name := fmt.Sprintf("topic-%03d", i)
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
 				return
 			}
@@ -1849,7 +1849,7 @@ func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 				}
 			})
 			for i := 0; i < tt.count; i++ {
-				target := NewTopic(ctx)
+				target := NewTopic(ctx, lifecycle.GracefulShutdown{})
 				topics = append(topics, target)
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
 				if err := manager.topicMap.Insert(topicID, target); err != nil {
@@ -1912,7 +1912,7 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 			manager := NewManager()
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 				}
 			}
@@ -2055,7 +2055,7 @@ func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := NewManager()
-			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context(), lifecycle.GracefulShutdown{})); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			metadata := *protocol.NewClientMetadata("/unused")
@@ -2143,7 +2143,7 @@ func TestManagerCreateTopics(t *testing.T) {
 			registered := make(map[*Topic]id.ID)
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%d", i))
-				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
+				if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
 					t.Errorf("CreateTopic(%q) error = %v, want nil", topicID, err)
 					return
 				}
@@ -2187,13 +2187,13 @@ func TestManagerCreateTopicRejectsInvalidIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := topicManagerContext(t)
 			manager := NewManager()
-			original := NewTopic(ctx)
+			original := NewTopic(ctx, lifecycle.GracefulShutdown{})
 			if err := manager.topicMap.Insert("events", original); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(tt.topic)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(tt.topic)); err != nil {
 				t.Errorf("CreateTopic(%q) error = %v, want nil after sending rejection", tt.topic, err)
 				return
 			}
@@ -2221,7 +2221,7 @@ func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	payload := *protocol.NewCreateTopicPayload("events")
-	if err := manager.CreateTopic(ctx, ctx, metadata, payload); err != nil {
+	if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
 		t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
@@ -2229,7 +2229,7 @@ func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 	if !exists || original == nil {
 		t.Fatalf("Get(events) during setup = %p, exists = %t, want an initialized topic and true", original, exists)
 	}
-	if err := manager.CreateTopic(ctx, ctx, metadata, payload); err != nil {
+	if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
 		t.Errorf("CreateTopic(events) on a duplicate error = %v, want nil after sending rejection", err)
 		return
 	}
@@ -2254,7 +2254,7 @@ func TestManagerCreateTopicPropagatesIndexErrors(t *testing.T) {
 	manager := NewManager()
 	manager.topicMap = nil
 	metadata := *protocol.NewClientMetadata("/unused")
-	if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, hashmap.ErrUninitialized) {
+	if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, hashmap.ErrUninitialized) {
 		t.Errorf("CreateTopic(events) with an uninitialized index error = %v, want %v", err, hashmap.ErrUninitialized)
 	}
 }
@@ -2274,7 +2274,7 @@ func TestManagerCreateTopicPropagatesQueueErrors(t *testing.T) {
 			ctx := topicManagerContext(t)
 			manager := NewManager()
 			metadata := *protocol.NewClientMetadata(tt.ipcPath)
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, tt.wantErr) {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, tt.wantErr) {
 				t.Errorf("CreateTopic(events) with queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
 			}
 		})
@@ -2305,13 +2305,13 @@ func TestManagerCreateTopicPropagatesStoppedContexts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			topicCtx := topicManagerContext(t)
 			manager := NewManager()
-			original := NewTopic(topicCtx)
+			original := NewTopic(topicCtx, lifecycle.GracefulShutdown{})
 			if err := manager.topicMap.Insert("events", original); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			if err := manager.CreateTopic(tt.ctx, topicCtx, metadata, *protocol.NewCreateTopicPayload(tt.topic)); !errors.Is(err, tt.wantErr) {
+			if err := manager.CreateTopic(tt.ctx, topicCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(tt.topic)); !errors.Is(err, tt.wantErr) {
 				t.Errorf("CreateTopic(%q) with %s error = %v, want %v", tt.topic, tt.name, err, tt.wantErr)
 			}
 			if got := manager.topicMap.Len(); got != tt.wantCount {
@@ -2333,10 +2333,10 @@ func TestManagerCreateTopicUsesEachRequestContext(t *testing.T) {
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	cancel()
-	if err := manager.CreateTopic(ctx, topicCtx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, context.Canceled) {
+	if err := manager.CreateTopic(ctx, topicCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, context.Canceled) {
 		t.Errorf("CreateTopic(events) with a canceled context error = %v, want %v", err, context.Canceled)
 	}
-	if err := manager.CreateTopic(topicCtx, topicCtx, metadata, *protocol.NewCreateTopicPayload("orders")); err != nil {
+	if err := manager.CreateTopic(topicCtx, topicCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("orders")); err != nil {
 		t.Errorf("CreateTopic(orders) with a live context after a canceled request error = %v, want nil", err)
 		return
 	}
@@ -2362,7 +2362,7 @@ func createTopicsConcurrently(t *testing.T, topicIDs []id.ID) (*Manager, []proto
 		go func() {
 			defer workers.Done()
 			<-start
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", topicID, err)
 			}
 		}()
