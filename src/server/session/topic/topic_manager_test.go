@@ -79,7 +79,12 @@ func receiveTopicManagerReply(t *testing.T, ctx context.Context, inbound *ipc.In
 
 func subscriptionTarget(t *testing.T, manager *Manager, name string) (*Topic, context.Context, context.CancelFunc) {
 	t.Helper()
-	target, ctx, cancel := newTestTopic(t)
+	return subscriptionTargetWithShutdown(t, manager, name, lifecycle.GracefulShutdown{})
+}
+
+func subscriptionTargetWithShutdown(t *testing.T, manager *Manager, name string, shutdown lifecycle.GracefulShutdown) (*Topic, context.Context, context.CancelFunc) {
+	t.Helper()
+	target, ctx, cancel := newTestTopicWithShutdown(t, shutdown)
 	if err := manager.topicMap.Insert(id.ID(name), target); err != nil {
 		t.Fatalf("Insert(%q) during setup error = %v, want nil", name, err)
 	}
@@ -1347,7 +1352,7 @@ func TestManagerListTopics(t *testing.T) {
 			want := make([]string, tt.count)
 			for i := range want {
 				want[i] = fmt.Sprintf("topic-%03d", i)
-				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
+				if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(want[i])); err != nil {
 					t.Fatalf("CreateTopic(%q) during setup error = %v, want nil", want[i], err)
 				}
 				receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
@@ -1450,7 +1455,7 @@ func TestManagerListTopicsUsesEachRequestContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(topicCtx)
 	defer cancel()
 	manager := NewManager()
-	if err := manager.topicMap.Insert("events", NewTopic(topicCtx)); err != nil {
+	if err := manager.topicMap.Insert("events", NewTopic(topicCtx, lifecycle.GracefulShutdown{})); err != nil {
 		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 	}
 	inbound := newTopicManagerInbox(t)
@@ -1480,7 +1485,7 @@ func TestManagerListTopicsPropagatesSendErrors(t *testing.T) {
 	manager := NewManager()
 	for i := 0; i < 512; i++ {
 		topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-		if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+		if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 			t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 		}
 	}
@@ -1511,7 +1516,7 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		<-start
 		for i := 0; i < count; i++ {
 			name := fmt.Sprintf("topic-%03d", i)
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
 				return
 			}
@@ -1593,7 +1598,7 @@ func TestManagerCheckTopicConfirmsExistingTopics(t *testing.T) {
 			manager := NewManager()
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 				}
 			}
@@ -1637,7 +1642,7 @@ func TestManagerCheckTopicRejectsMissingTopics(t *testing.T) {
 			manager := NewManager()
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 				}
 			}
@@ -1740,7 +1745,7 @@ func TestManagerCheckTopicPropagatesStoppedContexts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := NewManager()
-			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context(), lifecycle.GracefulShutdown{})); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
@@ -1756,7 +1761,7 @@ func TestManagerCheckTopicPropagatesStoppedContexts(t *testing.T) {
 func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	ctx, cancel := context.WithCancel(topicManagerContext(t))
 	manager := NewManager()
-	if err := manager.topicMap.Insert("events", NewTopic(ctx)); err != nil {
+	if err := manager.topicMap.Insert("events", NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 		cancel()
 		t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 	}
@@ -1776,7 +1781,7 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 		<-start
 		for i := 0; i < count; i++ {
 			name := fmt.Sprintf("topic-%03d", i)
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
 				return
 			}
@@ -1849,7 +1854,7 @@ func TestManagerProduceMessageForwardsToTopic(t *testing.T) {
 				}
 			})
 			for i := 0; i < tt.count; i++ {
-				target := NewTopic(ctx)
+				target := NewTopic(ctx, lifecycle.GracefulShutdown{})
 				topics = append(topics, target)
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
 				if err := manager.topicMap.Insert(topicID, target); err != nil {
@@ -1912,7 +1917,7 @@ func TestManagerProduceMessageRejectsRequests(t *testing.T) {
 			manager := NewManager()
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%03d", i))
-				if err := manager.topicMap.Insert(topicID, NewTopic(ctx)); err != nil {
+				if err := manager.topicMap.Insert(topicID, NewTopic(ctx, lifecycle.GracefulShutdown{})); err != nil {
 					t.Fatalf("Insert(%q) during setup error = %v, want nil", topicID, err)
 				}
 			}
@@ -2055,7 +2060,7 @@ func TestManagerProduceMessagePropagatesTopicCancellation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := NewManager()
-			if err := manager.topicMap.Insert("events", NewTopic(t.Context())); err != nil {
+			if err := manager.topicMap.Insert("events", NewTopic(t.Context(), lifecycle.GracefulShutdown{})); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			metadata := *protocol.NewClientMetadata("/unused")
@@ -2143,7 +2148,7 @@ func TestManagerCreateTopics(t *testing.T) {
 			registered := make(map[*Topic]id.ID)
 			for i := 0; i < tt.count; i++ {
 				topicID := id.ID(fmt.Sprintf("topic-%d", i))
-				if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
+				if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
 					t.Errorf("CreateTopic(%q) error = %v, want nil", topicID, err)
 					return
 				}
@@ -2187,13 +2192,13 @@ func TestManagerCreateTopicRejectsInvalidIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := topicManagerContext(t)
 			manager := NewManager()
-			original := NewTopic(ctx)
+			original := NewTopic(ctx, lifecycle.GracefulShutdown{})
 			if err := manager.topicMap.Insert("events", original); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(tt.topic)); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(tt.topic)); err != nil {
 				t.Errorf("CreateTopic(%q) error = %v, want nil after sending rejection", tt.topic, err)
 				return
 			}
@@ -2221,7 +2226,7 @@ func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	payload := *protocol.NewCreateTopicPayload("events")
-	if err := manager.CreateTopic(ctx, ctx, metadata, payload); err != nil {
+	if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
 		t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.CreateTopicReply)
@@ -2229,7 +2234,7 @@ func TestManagerCreateTopicRejectsDuplicates(t *testing.T) {
 	if !exists || original == nil {
 		t.Fatalf("Get(events) during setup = %p, exists = %t, want an initialized topic and true", original, exists)
 	}
-	if err := manager.CreateTopic(ctx, ctx, metadata, payload); err != nil {
+	if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, payload); err != nil {
 		t.Errorf("CreateTopic(events) on a duplicate error = %v, want nil after sending rejection", err)
 		return
 	}
@@ -2254,7 +2259,7 @@ func TestManagerCreateTopicPropagatesIndexErrors(t *testing.T) {
 	manager := NewManager()
 	manager.topicMap = nil
 	metadata := *protocol.NewClientMetadata("/unused")
-	if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, hashmap.ErrUninitialized) {
+	if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, hashmap.ErrUninitialized) {
 		t.Errorf("CreateTopic(events) with an uninitialized index error = %v, want %v", err, hashmap.ErrUninitialized)
 	}
 }
@@ -2274,7 +2279,7 @@ func TestManagerCreateTopicPropagatesQueueErrors(t *testing.T) {
 			ctx := topicManagerContext(t)
 			manager := NewManager()
 			metadata := *protocol.NewClientMetadata(tt.ipcPath)
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, tt.wantErr) {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, tt.wantErr) {
 				t.Errorf("CreateTopic(events) with queue %q error = %v, want %v", tt.ipcPath, err, tt.wantErr)
 			}
 		})
@@ -2305,13 +2310,13 @@ func TestManagerCreateTopicPropagatesStoppedContexts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			topicCtx := topicManagerContext(t)
 			manager := NewManager()
-			original := NewTopic(topicCtx)
+			original := NewTopic(topicCtx, lifecycle.GracefulShutdown{})
 			if err := manager.topicMap.Insert("events", original); err != nil {
 				t.Fatalf("Insert(events) during setup error = %v, want nil", err)
 			}
 			inbound := newTopicManagerInbox(t)
 			metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-			if err := manager.CreateTopic(tt.ctx, topicCtx, metadata, *protocol.NewCreateTopicPayload(tt.topic)); !errors.Is(err, tt.wantErr) {
+			if err := manager.CreateTopic(tt.ctx, topicCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(tt.topic)); !errors.Is(err, tt.wantErr) {
 				t.Errorf("CreateTopic(%q) with %s error = %v, want %v", tt.topic, tt.name, err, tt.wantErr)
 			}
 			if got := manager.topicMap.Len(); got != tt.wantCount {
@@ -2333,10 +2338,10 @@ func TestManagerCreateTopicUsesEachRequestContext(t *testing.T) {
 	inbound := newTopicManagerInbox(t)
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	cancel()
-	if err := manager.CreateTopic(ctx, topicCtx, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, context.Canceled) {
+	if err := manager.CreateTopic(ctx, topicCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); !errors.Is(err, context.Canceled) {
 		t.Errorf("CreateTopic(events) with a canceled context error = %v, want %v", err, context.Canceled)
 	}
-	if err := manager.CreateTopic(topicCtx, topicCtx, metadata, *protocol.NewCreateTopicPayload("orders")); err != nil {
+	if err := manager.CreateTopic(topicCtx, topicCtx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("orders")); err != nil {
 		t.Errorf("CreateTopic(orders) with a live context after a canceled request error = %v, want nil", err)
 		return
 	}
@@ -2362,7 +2367,7 @@ func createTopicsConcurrently(t *testing.T, topicIDs []id.ID) (*Manager, []proto
 		go func() {
 			defer workers.Done()
 			<-start
-			if err := manager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
+			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(string(topicID))); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", topicID, err)
 			}
 		}()
@@ -2577,4 +2582,134 @@ func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
 		t.Fatalf("ConsumerHeartbeat(subscriber) after draining the queue error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.ConsumerHeartbeatReply)
+}
+
+// TestManagerShutdownNotifiesEveryTopic checks empty managers and multiple active topics.
+func TestManagerShutdownNotifiesEveryTopic(t *testing.T) {
+	for _, count := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("topics_%d", count), func(t *testing.T) {
+			manager := NewManager()
+			requested := make(chan struct{})
+			shutdown := lifecycle.NewGracefulShutdown(requested)
+			inboxes := make([]*ipc.Inbound, count)
+			for i := range count {
+				name := fmt.Sprintf("events-%d", i)
+				_, lifetime, _ := subscriptionTargetWithShutdown(t, manager, name, shutdown)
+				inboxes[i] = expirationInbox(t, name)
+				if err := manager.NewSubscription(topicManagerContext(t), lifetime, lifecycle.GracefulShutdown{},
+					*protocol.NewClientMetadata(inboxes[i].IPCPath()), *protocol.NewTopicSubscriptionPayload(name, name, "", nil)); err != nil {
+					t.Fatalf("NewSubscription(%q) error = %v, want nil", name, err)
+				}
+				receiveTopicManagerReply(t, t.Context(), inboxes[i], protocol.TopicSubscriptionReply)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			result := make(chan error, 1)
+			close(requested)
+			manager.BeginShutdown()
+			go func() { result <- manager.Wait() }()
+			for _, inbox := range inboxes {
+				receiveTopicManagerReply(t, ctx, inbox, protocol.ServerShutdown)
+			}
+			if err := <-result; err != nil {
+				t.Errorf("Wait() with %d topics error = %v, want nil", count, err)
+			}
+			if !manager.ReadyToFinish() {
+				t.Errorf("ReadyToFinish() after shutting down %d topics = false, want true", count)
+			}
+		})
+	}
+}
+
+// TestManagerWaitJoinsForcedShutdown checks canceled workers without advancing the offset.
+func TestManagerWaitJoinsForcedShutdown(t *testing.T) {
+	manager := NewManager()
+	requested := make(chan struct{})
+	target, lifetime, force := subscriptionTargetWithShutdown(t, manager, "events", lifecycle.NewGracefulShutdown(requested))
+	inbound := expirationInbox(t, "pending")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	if err := target.storeMessage(deliveryMessage(0)); err != nil {
+		t.Fatalf("storeMessage(0) error = %v, want nil", err)
+	}
+	receiveDelivery(t, inbound, 0, deliveryMessage(0))
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	stop := context.AfterFunc(ctx, force)
+	defer stop()
+	close(requested)
+	manager.BeginShutdown()
+	if err := manager.Wait(); err != nil {
+		t.Errorf("Wait() after forced shutdown error = %v, want nil", err)
+	}
+	if err := lifetime.Err(); !errors.Is(err, context.Canceled) {
+		t.Errorf("topic lifetime after force error = %v, want %v", err, context.Canceled)
+	}
+	if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("force deadline context error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	receiveTopicManagerReply(t, topicManagerContext(t), inbound, protocol.ServerShutdown)
+	if !manager.ReadyToFinish() {
+		t.Error("ReadyToFinish() after forced shutdown = false, want true")
+	}
+	checkSavedOffset(t, manager, "subscriber", 0)
+	if sender, err := mqueue.NewSender(inbound.IPCPath()); err != nil {
+		t.Errorf("NewSender(subscriber) after forced shutdown error = %v, want nil until client cleanup", err)
+	} else if err := sender.Close(); err != nil {
+		t.Errorf("Close(subscriber sender) after forced shutdown error = %v, want nil", err)
+	}
+}
+
+// TestManagerShutdownToleratesFullQueue checks bounded notification and cleanup.
+func TestManagerShutdownToleratesFullQueue(t *testing.T) {
+	manager := NewManager()
+	requested := make(chan struct{})
+	_, lifetime, force := subscriptionTargetWithShutdown(t, manager, "events", lifecycle.NewGracefulShutdown(requested))
+	inbound := expirationInbox(t, "full")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	fillSubscriptionInbox(t, inbound)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, force)
+	defer stop()
+	close(requested)
+	manager.BeginShutdown()
+	if err := manager.Wait(); err != nil {
+		t.Errorf("Wait() with a full client queue error = %v, want nil", err)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("shutdown context after a full queue error = %v, want nil", err)
+	}
+	if !manager.ReadyToFinish() {
+		t.Error("ReadyToFinish() after full-queue cleanup = false, want true")
+	}
+}
+
+// TestManagerShutdownRejectsNewOperations checks admission after shutdown starts.
+func TestManagerShutdownRejectsNewOperations(t *testing.T) {
+	tests := []struct {
+		name    string
+		request func(*Manager, context.Context, protocol.ClientMetadata) error
+	}{
+		{name: "create", request: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events"))
+		}},
+		{name: "produce", request: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+		}},
+		{name: "subscribe", request: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.NewSubscription(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			manager.BeginShutdown()
+			inbound := newTopicManagerInbox(t)
+			ctx := topicManagerContext(t)
+			if err := tt.request(manager, ctx, *protocol.NewClientMetadata(inbound.IPCPath())); err != nil {
+				t.Fatalf("%s after shutdown error = %v, want nil after rejection", tt.name, err)
+			}
+			receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+		})
+	}
 }

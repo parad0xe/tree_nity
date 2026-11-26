@@ -919,7 +919,7 @@ func TestDispatchTimesOutOnFullProductionReplyQueue(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
 	metadata := protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
 		return
 	}
@@ -981,7 +981,7 @@ func TestDispatchPropagatesProductionCancellation(t *testing.T) {
 			app := &application{topicManager: topic.NewManager()}
 			inbound := newServerClientInbox(t)
 			metadata := protocol.NewClientMetadata(inbound.IPCPath())
-			if err := app.topicManager.CreateTopic(t.Context(), t.Context(), *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+			if err := app.topicManager.CreateTopic(t.Context(), t.Context(), lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 				t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 			}
 			receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -1004,7 +1004,7 @@ func TestDispatchProducesWithoutManualReceiver(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
 	metadata := protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Fatalf("CreateTopic(events) during setup error = %v, want nil", err)
 	}
 	receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -1032,7 +1032,7 @@ func TestDispatchRejectsProductionDuringShutdown(t *testing.T) {
 	app := &application{topicManager: topic.NewManager()}
 	inbound := newServerClientInbox(t)
 	metadata := protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, *metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Errorf("CreateTopic(events) during setup error = %v, want nil", err)
 		return
 	}
@@ -1394,7 +1394,7 @@ func TestListenKeepsExistingTopicState(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-	if err := app.topicManager.CreateTopic(ctx, ctx, metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
+	if err := app.topicManager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events")); err != nil {
 		t.Fatalf("CreateTopic(events) before listen() error = %v, want nil", err)
 	}
 	receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -1469,5 +1469,149 @@ func TestListenContinuesAfterHandlerError(t *testing.T) {
 	res := c.wait(t)
 	if res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
 		t.Errorf("listen() after a reply failure, a valid request and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+func shutdownClientInbox(t *testing.T, suffix string) *ipc.Inbound {
+	t.Helper()
+	path := fmt.Sprintf("/shutdown.%d.%s.%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."), suffix)
+	inbound, err := ipc.NewInbound(path, protocol.Decode)
+	if err != nil {
+		t.Fatalf("NewInbound(%q) error = %v, want nil", path, err)
+	}
+	t.Cleanup(func() {
+		if err := inbound.Drop(); err != nil {
+			t.Errorf("Drop(%q) by client after server shutdown error = %v, want nil", path, err)
+		}
+		if err := tryConnect(t, path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("NewSender(%q) after client cleanup error = %v, want %v", path, err, os.ErrNotExist)
+		}
+	})
+	return inbound
+}
+
+func sendShutdownRequest(t *testing.T, app *application, clientIPC string, opcode protocol.Opcode, payload protocol.Payload) {
+	t.Helper()
+	data, err := protocol.NewData(opcode, protocol.NewClientMetadata(clientIPC), payload)
+	if err != nil {
+		t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+	}
+	frame, err := protocol.Encode(data)
+	if err != nil {
+		t.Fatalf("Encode(%v) error = %v, want nil", opcode, err)
+	}
+	send(t, app.inbound.IPCPath(), string(frame))
+}
+
+// TestRunShutdownNotifiesActiveConsumers checks notification and client ownership of queues.
+func TestRunShutdownNotifiesActiveConsumers(t *testing.T) {
+	app := newTestApplication(t)
+	requested := make(chan struct{})
+	c := startCall(t, t.Context(), "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.NewGracefulShutdown(requested))
+	})
+	producer := newServerClientInbox(t)
+	sendCreateRequest(t, app, producer.IPCPath(), "events")
+	receiveServerReply(t, producer, protocol.CreateTopicReply)
+	consumers := []*ipc.Inbound{shutdownClientInbox(t, "first"), shutdownClientInbox(t, "second")}
+	for i, inbound := range consumers {
+		sendShutdownRequest(t, app, inbound.IPCPath(), protocol.TopicSubscription,
+			protocol.NewTopicSubscriptionPayload(fmt.Sprintf("subscriber-%d", i), "events", "", nil))
+		receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+	}
+	started := time.Now()
+	close(requested)
+	for _, inbound := range consumers {
+		receiveServerReply(t, inbound, protocol.ServerShutdown)
+	}
+	res := c.wait(t)
+	if res.Code() != exitcode.Success || res.Err() != nil {
+		t.Errorf("run() with two active consumers = %d, %v, want %d and nil", res.Code(), res.Err(), exitcode.Success)
+	}
+	if elapsed := time.Since(started); elapsed >= gracePeriod {
+		t.Errorf("shutdown with no pending ACK took %v, want less than %v", elapsed, gracePeriod)
+	}
+	if !app.readyToFinish() {
+		t.Error("readyToFinish() after shutdown = false, want true")
+	}
+	for _, inbound := range consumers {
+		if err := tryConnect(t, inbound.IPCPath()); err != nil {
+			t.Errorf("NewSender(%q) after shutdown error = %v, want nil until client cleanup", inbound.IPCPath(), err)
+		}
+	}
+}
+
+// TestRunShutdownWaitsForACKOrDeadline checks early completion and the five-second bound.
+func TestRunShutdownWaitsForACKOrDeadline(t *testing.T) {
+	for _, ack := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ack_%t", ack), func(t *testing.T) {
+			app := newTestApplication(t)
+			requested := make(chan struct{})
+			c := startCall(t, t.Context(), "run()", func(ctx context.Context) (int, error) {
+				return app.run(ctx, lifecycle.NewGracefulShutdown(requested))
+			})
+			producer := newServerClientInbox(t)
+			inbound := shutdownClientInbox(t, "consumer")
+			sendCreateRequest(t, app, producer.IPCPath(), "events")
+			receiveServerReply(t, producer, protocol.CreateTopicReply)
+			sendShutdownRequest(t, app, producer.IPCPath(), protocol.ProduceMessage,
+				protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("key"), []byte("value"))))
+			receiveServerReply(t, producer, protocol.ProduceMessageReply)
+			sendShutdownRequest(t, app, inbound.IPCPath(), protocol.TopicSubscription,
+				protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
+			receiveServerReply(t, inbound, protocol.TopicSubscriptionReply)
+			receiveServerReply(t, inbound, protocol.MessageDelivery)
+			started := time.Now()
+			close(requested)
+			receiveServerReply(t, inbound, protocol.ServerShutdown)
+			if app.readyToFinish() {
+				t.Error("readyToFinish() with ACK(1) pending = true, want false")
+			}
+			sendShutdownRequest(t, app, producer.IPCPath(), protocol.ProduceMessage,
+				protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+			receiveServerReply(t, producer, protocol.ServerShutdown)
+			sendShutdownRequest(t, app, producer.IPCPath(), protocol.TopicSubscription,
+				protocol.NewTopicSubscriptionPayload("new-subscriber", "events", "", nil))
+			receiveServerReply(t, producer, protocol.ServerShutdown)
+			var offset uint32
+			if ack {
+				offset = 1
+				sendShutdownRequest(t, app, inbound.IPCPath(), protocol.Acknowledgement,
+					protocol.NewAcknowledgementPayload("subscriber", offset))
+				c.wait(t)
+			} else {
+				select {
+				case c.result = <-c.done:
+					c.returned = true
+				case <-time.After(gracePeriod + 2*shutdownPollInterval):
+					t.Fatalf("run() with an unacknowledged delivery did not stop within %v", gracePeriod+2*shutdownPollInterval)
+				}
+			}
+			elapsed := time.Since(started)
+			if ack && elapsed >= gracePeriod {
+				t.Errorf("shutdown after ACK took %v, want less than %v", elapsed, gracePeriod)
+			} else if !ack && elapsed < gracePeriod {
+				t.Errorf("forced shutdown without ACK took %v, want at least %v", elapsed, gracePeriod)
+			}
+			if c.result.Code() != exitcode.Success || c.result.Err() != nil {
+				t.Errorf("run() with ack=%t = %d, %v, want %d and nil", ack, c.result.Code(), c.result.Err(), exitcode.Success)
+			}
+			if !app.readyToFinish() {
+				t.Error("readyToFinish() after run returned = false, want true")
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
+			defer cancel()
+			if err := app.topicManager.ConsumerInfo(ctx, *protocol.NewClientMetadata(producer.IPCPath()), *protocol.NewConsumerInfoPayload("subscriber")); err != nil {
+				t.Fatalf("ConsumerInfo(subscriber) after shutdown error = %v, want nil", err)
+			}
+			data := receiveServerReply(t, producer, protocol.ConsumerInfoReply)
+			info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload)
+			if !ok || info.Offset() != offset {
+				t.Errorf("ConsumerInfo after shutdown with ack=%t = %#v, want offset %d", ack, data.Payload(), offset)
+			}
+			if err := tryConnect(t, inbound.IPCPath()); err != nil {
+				t.Errorf("NewSender(consumer) after shutdown error = %v, want nil until client cleanup", err)
+			}
+		})
 	}
 }

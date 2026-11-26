@@ -49,7 +49,7 @@ func newApplication() (*application, error) {
 
 // run serves requests until shutdown is requested, then for at most gracePeriod.
 // Canceling ctx interrupts IPC; receive failures return exitcode.IPC.
-func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
+func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShutdown) (code int, err error) {
 	if ctx.Err() != nil {
 		return exitcode.Success, ctx.Err()
 	}
@@ -58,7 +58,15 @@ func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShut
 
 	// A shutdown request leaves runCtx active during the grace period.
 	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
+	defer func() {
+		runCancel()
+		if waitErr := app.topicManager.Wait(); waitErr != nil {
+			err = errors.Join(err, waitErr)
+			if code == exitcode.Success {
+				code = exitcode.General
+			}
+		}
+	}()
 
 	go func() {
 		code, err := app.listen(runCtx, shutdown)
@@ -92,8 +100,11 @@ func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShut
 // Receive failures return exitcode.IPC; canceled handlers retain their dispatch code.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
 	for {
-		if shutdown.IsRequested() && app.readyToFinish() {
-			return exitcode.Success, nil
+		if shutdown.IsRequested() {
+			app.topicManager.BeginShutdown()
+			if app.readyToFinish() {
+				return exitcode.Success, nil
+			}
 		}
 
 		recvCtx, recvCancel := context.WithTimeout(ctx, shutdownPollInterval)
@@ -140,7 +151,7 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	case *protocol.ListTopicPayload:
 		err = app.topicManager.ListTopics(sendCtx, *metadata, *payload)
 	case *protocol.CreateTopicPayload:
-		err = app.topicManager.CreateTopic(sendCtx, ctx, *metadata, *payload)
+		err = app.topicManager.CreateTopic(sendCtx, ctx, shutdown, *metadata, *payload)
 	case *protocol.ConsumerInfoPayload:
 		err = app.topicManager.ConsumerInfo(sendCtx, *metadata, *payload)
 	case *protocol.CheckTopicPayload:
@@ -177,8 +188,7 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 
 // readyToFinish reports whether the server can stop cleanly.
 func (app *application) readyToFinish() bool {
-	// TODO: return true only once every consumer has committed or disconnected and no topic goroutine is still running.
-	return true
+	return app.topicManager.ReadyToFinish()
 }
 
 // drop closes and removes the inbound queue, if it was created. The returned
