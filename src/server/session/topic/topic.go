@@ -598,24 +598,29 @@ func (t *Topic) acknowledge(ctx context.Context, consumerID id.ID, ipcPath strin
 			return err
 		}
 	}
-	t.refreshConsumer(c)
 	c.awaitingACK = false
 	// The worker drains this single ACK before arming the next delivery.
 	c.connection.AcknowledgedChan <- offset
 	return nil
 }
 
-func (t *Topic) heartbeat(ctx context.Context, consumerID id.ID, ipcPath string) error {
+// renewConsumerDeadline postpones expiration after confirmation; the caller must hold t.mu.
+func (t *Topic) renewConsumerDeadline(ctx context.Context, consumerID id.ID, ipcPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	c, err := t.activeConsumer(consumerID, ipcPath)
 	if err != nil {
 		return err
 	}
-	t.refreshConsumer(c)
+	if c.liveness == nil || c.liveness.deadline.IsZero() {
+		return nil
+	}
+	c.liveness.deadline = time.Now().Add(consumerTimeout)
+	select {
+	case c.liveness.changed <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -639,18 +644,6 @@ func (t *Topic) activeConsumer(consumerID id.ID, ipcPath string) (*subscription,
 		return nil, context.DeadlineExceeded
 	}
 	return c, nil
-}
-
-// refreshConsumer postpones expiration under t.mu; confirmation starts the clock.
-func (t *Topic) refreshConsumer(c *subscription) {
-	if c.liveness == nil || c.liveness.deadline.IsZero() {
-		return
-	}
-	c.liveness.deadline = time.Now().Add(consumerTimeout)
-	select {
-	case c.liveness.changed <- struct{}{}:
-	default:
-	}
 }
 
 // listenHeartbeat is the heartbeat goroutine's entry point for one subscribed consumer.
@@ -690,12 +683,15 @@ func (t *Topic) listenHeartbeat(ctx context.Context, c *subscription) {
 			}
 			t.mu.Lock()
 			stored, exists := t.consumerMap.Get(c.info.ID())
-			if exists && stored.connection == c.connection {
-				if _, err := t.activeConsumer(c.info.ID(), c.info.IPCPath()); err == nil {
-					t.refreshConsumer(c)
-				}
+			if !exists || stored.connection != c.connection {
+				t.mu.Unlock()
+				return
 			}
+			err := t.renewConsumerDeadline(ctx, c.info.ID(), c.info.IPCPath())
 			t.mu.Unlock()
+			if err != nil {
+				return
+			}
 		}
 	}
 }

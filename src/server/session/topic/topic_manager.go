@@ -69,6 +69,59 @@ func (m *Manager) ReadyToFinish() bool {
 	return true
 }
 
+// RenewConsumerDeadline finds an active consumer and postpones its expiration.
+// Unknown or ambiguous sessions return consumer.ErrNotFound; expired sessions cannot renew.
+func (m *Manager) RenewConsumerDeadline(ctx context.Context, consumerID id.ID, ipcPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var target *Topic
+	if consumerID != "" {
+		c, err := m.consumerManager.GetConsumer(consumerID)
+		if err != nil {
+			return err
+		}
+		m.mu.RLock()
+		target, _ = m.topicMap.Get(id.ID(c.Info.Topic()))
+		m.mu.RUnlock()
+	} else {
+		m.mu.RLock()
+		topics, err := m.topicMap.Values()
+		m.mu.RUnlock()
+		if err != nil {
+			return err
+		}
+		for _, candidate := range topics {
+			candidate.mu.Lock()
+			consumers, err := candidate.consumerMap.Values()
+			if err != nil {
+				candidate.mu.Unlock()
+				return err
+			}
+			for _, c := range consumers {
+				if c.info.IPCPath() != ipcPath {
+					continue
+				}
+				if _, err := candidate.activeConsumer(c.info.ID(), ipcPath); err != nil {
+					continue
+				}
+				if target != nil {
+					candidate.mu.Unlock()
+					return consumer.ErrNotFound
+				}
+				target, consumerID = candidate, c.info.ID()
+			}
+			candidate.mu.Unlock()
+		}
+	}
+	if target == nil {
+		return consumer.ErrNotFound
+	}
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	return target.renewConsumerDeadline(ctx, consumerID, ipcPath)
+}
+
 // ListTopics replies with topic names in unspecified order and returns internal or IPC errors.
 // ctx bounds reply delivery and must be non-nil.
 func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ListTopicPayload) error {
@@ -260,24 +313,8 @@ func (m *Manager) ConsumerDisconnect(ctx context.Context, metadata protocol.Clie
 	return target.disconnect(ctx, c.Info.ID(), metadata.ClientIPC())
 }
 
-// ConsumerHeartbeat refreshes the consumer's deadline and attempts an immediate reply.
-func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerHeartbeatPayload) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	c, err := m.consumerManager.GetConsumer(id.ID(payload.ClientID()))
-	if err != nil {
-		return err
-	}
-	m.mu.RLock()
-	target, exists := m.topicMap.Get(id.ID(c.Info.Topic()))
-	m.mu.RUnlock()
-	if !exists {
-		return consumer.ErrNotFound
-	}
-	if err := target.heartbeat(ctx, c.Info.ID(), metadata.ClientIPC()); err != nil {
-		return err
-	}
+// ConsumerHeartbeat attempts an immediate reply after dispatch validates the session.
+func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.ClientMetadata) error {
 	return response.TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload())
 }
 

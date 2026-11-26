@@ -204,15 +204,15 @@ func TestConsumerExpirationReleasesName(t *testing.T) {
 	})
 }
 
-// TestConsumerNotificationsRenewDeadline checks both activity sources across the original deadline.
-func TestConsumerNotificationsRenewDeadline(t *testing.T) {
+// TestConsumerNotificationsUseSharedDeadlineRenewal checks renewal outside the handlers.
+func TestConsumerNotificationsUseSharedDeadlineRenewal(t *testing.T) {
 	tests := []struct {
 		name   string
 		reply  bool
 		notify func(*Manager, context.Context, protocol.ClientMetadata) error
 	}{
 		{name: "heartbeat", reply: true, notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
-			return m.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber"))
+			return m.ConsumerHeartbeat(ctx, metadata)
 		}},
 		{name: "acknowledgement", notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
 			return m.Acknowledgement(ctx, metadata, *protocol.NewAcknowledgementPayload("subscriber", 1))
@@ -231,6 +231,7 @@ func TestConsumerNotificationsRenewDeadline(t *testing.T) {
 				synctest.Wait()
 				receiveDelivery(t, inbound, 0, deliveryMessage(0))
 				connection := subscribedConnection(t, target, "subscriber")
+				before := subscriptionDeadline(t, target, "subscriber")
 				<-time.After(20 * time.Second)
 				metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 				if err := tt.notify(manager, t.Context(), metadata); err != nil {
@@ -239,6 +240,12 @@ func TestConsumerNotificationsRenewDeadline(t *testing.T) {
 				}
 				if tt.reply {
 					receiveTopicManagerReply(t, t.Context(), inbound, protocol.ConsumerHeartbeatReply)
+				}
+				if got := subscriptionDeadline(t, target, "subscriber"); !got.Equal(before) {
+					t.Errorf("deadline after %s handler = %v, want unchanged %v before central refresh", tt.name, got, before)
+				}
+				if err := manager.RenewConsumerDeadline(t.Context(), "subscriber", inbound.IPCPath()); err != nil {
+					t.Errorf("RenewConsumerDeadline(subscriber) after %s error = %v, want nil", tt.name, err)
 				}
 				synctest.Wait()
 				want := time.Now().Add(consumerTimeout)
@@ -268,8 +275,8 @@ func TestConsumerNotificationsRenewDeadline(t *testing.T) {
 	}
 }
 
-// TestManagerConsumerHeartbeatRejectsMissingConnections checks one-way lookup failures.
-func TestManagerConsumerHeartbeatRejectsMissingConnections(t *testing.T) {
+// TestRenewConsumerDeadlineRejectsMissingConnections checks one-way lookup failures.
+func TestRenewConsumerDeadlineRejectsMissingConnections(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing bool
@@ -290,16 +297,16 @@ func TestManagerConsumerHeartbeatRejectsMissingConnections(t *testing.T) {
 					t.Fatalf("AddConsumer(subscriber) during setup error = %v, want nil", err)
 				}
 			}
-			err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata("/subscriber"), *protocol.NewConsumerHeartbeatPayload("subscriber"))
+			err := manager.RenewConsumerDeadline(t.Context(), "subscriber", "/subscriber")
 			if !errors.Is(err, consumer.ErrNotFound) {
-				t.Errorf("ConsumerHeartbeat(subscriber) with %s error = %v, want %v", tt.name, err, consumer.ErrNotFound)
+				t.Errorf("RenewConsumerDeadline(subscriber) with %s error = %v, want %v", tt.name, err, consumer.ErrNotFound)
 			}
 		})
 	}
 }
 
-// TestConsumerHeartbeatRejectsInvalidSession checks that rejected notifications preserve the deadline.
-func TestConsumerHeartbeatRejectsInvalidSession(t *testing.T) {
+// TestRenewConsumerDeadlineRejectsInvalidSession checks that rejected notifications preserve the deadline.
+func TestRenewConsumerDeadlineRejectsInvalidSession(t *testing.T) {
 	tests := []struct {
 		name     string
 		wrongIPC bool
@@ -328,9 +335,9 @@ func TestConsumerHeartbeatRejectsInvalidSession(t *testing.T) {
 				if tt.canceled {
 					cancel()
 				}
-				err := manager.ConsumerHeartbeat(ctx, *protocol.NewClientMetadata(path), *protocol.NewConsumerHeartbeatPayload("subscriber"))
+				err := manager.RenewConsumerDeadline(ctx, "subscriber", path)
 				if !errors.Is(err, tt.wantErr) {
-					t.Errorf("ConsumerHeartbeat(subscriber) with %s error = %v, want %v", tt.name, err, tt.wantErr)
+					t.Errorf("RenewConsumerDeadline(subscriber) with %s error = %v, want %v", tt.name, err, tt.wantErr)
 				}
 				if got := subscriptionDeadline(t, target, "subscriber"); !got.Equal(before) {
 					t.Errorf("deadline after rejected heartbeat with %s = %v, want %v", tt.name, got, before)
@@ -369,8 +376,8 @@ func TestInvalidAcknowledgementPreservesDeadline(t *testing.T) {
 	}
 }
 
-// TestConsumerHeartbeatRejectsReplacedIPC checks a notification from an earlier connection.
-func TestConsumerHeartbeatRejectsReplacedIPC(t *testing.T) {
+// TestRenewConsumerDeadlineRejectsReplacedIPC checks a notification from an earlier connection.
+func TestRenewConsumerDeadlineRejectsReplacedIPC(t *testing.T) {
 	manager := NewManager()
 	target, lifetime, _ := subscriptionTarget(t, manager, "events")
 	first := newTopicManagerInbox(t)
@@ -381,12 +388,15 @@ func TestConsumerHeartbeatRejectsReplacedIPC(t *testing.T) {
 	}
 	second := expirationInbox(t, "replacement")
 	subscribeForDelivery(t, manager, lifetime, second, "subscriber", "", nil)
-	err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(first.IPCPath()), *protocol.NewConsumerHeartbeatPayload("subscriber"))
+	err := manager.RenewConsumerDeadline(t.Context(), "subscriber", first.IPCPath())
 	if !errors.Is(err, consumer.ErrNotFound) {
-		t.Errorf("ConsumerHeartbeat(subscriber) from replaced IPC error = %v, want %v", err, consumer.ErrNotFound)
+		t.Errorf("RenewConsumerDeadline(subscriber) from replaced IPC error = %v, want %v", err, consumer.ErrNotFound)
 	}
-	if err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(second.IPCPath()), *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
-		t.Errorf("ConsumerHeartbeat(subscriber) from current IPC error = %v, want nil", err)
+	if err := manager.RenewConsumerDeadline(t.Context(), "subscriber", second.IPCPath()); err != nil {
+		t.Errorf("RenewConsumerDeadline(subscriber) from current IPC error = %v, want nil", err)
+	}
+	if err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(second.IPCPath())); err != nil {
+		t.Errorf("ConsumerHeartbeat(subscriber reply) error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, t.Context(), second, protocol.ConsumerHeartbeatReply)
 }
@@ -398,7 +408,7 @@ func TestConsumerNotificationsRejectExpiredDeadline(t *testing.T) {
 		notify func(*Manager, context.Context, protocol.ClientMetadata) error
 	}{
 		{name: "heartbeat", notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
-			return m.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber"))
+			return m.RenewConsumerDeadline(ctx, "subscriber", metadata.ClientIPC())
 		}},
 		{name: "acknowledgement", notify: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
 			return m.Acknowledgement(ctx, metadata, *protocol.NewAcknowledgementPayload("subscriber", 1))
@@ -2481,8 +2491,8 @@ func TestConsumerExpirationPrioritizesDisconnect(t *testing.T) {
 	})
 }
 
-// TestConsumerHeartbeatSelectsConsumer checks that only the identified session is refreshed.
-func TestConsumerHeartbeatSelectsConsumer(t *testing.T) {
+// TestRenewConsumerDeadlineSelectsConsumer checks that only the identified session is refreshed.
+func TestRenewConsumerDeadlineSelectsConsumer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		manager := NewManager()
 		firstTopic, firstLifetime, _ := subscriptionTarget(t, manager, "events")
@@ -2499,10 +2509,9 @@ func TestConsumerHeartbeatSelectsConsumer(t *testing.T) {
 		synctest.Wait()
 		firstDeadline := subscriptionDeadline(t, firstTopic, "first")
 		<-time.After(time.Second)
-		if err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(second.IPCPath()), *protocol.NewConsumerHeartbeatPayload("second")); err != nil {
-			t.Errorf("ConsumerHeartbeat(second, second IPC) error = %v, want nil", err)
+		if err := manager.RenewConsumerDeadline(t.Context(), "second", second.IPCPath()); err != nil {
+			t.Errorf("RenewConsumerDeadline(second, second IPC) error = %v, want nil", err)
 		}
-		receiveTopicManagerReply(t, ctx, second, protocol.ConsumerHeartbeatReply)
 		if got := subscriptionDeadline(t, firstTopic, "first"); !got.Equal(firstDeadline) {
 			t.Errorf("first deadline after second heartbeat = %v, want unchanged %v", got, firstDeadline)
 		}
@@ -2513,8 +2522,8 @@ func TestConsumerHeartbeatSelectsConsumer(t *testing.T) {
 	})
 }
 
-// TestConsumerHeartbeatSelectsIDOnSharedIPC checks consumers sharing a client queue.
-func TestConsumerHeartbeatSelectsIDOnSharedIPC(t *testing.T) {
+// TestRenewConsumerDeadlineSelectsIDOnSharedIPC checks consumers sharing a client queue.
+func TestRenewConsumerDeadlineSelectsIDOnSharedIPC(t *testing.T) {
 	for _, consumerID := range []string{"first", "second"} {
 		t.Run(consumerID, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -2526,11 +2535,10 @@ func TestConsumerHeartbeatSelectsIDOnSharedIPC(t *testing.T) {
 				synctest.Wait()
 				initialDeadline := subscriptionDeadline(t, target, "first")
 				<-time.After(time.Second)
-				err := manager.ConsumerHeartbeat(t.Context(), *protocol.NewClientMetadata(inbound.IPCPath()), *protocol.NewConsumerHeartbeatPayload(consumerID))
+				err := manager.RenewConsumerDeadline(t.Context(), id.ID(consumerID), inbound.IPCPath())
 				if err != nil {
-					t.Fatalf("ConsumerHeartbeat(%q, shared IPC) error = %v, want nil", consumerID, err)
+					t.Fatalf("RenewConsumerDeadline(%q, shared IPC) error = %v, want nil", consumerID, err)
 				}
-				receiveTopicManagerReply(t, t.Context(), inbound, protocol.ConsumerHeartbeatReply)
 				for _, name := range []string{"first", "second"} {
 					want := initialDeadline
 					if name == consumerID {
@@ -2561,8 +2569,11 @@ func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
 	defer cancel()
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	for i := range 3 {
-		if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+		if err := manager.ConsumerHeartbeat(ctx, metadata); err != nil {
 			t.Fatalf("ConsumerHeartbeat(subscriber) with a full queue at attempt %d error = %v, want nil", i, err)
+		}
+		if err := manager.RenewConsumerDeadline(ctx, "subscriber", inbound.IPCPath()); err != nil {
+			t.Fatalf("RenewConsumerDeadline(subscriber) with a full queue at attempt %d error = %v, want nil", i, err)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2578,7 +2589,7 @@ func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
 		t.Fatalf("SendToClient(marker) after draining the queue error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
-	if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
+	if err := manager.ConsumerHeartbeat(ctx, metadata); err != nil {
 		t.Fatalf("ConsumerHeartbeat(subscriber) after draining the queue error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.ConsumerHeartbeatReply)
