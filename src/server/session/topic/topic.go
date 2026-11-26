@@ -213,7 +213,7 @@ func (t *Topic) startConsumerWorkers(ctx context.Context, newConsumer *subscript
 			}
 			// Worker cleanup is best-effort; explicit removals report cleanup errors.
 			_ = t.removeConsumer(newConsumer)
-			if expired || draining {
+			if expired {
 				// Keep the name reserved until closure and queue removal finish.
 				_ = newConsumer.connection.Drop()
 			}

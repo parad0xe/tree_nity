@@ -2652,13 +2652,10 @@ func TestManagerWaitJoinsForcedShutdown(t *testing.T) {
 		t.Error("ReadyToFinish() after forced shutdown = false, want true")
 	}
 	checkSavedOffset(t, manager, "subscriber", 0)
-	if sender, err := mqueue.NewSender(inbound.IPCPath()); !errors.Is(err, os.ErrNotExist) {
-		if err == nil {
-			if closeErr := sender.Close(); closeErr != nil {
-				t.Errorf("Close(unexpected sender) error = %v, want nil", closeErr)
-			}
-		}
-		t.Errorf("NewSender(subscriber) after forced shutdown error = %v, want %v", err, os.ErrNotExist)
+	if sender, err := mqueue.NewSender(inbound.IPCPath()); err != nil {
+		t.Errorf("NewSender(subscriber) after forced shutdown error = %v, want nil until client cleanup", err)
+	} else if err := sender.Close(); err != nil {
+		t.Errorf("Close(subscriber sender) after forced shutdown error = %v, want nil", err)
 	}
 }
 

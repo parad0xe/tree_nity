@@ -1480,8 +1480,11 @@ func shutdownClientInbox(t *testing.T, suffix string) *ipc.Inbound {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", path, err)
 	}
 	t.Cleanup(func() {
-		if err := inbound.Drop(); err != nil && !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("Drop(%q) after server shutdown error = %v, want nil or %v", path, err, os.ErrNotExist)
+		if err := inbound.Drop(); err != nil {
+			t.Errorf("Drop(%q) by client after server shutdown error = %v, want nil", path, err)
+		}
+		if err := tryConnect(t, path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("NewSender(%q) after client cleanup error = %v, want %v", path, err, os.ErrNotExist)
 		}
 	})
 	return inbound
@@ -1500,7 +1503,7 @@ func sendShutdownRequest(t *testing.T, app *application, clientIPC string, opcod
 	send(t, app.inbound.IPCPath(), string(frame))
 }
 
-// TestRunShutdownNotifiesActiveConsumers checks notification before routines and queues disappear.
+// TestRunShutdownNotifiesActiveConsumers checks notification and client ownership of queues.
 func TestRunShutdownNotifiesActiveConsumers(t *testing.T) {
 	app := newTestApplication(t)
 	requested := make(chan struct{})
@@ -1532,8 +1535,8 @@ func TestRunShutdownNotifiesActiveConsumers(t *testing.T) {
 		t.Error("readyToFinish() after shutdown = false, want true")
 	}
 	for _, inbound := range consumers {
-		if err := tryConnect(t, inbound.IPCPath()); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("NewSender(%q) after shutdown error = %v, want %v", inbound.IPCPath(), err, os.ErrNotExist)
+		if err := tryConnect(t, inbound.IPCPath()); err != nil {
+			t.Errorf("NewSender(%q) after shutdown error = %v, want nil until client cleanup", inbound.IPCPath(), err)
 		}
 	}
 }
@@ -1606,8 +1609,8 @@ func TestRunShutdownWaitsForACKOrDeadline(t *testing.T) {
 			if !ok || info.Offset() != offset {
 				t.Errorf("ConsumerInfo after shutdown with ack=%t = %#v, want offset %d", ack, data.Payload(), offset)
 			}
-			if err := tryConnect(t, inbound.IPCPath()); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("NewSender(consumer) after shutdown error = %v, want %v", err, os.ErrNotExist)
+			if err := tryConnect(t, inbound.IPCPath()); err != nil {
+				t.Errorf("NewSender(consumer) after shutdown error = %v, want nil until client cleanup", err)
 			}
 		})
 	}
