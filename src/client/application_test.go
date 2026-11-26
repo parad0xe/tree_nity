@@ -279,6 +279,24 @@ func TestDropKeepsServerQueue(t *testing.T) {
 	}
 }
 
+func TestDropIgnoresRemovedClientQueue(t *testing.T) {
+	serverIPCPath := testServerIPCPath(os.Getpid())
+	newTestQueue(t, serverIPCPath)
+	app, err := newApplication(testConfig(serverIPCPath))
+	if err != nil {
+		t.Fatalf("newApplication() error = %v, want nil", err)
+	}
+	// The server removes the queue of an expired subscriber this way.
+	queuePath := "/dev/mqueue" + app.inbound.IPCPath()
+	if err := os.Remove(queuePath); err != nil {
+		t.Fatalf("Remove(%q) error = %v, want nil", queuePath, err)
+	}
+
+	if err := app.drop(); err != nil {
+		t.Errorf("drop() after the server removed the client queue error = %v, want nil", err)
+	}
+}
+
 func TestRunReturnsCommandResult(t *testing.T) {
 	errCommand := errors.New("command failed")
 	app := &application{}
@@ -379,6 +397,30 @@ func TestRunPassesDefaultTimeoutsToCommand(t *testing.T) {
 	}
 	if got.SendTimeout != commands.DefaultSendTimeout {
 		t.Errorf("run() env.SendTimeout = %v, want %v", got.SendTimeout, commands.DefaultSendTimeout)
+	}
+	if got.HeartbeatSendTimeout != commands.DefaultHeartbeatSendTimeout {
+		t.Errorf("run() env.HeartbeatSendTimeout = %v, want %v", got.HeartbeatSendTimeout, commands.DefaultHeartbeatSendTimeout)
+	}
+}
+
+func TestRunPassesHeartbeatIntervalToCommand(t *testing.T) {
+	app := &application{
+		inbound:           &ipc.Inbound{},
+		outbound:          &ipc.Outbound{},
+		heartbeatInterval: testTimeout,
+	}
+	var got commands.Env
+	command := mockCommand(func(ctx context.Context, env commands.Env) (int, error) {
+		got = env
+		return exitcode.Success, nil
+	})
+
+	if _, err := app.run(context.Background(), command); err != nil {
+		t.Errorf("run() error = %v, want nil", err)
+	}
+
+	if got.HeartbeatInterval != app.heartbeatInterval {
+		t.Errorf("run() env.HeartbeatInterval = %v, want %v", got.HeartbeatInterval, app.heartbeatInterval)
 	}
 }
 

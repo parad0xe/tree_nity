@@ -18,6 +18,8 @@ const (
 	DefaultRecvTimeout = 2 * time.Second
 	// DefaultSendTimeout is the longest a request waits while the server queue is full.
 	DefaultSendTimeout = 2 * time.Second
+	// DefaultHeartbeatSendTimeout is the longest a heartbeat waits while the server queue is full.
+	DefaultHeartbeatSendTimeout = 100 * time.Millisecond
 )
 
 // Env holds what every command can use while it runs.
@@ -36,6 +38,10 @@ type Env struct {
 	RecvTimeout time.Duration
 	// SendTimeout is the longest a request waits while the server queue is full.
 	SendTimeout time.Duration
+	// HeartbeatInterval is the time between two heartbeats of a subscriber.
+	HeartbeatInterval time.Duration
+	// HeartbeatSendTimeout is the longest a heartbeat waits while the server queue is full.
+	HeartbeatSendTimeout time.Duration
 }
 
 // createData returns a client request.
@@ -62,33 +68,13 @@ func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode pro
 	recvCtx, recvCancel := context.WithTimeout(ctx, env.RecvTimeout)
 	defer recvCancel()
 
-	data, recvErr := env.Inbound.Recv(recvCtx)
-	if recvErr != nil {
-		return zero, exitcode.IPC, fmt.Errorf("recv: %w", recvErr)
+	data, code, err := env.recvData(recvCtx)
+	if err != nil {
+		return zero, code, err
 	}
 
-	if data.Emitter() != protocol.Server {
-		return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedEmitter)
-	}
-
-	if data.Opcode() == protocol.ErrorReply {
-		reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
-		if !ok {
-			return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
-		}
-
-		var code int
-		switch reply.Kind() {
-		case protocol.InvalidRequest:
-			code = exitcode.General
-		default:
-			code = exitcode.Topic
-		}
-		return zero, code, fmt.Errorf("recv: %w: %s", errRequestRejected, reply.Reason())
-	}
-
-	if data.Opcode() == protocol.ServerShutdown {
-		return zero, exitcode.IPC, fmt.Errorf("recv: %w", errServerShuttingDown)
+	if code, err := replyError(data); err != nil {
+		return zero, code, err
 	}
 
 	if data.Opcode() != expectedOpcode {
@@ -100,6 +86,45 @@ func (env *Env) recv[P protocol.Payload](ctx context.Context, expectedOpcode pro
 		return zero, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
 	}
 	return reply, exitcode.Success, nil
+}
+
+// recvData returns the next data from the server.
+func (env *Env) recvData(ctx context.Context) (protocol.Data, int, error) {
+	data, err := env.Inbound.Recv(ctx)
+	if err != nil {
+		return protocol.Data{}, exitcode.IPC, fmt.Errorf("recv: %w", err)
+	}
+
+	if data.Emitter() != protocol.Server {
+		return protocol.Data{}, exitcode.General, fmt.Errorf("recv: %w", errUnexpectedEmitter)
+	}
+
+	return data, exitcode.Success, nil
+}
+
+// replyError returns the error of a server reply refusing the request.
+func replyError(data protocol.Data) (int, error) {
+	if data.Opcode() == protocol.ErrorReply {
+		reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
+		if !ok {
+			return exitcode.General, fmt.Errorf("recv: %w", errUnexpectedPayload)
+		}
+
+		var code int
+		switch reply.Kind() {
+		case protocol.InvalidRequest:
+			code = exitcode.General
+		default:
+			code = exitcode.Topic
+		}
+		return code, fmt.Errorf("recv: %w: %s", errRequestRejected, reply.Reason())
+	}
+
+	if data.Opcode() == protocol.ServerShutdown {
+		return exitcode.IPC, fmt.Errorf("recv: %w", errServerShuttingDown)
+	}
+
+	return exitcode.Success, nil
 }
 
 // print writes raw bytes to the command output.

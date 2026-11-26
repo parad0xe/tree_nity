@@ -23,6 +23,8 @@ type application struct {
 	gracePeriod time.Duration
 	// cancelTimeout is the time the command has to stop once cancelled.
 	cancelTimeout time.Duration
+	// heartbeatInterval is the time between two heartbeats of a subscriber.
+	heartbeatInterval time.Duration
 	// gracefulShutdownFailed reports that the command did not stop once
 	// cancelled and may still use the queues.
 	gracefulShutdownFailed bool
@@ -40,6 +42,8 @@ type appConfig struct {
 	gracePeriod time.Duration
 	// cancelTimeout is the time the command has to stop once cancelled.
 	cancelTimeout time.Duration
+	// heartbeatInterval is the time between two heartbeats of a subscriber.
+	heartbeatInterval time.Duration
 }
 
 // clientIPCPath returns the inbound queue name of the client running as pid.
@@ -53,8 +57,9 @@ func newApplication(config appConfig) (*application, error) {
 	ipcPath := clientIPCPath(os.Getpid())
 
 	app := &application{
-		gracePeriod:   config.gracePeriod,
-		cancelTimeout: config.cancelTimeout,
+		gracePeriod:       config.gracePeriod,
+		cancelTimeout:     config.cancelTimeout,
+		heartbeatInterval: config.heartbeatInterval,
 	}
 
 	outbound, err := ipc.NewOutbound(config.serverIPCPath, config.encoder)
@@ -77,13 +82,15 @@ func newApplication(config appConfig) (*application, error) {
 // not stop, run returns errCommandNotStopped.
 func (app *application) run(sigCtx context.Context, command commands.Command) (int, error) {
 	env := commands.Env{
-		Shutdown:    lifecycle.NewGracefulShutdown(sigCtx.Done()),
-		Inbound:     app.inbound,
-		Outbound:    app.outbound,
-		RecvTimeout: commands.DefaultRecvTimeout,
-		SendTimeout: commands.DefaultSendTimeout,
-		Stdout:      os.Stdout,
-		Stdin:       os.Stdin,
+		Shutdown:             lifecycle.NewGracefulShutdown(sigCtx.Done()),
+		Inbound:              app.inbound,
+		Outbound:             app.outbound,
+		RecvTimeout:          commands.DefaultRecvTimeout,
+		SendTimeout:          commands.DefaultSendTimeout,
+		HeartbeatInterval:    app.heartbeatInterval,
+		HeartbeatSendTimeout: commands.DefaultHeartbeatSendTimeout,
+		Stdout:               os.Stdout,
+		Stdin:                os.Stdin,
 	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -128,7 +135,11 @@ func (app *application) drop() error {
 		if app.gracefulShutdownFailed {
 			err = errors.Join(err, app.inbound.Unlink())
 		} else {
-			err = errors.Join(err, app.inbound.Drop())
+			dropErr := app.inbound.Drop()
+			// The server may already have removed the queue of an expired subscriber.
+			if !errors.Is(dropErr, os.ErrNotExist) {
+				err = errors.Join(err, dropErr)
+			}
 		}
 	}
 
