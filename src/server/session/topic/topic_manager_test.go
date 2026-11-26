@@ -79,7 +79,12 @@ func receiveTopicManagerReply(t *testing.T, ctx context.Context, inbound *ipc.In
 
 func subscriptionTarget(t *testing.T, manager *Manager, name string) (*Topic, context.Context, context.CancelFunc) {
 	t.Helper()
-	target, ctx, cancel := newTestTopic(t)
+	return subscriptionTargetWithShutdown(t, manager, name, lifecycle.GracefulShutdown{})
+}
+
+func subscriptionTargetWithShutdown(t *testing.T, manager *Manager, name string, shutdown lifecycle.GracefulShutdown) (*Topic, context.Context, context.CancelFunc) {
+	t.Helper()
+	target, ctx, cancel := newTestTopicWithShutdown(t, shutdown)
 	if err := manager.topicMap.Insert(id.ID(name), target); err != nil {
 		t.Fatalf("Insert(%q) during setup error = %v, want nil", name, err)
 	}
@@ -2577,4 +2582,137 @@ func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
 		t.Fatalf("ConsumerHeartbeat(subscriber) after draining the queue error = %v, want nil", err)
 	}
 	receiveTopicManagerReply(t, ctx, inbound, protocol.ConsumerHeartbeatReply)
+}
+
+// TestManagerShutdownNotifiesEveryTopic checks empty managers and multiple active topics.
+func TestManagerShutdownNotifiesEveryTopic(t *testing.T) {
+	for _, count := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("topics_%d", count), func(t *testing.T) {
+			manager := NewManager()
+			requested := make(chan struct{})
+			shutdown := lifecycle.NewGracefulShutdown(requested)
+			inboxes := make([]*ipc.Inbound, count)
+			for i := range count {
+				name := fmt.Sprintf("events-%d", i)
+				_, lifetime, _ := subscriptionTargetWithShutdown(t, manager, name, shutdown)
+				inboxes[i] = expirationInbox(t, name)
+				if err := manager.NewSubscription(topicManagerContext(t), lifetime, lifecycle.GracefulShutdown{},
+					*protocol.NewClientMetadata(inboxes[i].IPCPath()), *protocol.NewTopicSubscriptionPayload(name, name, "", nil)); err != nil {
+					t.Fatalf("NewSubscription(%q) error = %v, want nil", name, err)
+				}
+				receiveTopicManagerReply(t, t.Context(), inboxes[i], protocol.TopicSubscriptionReply)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			result := make(chan error, 1)
+			close(requested)
+			manager.BeginShutdown()
+			go func() { result <- manager.Wait() }()
+			for _, inbox := range inboxes {
+				receiveTopicManagerReply(t, ctx, inbox, protocol.ServerShutdown)
+			}
+			if err := <-result; err != nil {
+				t.Errorf("Wait() with %d topics error = %v, want nil", count, err)
+			}
+			if !manager.ReadyToFinish() {
+				t.Errorf("ReadyToFinish() after shutting down %d topics = false, want true", count)
+			}
+		})
+	}
+}
+
+// TestManagerWaitJoinsForcedShutdown checks canceled workers without advancing the offset.
+func TestManagerWaitJoinsForcedShutdown(t *testing.T) {
+	manager := NewManager()
+	requested := make(chan struct{})
+	target, lifetime, force := subscriptionTargetWithShutdown(t, manager, "events", lifecycle.NewGracefulShutdown(requested))
+	inbound := expirationInbox(t, "pending")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	if err := target.storeMessage(deliveryMessage(0)); err != nil {
+		t.Fatalf("storeMessage(0) error = %v, want nil", err)
+	}
+	receiveDelivery(t, inbound, 0, deliveryMessage(0))
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	stop := context.AfterFunc(ctx, force)
+	defer stop()
+	close(requested)
+	manager.BeginShutdown()
+	if err := manager.Wait(); err != nil {
+		t.Errorf("Wait() after forced shutdown error = %v, want nil", err)
+	}
+	if err := lifetime.Err(); !errors.Is(err, context.Canceled) {
+		t.Errorf("topic lifetime after force error = %v, want %v", err, context.Canceled)
+	}
+	if err := ctx.Err(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("force deadline context error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	receiveTopicManagerReply(t, topicManagerContext(t), inbound, protocol.ServerShutdown)
+	if !manager.ReadyToFinish() {
+		t.Error("ReadyToFinish() after forced shutdown = false, want true")
+	}
+	checkSavedOffset(t, manager, "subscriber", 0)
+	if sender, err := mqueue.NewSender(inbound.IPCPath()); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			if closeErr := sender.Close(); closeErr != nil {
+				t.Errorf("Close(unexpected sender) error = %v, want nil", closeErr)
+			}
+		}
+		t.Errorf("NewSender(subscriber) after forced shutdown error = %v, want %v", err, os.ErrNotExist)
+	}
+}
+
+// TestManagerShutdownToleratesFullQueue checks bounded notification and cleanup.
+func TestManagerShutdownToleratesFullQueue(t *testing.T) {
+	manager := NewManager()
+	requested := make(chan struct{})
+	_, lifetime, force := subscriptionTargetWithShutdown(t, manager, "events", lifecycle.NewGracefulShutdown(requested))
+	inbound := expirationInbox(t, "full")
+	subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+	fillSubscriptionInbox(t, inbound)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, force)
+	defer stop()
+	close(requested)
+	manager.BeginShutdown()
+	if err := manager.Wait(); err != nil {
+		t.Errorf("Wait() with a full client queue error = %v, want nil", err)
+	}
+	if err := ctx.Err(); err != nil {
+		t.Errorf("shutdown context after a full queue error = %v, want nil", err)
+	}
+	if !manager.ReadyToFinish() {
+		t.Error("ReadyToFinish() after full-queue cleanup = false, want true")
+	}
+}
+
+// TestManagerShutdownRejectsNewOperations checks admission after shutdown starts.
+func TestManagerShutdownRejectsNewOperations(t *testing.T) {
+	tests := []struct {
+		name    string
+		request func(*Manager, context.Context, protocol.ClientMetadata) error
+	}{
+		{name: "create", request: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload("events"))
+		}},
+		{name: "produce", request: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.ProduceMessage(ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewProduceMessagePayload("events", protocol.NewMessage(nil, nil)))
+		}},
+		{name: "subscribe", request: func(m *Manager, ctx context.Context, metadata protocol.ClientMetadata) error {
+			return m.NewSubscription(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewTopicSubscriptionPayload("subscriber", "events", "", nil))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := NewManager()
+			manager.BeginShutdown()
+			inbound := newTopicManagerInbox(t)
+			ctx := topicManagerContext(t)
+			if err := tt.request(manager, ctx, *protocol.NewClientMetadata(inbound.IPCPath())); err != nil {
+				t.Fatalf("%s after shutdown error = %v, want nil after rejection", tt.name, err)
+			}
+			receiveTopicManagerReply(t, ctx, inbound, protocol.ServerShutdown)
+		})
+	}
 }

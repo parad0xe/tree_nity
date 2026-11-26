@@ -52,8 +52,13 @@ func waitTopicLoop(t *testing.T, topic *Topic) bool {
 
 func newTestTopic(t *testing.T) (*Topic, context.Context, context.CancelFunc) {
 	t.Helper()
+	return newTestTopicWithShutdown(t, lifecycle.GracefulShutdown{})
+}
+
+func newTestTopicWithShutdown(t *testing.T, shutdown lifecycle.GracefulShutdown) (*Topic, context.Context, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	topic := NewTopic(ctx, lifecycle.GracefulShutdown{})
+	topic := NewTopic(ctx, shutdown)
 	t.Cleanup(func() {
 		cancel()
 		waitTopicLoop(t, topic)
@@ -1018,5 +1023,116 @@ func TestTopicRemoveKeepsConnectionOnIndexFailure(t *testing.T) {
 	case <-c.Connection().Done():
 		t.Errorf("consumer-1 Connection().Done() after failed removal is closed, want open")
 	default:
+	}
+}
+
+// TestTopicShutdownWaitsForLastACK checks priority notification and the committed offset.
+func TestTopicShutdownWaitsForLastACK(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		requested := make(chan struct{})
+		target, lifetime, _ := subscriptionTargetWithShutdown(t, manager, "events", lifecycle.NewGracefulShutdown(requested))
+		inbound := expirationInbox(t, "shutdown")
+		subscribeForDelivery(t, manager, lifetime, inbound, "subscriber", "", nil)
+		for i := range 2 {
+			if err := target.storeMessage(deliveryMessage(i)); err != nil {
+				t.Fatalf("storeMessage(%d) before shutdown error = %v, want nil", i, err)
+			}
+		}
+		synctest.Wait()
+		markerSender, err := mqueue.NewSender(inbound.IPCPath())
+		if err != nil {
+			t.Fatalf("NewSender(shutdown queue) error = %v, want nil", err)
+		}
+		defer func() {
+			if err := markerSender.Close(); err != nil {
+				t.Errorf("Close(marker sender) error = %v, want nil", err)
+			}
+		}()
+		close(requested)
+		synctest.Wait()
+		receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerShutdown)
+		receiveDelivery(t, inbound, 0, deliveryMessage(0))
+		synctest.Wait()
+		if target.readyToFinish() {
+			t.Error("readyToFinish() with ACK(1) pending = true, want false")
+		}
+		acknowledgeDelivery(t, manager, inbound, "subscriber", 1)
+		synctest.Wait()
+		if !target.readyToFinish() {
+			t.Error("readyToFinish() after ACK(1) and worker cleanup = false, want true")
+		}
+		checkSavedOffset(t, manager, "subscriber", 1)
+		marker, err := protocol.NewData(protocol.ServerShutdown, protocol.NewServerMetadata(), protocol.NewServerShutdownPayload())
+		if err != nil {
+			t.Fatalf("NewData(marker) error = %v, want nil", err)
+		}
+		frame, err := protocol.Encode(marker)
+		if err != nil {
+			t.Fatalf("Encode(marker) error = %v, want nil", err)
+		}
+		if err := markerSender.TimedSend(frame, time.Now()); err != nil {
+			t.Fatalf("TimedSend(marker) after shutdown error = %v, want nil", err)
+		}
+		receiveTopicManagerReply(t, t.Context(), inbound, protocol.ServerShutdown)
+	})
+}
+
+// TestTopicShutdownWaitsForWorkerCleanup checks that completion includes onStop.
+func TestTopicShutdownWaitsForWorkerCleanup(t *testing.T) {
+	manager := NewManager()
+	requested := make(chan struct{})
+	target, lifetime, _ := subscriptionTargetWithShutdown(t, manager, "events", lifecycle.NewGracefulShutdown(requested))
+	inbound := expirationInbox(t, "cleanup")
+	c, _, err := manager.consumerManager.Subscribe(lifetime, "subscriber", "events", nil, "", inbound.IPCPath())
+	if err != nil {
+		t.Fatalf("Subscribe(subscriber) error = %v, want nil", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.consumerManager.DisconnectConsumer(c); err != nil {
+			t.Errorf("DisconnectConsumer(subscriber) during test cleanup error = %v, want nil", err)
+		}
+	})
+	entered := make(chan struct{})
+	finish := make(chan struct{})
+	release := sync.OnceFunc(func() { close(finish) })
+	t.Cleanup(release)
+	onStop := func() {
+		close(entered)
+		<-finish
+		if err := manager.consumerManager.DisconnectConsumer(c); err != nil {
+			t.Errorf("DisconnectConsumer(subscriber) after cleanup error = %v, want nil", err)
+		}
+	}
+	if err := target.upsertConsumer(lifetime, c, nil, onStop, nil); err != nil {
+		t.Fatalf("upsertConsumer(subscriber) error = %v, want nil", err)
+	}
+	close(requested)
+	receiveTopicManagerReply(t, topicManagerContext(t), inbound, protocol.ServerShutdown)
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown cleanup did not start within 1s, want onStop entered")
+	}
+	if target.readyToFinish() {
+		t.Error("readyToFinish() during worker cleanup = true, want false")
+	}
+	release()
+	if waitTopicLoop(t, target) && !target.readyToFinish() {
+		t.Error("readyToFinish() after worker cleanup = false, want true")
+	}
+}
+
+// TestTopicRejectsProductionAfterShutdown checks that a stopped topic cannot accept a message.
+func TestTopicRejectsProductionAfterShutdown(t *testing.T) {
+	requested := make(chan struct{})
+	target, _, _ := newTestTopicWithShutdown(t, lifecycle.NewGracefulShutdown(requested))
+	close(requested)
+	if !waitTopicLoop(t, target) {
+		return
+	}
+	err := target.ProduceMessage(t.Context(), protocol.NewMessage(nil, nil))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("ProduceMessage() after completed shutdown error = %v, want %v", err, context.Canceled)
 	}
 }
