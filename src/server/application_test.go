@@ -11,10 +11,12 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
+	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/mqueue"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
@@ -2033,6 +2035,251 @@ func TestDecodeFrameRejectsInvalidMetadataTypes(t *testing.T) {
 			if errors.As(err, &decodeErr) {
 				t.Errorf("decodeFrame(metadata=%s) reply metadata = %#v, want no reply endpoint", metadata, decodeErr.metadata)
 			}
+		})
+	}
+}
+
+func livenessInbox(t *testing.T, suffix string) *ipc.Inbound {
+	t.Helper()
+	path := fmt.Sprintf("/activity.%d.%s.%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."), suffix)
+	inbound, err := ipc.NewInbound(path, protocol.Decode)
+	if err != nil {
+		t.Fatalf("NewInbound(%q) error = %v, want nil", path, err)
+	}
+	t.Cleanup(func() {
+		// Expiration intentionally lets the server remove these queues.
+		if err := inbound.Drop(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Drop(%q) error = %v, want nil or %v", path, err, os.ErrNotExist)
+		}
+	})
+	return inbound
+}
+
+func dispatchLivenessRequest(t *testing.T, app *application, ctx context.Context, inbound *ipc.Inbound, opcode protocol.Opcode, payload protocol.Payload) (int, error) {
+	t.Helper()
+	data, err := protocol.NewData(opcode, protocol.NewClientMetadata(inbound.IPCPath()), payload)
+	if err != nil {
+		t.Fatalf("NewData(%v) error = %v, want nil", opcode, err)
+	}
+	return app.dispatch(ctx, lifecycle.GracefulShutdown{}, data)
+}
+
+func setupLivenessConsumers(t *testing.T, app *application, ctx context.Context) (*ipc.Inbound, *ipc.Inbound) {
+	t.Helper()
+	producer := livenessInbox(t, "producer")
+	first := livenessInbox(t, "first")
+	second := livenessInbox(t, "second")
+	requests := []struct {
+		inbound *ipc.Inbound
+		opcode  protocol.Opcode
+		payload protocol.Payload
+		reply   protocol.Opcode
+	}{
+		{producer, protocol.CreateTopic, protocol.NewCreateTopicPayload("events"), protocol.CreateTopicReply},
+		{producer, protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("first/key"), []byte("value"))), protocol.ProduceMessageReply},
+		{first, protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("first", "events", "first/", nil), protocol.TopicSubscriptionReply},
+		{second, protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("second", "events", "second/", nil), protocol.TopicSubscriptionReply},
+	}
+	for _, request := range requests {
+		if code, err := dispatchLivenessRequest(t, app, ctx, request.inbound, request.opcode, request.payload); code != exitcode.Success || err != nil {
+			t.Fatalf("dispatch(%v) during setup = %d, %v, want %d and nil", request.opcode, code, err, exitcode.Success)
+		}
+		receiveServerReply(t, request.inbound, request.reply)
+	}
+	synctest.Wait()
+	receiveServerReply(t, first, protocol.MessageDelivery)
+	return first, second
+}
+
+func checkLivenessExpired(t *testing.T, app *application, ctx context.Context, inbound *ipc.Inbound, consumerID string) {
+	t.Helper()
+	err := app.topicManager.RenewConsumerDeadline(ctx, id.ID(consumerID), inbound.IPCPath())
+	if !errors.Is(err, consumer.ErrNotFound) {
+		t.Errorf("RenewConsumerDeadline(%q) after expiration error = %v, want %v", consumerID, err, consumer.ErrNotFound)
+		return
+	}
+	data := receiveServerReply(t, inbound, protocol.ServerConsumerDisconnect)
+	payload, ok := data.Payload().(*protocol.ServerConsumerDisconnectPayload)
+	if !ok || payload.ClientID() != consumerID {
+		t.Errorf("expiration notification for %q = %#v, want matching ConsumerDisconnect", consumerID, data.Payload())
+	}
+}
+
+// TestDispatchRequestsRenewConsumer checks every continuing request across the original deadline.
+func TestDispatchRequestsRenewConsumer(t *testing.T) {
+	tests := []struct {
+		name    string
+		opcode  protocol.Opcode
+		payload protocol.Payload
+		reply   protocol.Opcode
+	}{
+		{"list", protocol.ListTopic, protocol.NewListTopicPayload(), protocol.ListTopicReply},
+		{"create", protocol.CreateTopic, protocol.NewCreateTopicPayload("other"), protocol.CreateTopicReply},
+		{"check", protocol.CheckTopic, protocol.NewCheckTopicPayload("events"), protocol.CheckTopicReply},
+		{"produce", protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("unmatched"), nil)), protocol.ProduceMessageReply},
+		{"info about another consumer", protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("second"), protocol.ConsumerInfoReply},
+		{"subscription rejection", protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("first", "events", "first/", nil), protocol.ErrorReply},
+		{"heartbeat", protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("first"), protocol.ConsumerHeartbeatReply},
+		{"acknowledgement", protocol.Acknowledgement, protocol.NewAcknowledgementPayload("first", 1), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				app := &application{topicManager: topic.NewManager()}
+				first, second := setupLivenessConsumers(t, app, ctx)
+				<-time.After(20 * time.Second)
+				if code, err := dispatchLivenessRequest(t, app, ctx, first, tt.opcode, tt.payload); code != exitcode.Success || err != nil {
+					t.Errorf("dispatch(%v) at 20s = %d, %v, want %d and nil", tt.opcode, code, err, exitcode.Success)
+					return
+				}
+				if tt.opcode != protocol.Acknowledgement {
+					receiveServerReply(t, first, tt.reply)
+				}
+				<-time.After(11 * time.Second)
+				synctest.Wait()
+				checkLivenessExpired(t, app, ctx, second, "second")
+				if err := tryConnect(t, first.IPCPath()); err != nil {
+					t.Errorf("NewSender(first IPC) at 31s after %s error = %v, want active until 50s", tt.name, err)
+					return
+				}
+				<-time.After(19 * time.Second)
+				synctest.Wait()
+				checkLivenessExpired(t, app, ctx, first, "first")
+			})
+		})
+	}
+}
+
+// TestDispatchInvalidActivityPreservesExpiration checks invalid ACKs and conflicting identities.
+func TestDispatchInvalidActivityPreservesExpiration(t *testing.T) {
+	tests := []struct {
+		name    string
+		opcode  protocol.Opcode
+		payload protocol.Payload
+		wantErr error
+	}{
+		{"incorrect offset", protocol.Acknowledgement, protocol.NewAcknowledgementPayload("first", 2), protocol.ErrInvalidPayload},
+		{"unknown heartbeat ID", protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("unknown"), consumer.ErrNotFound},
+		{"mismatched heartbeat ID", protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("second"), consumer.ErrNotFound},
+		{"mismatched ACK ID", protocol.Acknowledgement, protocol.NewAcknowledgementPayload("second", 1), consumer.ErrNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				app := &application{topicManager: topic.NewManager()}
+				first, second := setupLivenessConsumers(t, app, ctx)
+				<-time.After(20 * time.Second)
+				if code, err := dispatchLivenessRequest(t, app, ctx, first, tt.opcode, tt.payload); code != exitcode.General || !errors.Is(err, tt.wantErr) {
+					t.Errorf("dispatch(%v) with %s = %d, %v, want %d and %v", tt.opcode, tt.name, code, err, exitcode.General, tt.wantErr)
+				}
+				<-time.After(11 * time.Second)
+				synctest.Wait()
+				checkLivenessExpired(t, app, ctx, first, "first")
+				checkLivenessExpired(t, app, ctx, second, "second")
+			})
+		})
+	}
+}
+
+// TestDispatchHeartbeatRejectsExpiredConsumer checks the shared validation before replying.
+func TestDispatchHeartbeatRejectsExpiredConsumer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		app := &application{topicManager: topic.NewManager()}
+		first, second := setupLivenessConsumers(t, app, ctx)
+		<-time.After(31 * time.Second)
+		synctest.Wait()
+		if code, err := dispatchLivenessRequest(t, app, ctx, first, protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("first")); code != exitcode.General || !errors.Is(err, consumer.ErrNotFound) {
+			t.Errorf("dispatch(ConsumerHeartbeat, expired consumer) = %d, %v, want %d and %v", code, err, exitcode.General, consumer.ErrNotFound)
+		}
+		checkLivenessExpired(t, app, ctx, first, "first")
+		checkLivenessExpired(t, app, ctx, second, "second")
+	})
+}
+
+// TestDispatchUnregisteredActivityPreservesExpiration checks ordinary client requests.
+func TestDispatchUnregisteredActivityPreservesExpiration(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		app := &application{topicManager: topic.NewManager()}
+		first, second := setupLivenessConsumers(t, app, ctx)
+		ordinary := livenessInbox(t, "ordinary")
+		<-time.After(20 * time.Second)
+		if code, err := dispatchLivenessRequest(t, app, ctx, ordinary, protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("first")); code != exitcode.Success || err != nil {
+			t.Errorf("dispatch(ConsumerInfo, ordinary client) = %d, %v, want %d and nil", code, err, exitcode.Success)
+		}
+		receiveServerReply(t, ordinary, protocol.ConsumerInfoReply)
+		<-time.After(11 * time.Second)
+		synctest.Wait()
+		checkLivenessExpired(t, app, ctx, first, "first")
+		checkLivenessExpired(t, app, ctx, second, "second")
+	})
+}
+
+// TestListenMalformedActivityPreservesExpiration checks rejection before dispatch.
+func TestListenMalformedActivityPreservesExpiration(t *testing.T) {
+	tests := []struct {
+		name    string
+		opcode  protocol.Opcode
+		payload map[string]any
+		wantErr error
+	}{
+		{"missing ID", protocol.ConsumerHeartbeat, map[string]any{}, protocol.ErrMissingClientID},
+		{"unknown field", protocol.ListTopic, map[string]any{"unexpected": true}, protocol.ErrUnknownField},
+		{"unknown opcode", protocol.Opcode(255), map[string]any{}, protocol.ErrUnknownOpcode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				app := &application{topicManager: topic.NewManager()}
+				first, second := setupLivenessConsumers(t, app, ctx)
+				decoded := make(chan error, 1)
+				inbound, err := ipc.NewInbound(serverIPCPath(os.Getpid()), func(frame []byte) (protocol.Data, error) {
+					data, err := protocol.Decode(frame)
+					decoded <- err
+					return data, err
+				})
+				if err != nil {
+					t.Fatalf("NewInbound(server) error = %v, want nil", err)
+				}
+				app.inbound = inbound
+				t.Cleanup(func() {
+					if err := app.drop(); err != nil {
+						t.Errorf("drop(server) error = %v, want nil", err)
+					}
+				})
+				frame, err := json.Marshal(map[string]any{
+					"opcode": tt.opcode, "emitter": protocol.Client,
+					"metadata": map[string]any{"clientIPC": first.IPCPath()}, "payload": tt.payload,
+				})
+				if err != nil {
+					t.Fatalf("Marshal(%s request) error = %v, want nil", tt.name, err)
+				}
+				<-time.After(20 * time.Second)
+				send(t, inbound.IPCPath(), string(frame))
+				call := startCall(t, ctx, "listen()", func(ctx context.Context) (int, error) {
+					return app.listen(ctx, lifecycle.GracefulShutdown{})
+				})
+				if err := <-decoded; !errors.Is(err, tt.wantErr) {
+					t.Errorf("Decode(%s request) error = %v, want %v", tt.name, err, tt.wantErr)
+				}
+				call.cancel()
+				if res := call.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+					t.Errorf("listen() after %s = %d, %v, want %d and %v", tt.name, res.Code(), res.Err(), exitcode.Success, context.Canceled)
+				}
+				<-time.After(11 * time.Second)
+				synctest.Wait()
+				checkLivenessExpired(t, app, ctx, first, "first")
+				checkLivenessExpired(t, app, ctx, second, "second")
+			})
 		})
 	}
 }
