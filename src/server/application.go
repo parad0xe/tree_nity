@@ -10,6 +10,7 @@ import (
 
 	"tree_nity/src/exitcode"
 	"tree_nity/src/ipc"
+	"tree_nity/src/ipc/id"
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/response"
@@ -170,10 +171,16 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 		err = app.topicManager.NewSubscription(sendCtx, ctx, shutdown, *metadata, *payload)
 	case *protocol.AcknowledgementPayload:
 		err = app.topicManager.Acknowledgement(sendCtx, *metadata, *payload)
+		if err == nil {
+			err = app.topicManager.RenewConsumerDeadline(ctx, id.ID(payload.ClientID()), metadata.ClientIPC())
+		}
 	case *protocol.ConsumerDisconnectPayload:
 		err = app.topicManager.ConsumerDisconnect(sendCtx, *metadata, *payload)
 	case *protocol.ConsumerHeartbeatPayload:
-		err = app.topicManager.ConsumerHeartbeat(sendCtx, *metadata, *payload)
+		err = app.topicManager.RenewConsumerDeadline(ctx, id.ID(payload.ClientID()), metadata.ClientIPC())
+		if err == nil {
+			err = app.topicManager.ConsumerHeartbeat(sendCtx, *metadata)
+		}
 	default:
 		err = response.SendToClient(
 			sendCtx,
