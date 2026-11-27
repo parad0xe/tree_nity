@@ -43,7 +43,7 @@ func main() {
 
 // run starts the client and returns the exit code of the process.
 func run(ctx context.Context) (code int) {
-	sigCtx, sigCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	sigCtx, sigCancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM, syscall.SIGPIPE, syscall.SIGHUP)
 	defer sigCancel()
 
 	serverIPCPath, command, err := parse(os.Args[1:])
