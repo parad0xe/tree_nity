@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"tree_nity/src/exitcode"
+	"tree_nity/src/ipc/id"
 )
 
 // pipeReader reads what is written to a pipe, line by line.
@@ -145,4 +146,35 @@ func TestRunRejectsInvalidArguments(t *testing.T) {
 	if err := tryConnect(t, ipcPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("NewSender(%q) after run() error = %v, want %v", ipcPath, err, os.ErrNotExist)
 	}
+}
+
+func TestRunReturnsGeneralCodeForInvalidIPCIdentifier(t *testing.T) {
+	setArgs(t, "client", "", "list")
+	captureStderr(t)
+
+	if code := run(context.Background()); code != exitcode.General {
+		t.Errorf("run() with IPC identifier %q code = %d, want %d", "", code, exitcode.General)
+	}
+}
+
+func TestRunReturnsGeneralCodeForMissingServer(t *testing.T) {
+	serverIPCPath := testServerIPCPath(os.Getpid())
+	setArgs(t, "client", serverIPCPath, "list")
+	captureStderr(t)
+
+	if code := run(context.Background()); code != exitcode.General {
+		t.Errorf("run() without the server queue %q code = %d, want %d", serverIPCPath, code, exitcode.General)
+	}
+}
+
+func TestRunReturnsGeneralCodeForInvalidClientName(t *testing.T) {
+	setArgs(t, "client", "/server", "info", "bad subscriber")
+	stderr := captureStderr(t)
+
+	code := run(context.Background())
+
+	if code != exitcode.General {
+		t.Errorf("run() with client name %q code = %d, want %d", "bad subscriber", code, exitcode.General)
+	}
+	stderr.waitFor(t, id.ErrInvalidID.Error())
 }
