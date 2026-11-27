@@ -206,8 +206,8 @@ func TestTrySendToClientDropsFullQueue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
-	if err := TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload()); err != nil {
-		t.Errorf("TrySendToClient(%q) with a full queue error = %v, want nil", inbound.IPCPath(), err)
+	if err := TrySendToClient(ctx, metadata, protocol.ConsumerHeartbeatReply, protocol.NewConsumerHeartbeatReplyPayload()); !errors.Is(err, os.ErrDeadlineExceeded) || !errors.Is(err, ErrReply) {
+		t.Errorf("TrySendToClient(%q) with a full queue error = %v, want %v and %v", inbound.IPCPath(), err, os.ErrDeadlineExceeded, ErrReply)
 	}
 	if err := ctx.Err(); err != nil {
 		t.Errorf("caller context after TrySendToClient on a full queue error = %v, want nil", err)

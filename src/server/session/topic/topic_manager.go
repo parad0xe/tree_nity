@@ -85,7 +85,7 @@ func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetada
 		topics[i] = string(topicID)
 	}
 
-	return response.SendToClient(
+	return response.TrySendToClient(
 		ctx,
 		metadata,
 		protocol.ListTopicReply,
@@ -98,7 +98,7 @@ func (m *Manager) ListTopics(ctx context.Context, metadata protocol.ClientMetada
 func (m *Manager) CreateTopic(ctx, topicCtx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.CreateTopicPayload) error {
 	topicID := id.ID(payload.Topic())
 	if err := topicID.Validate(); err != nil {
-		return response.SendToClient(
+		return response.TrySendToClient(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -111,7 +111,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, shutdown lifecycle.
 	if m.shuttingDown {
 		m.mu.Unlock()
 		cancel()
-		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+		return response.TrySendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
 	}
 	target := NewTopic(topicCtx, shutdown)
 	err := m.topicMap.Insert(topicID, target)
@@ -126,7 +126,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, shutdown lifecycle.
 
 	if err != nil {
 		if errors.Is(err, hashmap.ErrKeyExists) {
-			return response.SendToClient(
+			return response.TrySendToClient(
 				ctx,
 				metadata,
 				protocol.ErrorReply,
@@ -136,7 +136,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, shutdown lifecycle.
 		return err
 	}
 
-	return response.SendToClient(
+	return response.TrySendToClient(
 		ctx,
 		metadata,
 		protocol.CreateTopicReply,
@@ -148,7 +148,7 @@ func (m *Manager) CreateTopic(ctx, topicCtx context.Context, shutdown lifecycle.
 func (m *Manager) ConsumerInfo(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.ConsumerInfoPayload) error {
 	c, err := m.consumerManager.GetConsumer(id.ID(payload.ID()))
 	if errors.Is(err, consumer.ErrNotFound) {
-		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+		return response.TrySendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.ClientNotFound, err.Error()))
 	}
 	if err != nil {
@@ -156,7 +156,7 @@ func (m *Manager) ConsumerInfo(ctx context.Context, metadata protocol.ClientMeta
 	}
 
 	info := c.Info
-	return response.SendToClient(ctx, metadata, protocol.ConsumerInfoReply,
+	return response.TrySendToClient(ctx, metadata, protocol.ConsumerInfoReply,
 		protocol.NewConsumerInfoReplyPayload(string(info.ID()), info.Topic(), info.Offset(), info.Prefix(), info.IPCPath()))
 }
 
@@ -164,7 +164,7 @@ func (m *Manager) ConsumerInfo(ctx context.Context, metadata protocol.ClientMeta
 // ctx bounds the reply; consumerCtx covers the subscription's lifetime.
 func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.TopicSubscriptionPayload) error {
 	if shutdown.IsRequested() {
-		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+		return response.TrySendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
 	}
 
 	m.mu.RLock()
@@ -172,10 +172,10 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 	target, exists := m.topicMap.Get(id.ID(payload.Topic()))
 	m.mu.RUnlock()
 	if shuttingDown {
-		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+		return response.TrySendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
 	}
 	if !exists {
-		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+		return response.TrySendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic does not exist"))
 	}
 
@@ -186,7 +186,7 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 	c, previous, err := m.consumerManager.Subscribe(consumerCtx, id.ID(payload.ClientID()),
 		payload.Topic(), payload.Offset(), payload.Prefix(), metadata.ClientIPC())
 	if errors.Is(err, consumer.ErrAlreadyConnected) {
-		return response.SendToClient(ctx, metadata, protocol.ErrorReply,
+		return response.TrySendToClient(ctx, metadata, protocol.ErrorReply,
 			protocol.NewErrorReplyPayload(protocol.ClientNameTaken, err.Error()))
 	}
 	if err != nil {
@@ -219,7 +219,7 @@ func (m *Manager) NewSubscription(ctx, consumerCtx context.Context, shutdown lif
 	if err := target.upsertConsumer(consumerCtx, c, confirmed, onStop, onAck); err != nil {
 		return rollback(err)
 	}
-	if err := response.SendToClient(ctx, metadata, protocol.TopicSubscriptionReply,
+	if err := response.TrySendToClient(ctx, metadata, protocol.TopicSubscriptionReply,
 		protocol.NewTopicSubscriptionReplyPayload()); err != nil {
 		return rollback(err)
 	}
@@ -285,7 +285,7 @@ func (m *Manager) ConsumerHeartbeat(ctx context.Context, metadata protocol.Clien
 func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetadata, payload protocol.CheckTopicPayload) error {
 	topicID := id.ID(payload.Topic())
 	if err := topicID.Validate(); err != nil {
-		return response.SendToClient(
+		return response.TrySendToClient(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -298,7 +298,7 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 	m.mu.RUnlock()
 
 	if !exists {
-		return response.SendToClient(
+		return response.TrySendToClient(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -306,7 +306,7 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 		)
 	}
 
-	return response.SendToClient(
+	return response.TrySendToClient(
 		ctx,
 		metadata,
 		protocol.CheckTopicReply,
@@ -318,13 +318,13 @@ func (m *Manager) CheckTopic(ctx context.Context, metadata protocol.ClientMetada
 // ctx bounds forwarding and reply delivery; internal or IPC errors are returned.
 func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.GracefulShutdown, metadata protocol.ClientMetadata, payload protocol.ProduceMessagePayload) error {
 	if shutdown.IsRequested() {
-		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+		return response.TrySendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
 	}
 
 	topicID := id.ID(payload.Topic())
 	message := payload.Message()
 	if err := topicID.Validate(); err != nil {
-		return response.SendToClient(
+		return response.TrySendToClient(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -337,10 +337,10 @@ func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.Gracefu
 	topic, exists := m.topicMap.Get(topicID)
 	m.mu.RUnlock()
 	if shuttingDown {
-		return response.SendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
+		return response.TrySendToClient(ctx, metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload())
 	}
 	if !exists {
-		return response.SendToClient(
+		return response.TrySendToClient(
 			ctx,
 			metadata,
 			protocol.ErrorReply,
@@ -351,7 +351,7 @@ func (m *Manager) ProduceMessage(ctx context.Context, shutdown lifecycle.Gracefu
 	if err := topic.ProduceMessage(ctx, message); err != nil {
 		return err
 	}
-	return response.SendToClient(
+	return response.TrySendToClient(
 		ctx,
 		metadata,
 		protocol.ProduceMessageReply,

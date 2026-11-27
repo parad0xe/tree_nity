@@ -677,8 +677,8 @@ func TestManagerConsumerInfoPropagatesStoppedContexts(t *testing.T) {
 	}
 }
 
-// TestManagerConsumerInfoTimesOutOnFullQueue checks bounded delivery for both replies.
-func TestManagerConsumerInfoTimesOutOnFullQueue(t *testing.T) {
+// TestManagerConsumerInfoRejectsFullQueueImmediately checks immediate failure for both replies.
+func TestManagerConsumerInfoRejectsFullQueueImmediately(t *testing.T) {
 	tests := []struct {
 		name     string
 		existing bool
@@ -700,8 +700,11 @@ func TestManagerConsumerInfoTimesOutOnFullQueue(t *testing.T) {
 			defer cancel()
 			payload := *protocol.NewConsumerInfoPayload("subscriber")
 			err := manager.ConsumerInfo(ctx, *protocol.NewClientMetadata(inbound.IPCPath()), payload)
-			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, response.ErrReply) {
-				t.Errorf("ConsumerInfo(subscriber) with a full reply queue error = %v, want %v and %v", err, context.DeadlineExceeded, response.ErrReply)
+			if !errors.Is(err, os.ErrDeadlineExceeded) || !errors.Is(err, response.ErrReply) {
+				t.Errorf("ConsumerInfo(subscriber) with a full reply queue error = %v, want %v and %v", err, os.ErrDeadlineExceeded, response.ErrReply)
+			}
+			if err := ctx.Err(); err != nil {
+				t.Errorf("ConsumerInfo(subscriber) caller context after a full queue error = %v, want nil", err)
 			}
 		})
 	}
@@ -1257,8 +1260,11 @@ func TestManagerNewSubscriptionRestoresFailedReply(t *testing.T) {
 				Context:    replyCtx,
 				beforeSend: sync.OnceFunc(func() { close(shutdownRequested) }),
 			}
-			if err := manager.NewSubscription(replyCtx, lifetime, shutdown, metadata, payload); !errors.Is(err, response.ErrReply) || !errors.Is(err, context.DeadlineExceeded) {
-				t.Errorf("NewSubscription() with a full reply queue error = %v, want %v and %v", err, response.ErrReply, context.DeadlineExceeded)
+			if err := manager.NewSubscription(replyCtx, lifetime, shutdown, metadata, payload); !errors.Is(err, response.ErrReply) || !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("NewSubscription() with a full reply queue error = %v, want %v and %v", err, response.ErrReply, os.ErrDeadlineExceeded)
+			}
+			if err := replyCtx.Err(); err != nil {
+				t.Errorf("NewSubscription() caller context after a full queue error = %v, want nil", err)
 			}
 			if !shutdown.IsRequested() {
 				t.Error("shutdown before failed subscription confirmation was not requested, want requested")
@@ -1504,6 +1510,8 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	const count = 128
 	start := make(chan struct{})
+	// Keep concurrent requests within the reply queue capacity.
+	pending := make(chan struct{}, 2)
 	results := make(chan error, 2)
 	var workers sync.WaitGroup
 	workers.Add(2)
@@ -1515,6 +1523,12 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		defer workers.Done()
 		<-start
 		for i := 0; i < count; i++ {
+			select {
+			case pending <- struct{}{}:
+			case <-ctx.Done():
+				results <- ctx.Err()
+				return
+			}
 			name := fmt.Sprintf("topic-%03d", i)
 			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
@@ -1527,6 +1541,12 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		defer workers.Done()
 		<-start
 		for i := 0; i < count; i++ {
+			select {
+			case pending <- struct{}{}:
+			case <-ctx.Done():
+				results <- ctx.Err()
+				return
+			}
 			if err := manager.ListTopics(ctx, metadata, *protocol.NewListTopicPayload()); err != nil {
 				results <- fmt.Errorf("ListTopics() request %d: %w", i, err)
 				return
@@ -1540,8 +1560,10 @@ func TestManagerListTopicsDuringCreation(t *testing.T) {
 		data, err := inbound.Recv(ctx)
 		if err != nil {
 			t.Errorf("Recv(%q) during %d creations and listings at reply %d error = %v, want nil", inbound.IPCPath(), count, i, err)
+			cancel()
 			break
 		}
+		<-pending
 		switch reply := data.Payload().(type) {
 		case *protocol.CreateTopicReplyPayload:
 			creations++
@@ -1769,6 +1791,8 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	const count = 128
 	start := make(chan struct{})
+	// Keep concurrent requests within the reply queue capacity.
+	pending := make(chan struct{}, 2)
 	results := make(chan error, 2)
 	var workers sync.WaitGroup
 	workers.Add(2)
@@ -1780,6 +1804,12 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 		defer workers.Done()
 		<-start
 		for i := 0; i < count; i++ {
+			select {
+			case pending <- struct{}{}:
+			case <-ctx.Done():
+				results <- ctx.Err()
+				return
+			}
 			name := fmt.Sprintf("topic-%03d", i)
 			if err := manager.CreateTopic(ctx, ctx, lifecycle.GracefulShutdown{}, metadata, *protocol.NewCreateTopicPayload(name)); err != nil {
 				results <- fmt.Errorf("CreateTopic(%q): %w", name, err)
@@ -1792,6 +1822,12 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 		defer workers.Done()
 		<-start
 		for i := 0; i < count; i++ {
+			select {
+			case pending <- struct{}{}:
+			case <-ctx.Done():
+				results <- ctx.Err()
+				return
+			}
 			if err := manager.CheckTopic(ctx, metadata, *protocol.NewCheckTopicPayload("events")); err != nil {
 				results <- fmt.Errorf("CheckTopic(events) request %d: %w", i, err)
 				return
@@ -1808,6 +1844,7 @@ func TestManagerCheckTopicDuringCreation(t *testing.T) {
 			cancel()
 			break
 		}
+		<-pending
 		switch data.Payload().(type) {
 		case *protocol.CreateTopicReplyPayload:
 			creations++
@@ -2561,8 +2598,8 @@ func TestConsumerHeartbeatDropsReplyOnFullQueue(t *testing.T) {
 	defer cancel()
 	metadata := *protocol.NewClientMetadata(inbound.IPCPath())
 	for i := range 3 {
-		if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); err != nil {
-			t.Fatalf("ConsumerHeartbeat(subscriber) with a full queue at attempt %d error = %v, want nil", i, err)
+		if err := manager.ConsumerHeartbeat(ctx, metadata, *protocol.NewConsumerHeartbeatPayload("subscriber")); !errors.Is(err, os.ErrDeadlineExceeded) || !errors.Is(err, response.ErrReply) {
+			t.Errorf("ConsumerHeartbeat(subscriber) with a full queue at attempt %d error = %v, want %v and %v", i, err, os.ErrDeadlineExceeded, response.ErrReply)
 		}
 	}
 	if err := ctx.Err(); err != nil {

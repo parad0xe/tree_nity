@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ const (
 	// testTimeout is the longest a test waits for an event before it fails.
 	testTimeout = 5 * time.Second
 	// validFrame decodes to a heartbeat for an unknown consumer.
-	validFrame = `{"opcode":8,"emitter":0,"metadata":{"clientIPC":"/client-1"},"payload":{"clientId":"client-1"}}`
+	validFrame = `{"opcode":8,"emitter":0,"metadata":{"clientIPC":"` + ipc.ClientQueuePrefix + `1"},"payload":{"clientId":"client-1"}}`
 	// invalidFrame does not decode to protocol data.
 	invalidFrame = "not json"
 )
@@ -504,7 +505,7 @@ func TestListenContinuesAfterInvalidRequestReplyFailure(t *testing.T) {
 	c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
 		return app.listen(ctx, lifecycle.GracefulShutdown{})
 	})
-	frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":{"clientIPC":"/invalid/queue"},"payload":{"topic":"bad/topic"}}`, protocol.CreateTopic, protocol.Client)
+	frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":{"clientIPC":%q},"payload":{"topic":"bad/topic"}}`, protocol.CreateTopic, protocol.Client, ipc.ClientQueuePrefix+"invalid/queue")
 	send(t, app.inbound.IPCPath(), frame)
 	stderr.waitFor(t, mqueue.ErrInvalidName.Error())
 	sendCreateRequest(t, app, inbound.IPCPath(), "events")
@@ -707,7 +708,7 @@ func TestRunReportsReceiveFailure(t *testing.T) {
 // newServerClientInbox creates a reply queue and removes it after the test.
 func newServerClientInbox(t *testing.T) *ipc.Inbound {
 	t.Helper()
-	ipcPath := fmt.Sprintf("/server-test.%d.%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."))
+	ipcPath := fmt.Sprintf("%sserver-test.%d.%s", ipc.ClientQueuePrefix, os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."))
 	inbound, err := ipc.NewInbound(ipcPath, protocol.Decode)
 	if err != nil {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", ipcPath, err)
@@ -970,8 +971,8 @@ func TestDispatchPropagatesRejectionErrors(t *testing.T) {
 		ipcPath string
 		wantErr error
 	}{
-		{name: "invalid name", ipcPath: "/invalid/queue", wantErr: mqueue.ErrInvalidName},
-		{name: "missing queue", ipcPath: fmt.Sprintf("/server-test.missing.%d", os.Getpid()), wantErr: os.ErrNotExist},
+		{name: "invalid name", ipcPath: ipc.ClientQueuePrefix + "invalid/queue", wantErr: mqueue.ErrInvalidName},
+		{name: "missing queue", ipcPath: fmt.Sprintf("%sserver-test.missing.%d", ipc.ClientQueuePrefix, os.Getpid()), wantErr: os.ErrNotExist},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1063,8 +1064,8 @@ func fillServerClientInbox(t *testing.T, inbound *ipc.Inbound) int {
 	}
 }
 
-// TestDispatchTimesOutOnFullClientQueue checks bounded sends with a live listener context.
-func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
+// TestDispatchRejectsFullClientQueueImmediately checks immediate failure with a live listener context.
+func TestDispatchRejectsFullClientQueueImmediately(t *testing.T) {
 	tests := []struct {
 		name    string
 		opcode  protocol.Opcode
@@ -1088,8 +1089,8 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 			defer cancel()
-			if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
-				t.Errorf("dispatch(%v, %q) with a full client queue = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.IPC, context.DeadlineExceeded)
+			if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("dispatch(%v, %q) with a full client queue = %d, %v, want %d and %v", tt.opcode, inbound.IPCPath(), code, err, exitcode.IPC, os.ErrDeadlineExceeded)
 			}
 			if err := ctx.Err(); err != nil {
 				t.Errorf("listener context after dispatch(%v) to a full queue error = %v, want nil", tt.opcode, err)
@@ -1098,8 +1099,8 @@ func TestDispatchTimesOutOnFullClientQueue(t *testing.T) {
 	}
 }
 
-// TestDispatchTimesOutOnFullProductionReplyQueue checks bounded confirmation delivery.
-func TestDispatchTimesOutOnFullProductionReplyQueue(t *testing.T) {
+// TestDispatchRejectsFullProductionReplyQueueImmediately checks immediate confirmation failure.
+func TestDispatchRejectsFullProductionReplyQueueImmediately(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 	app := &application{topicManager: topic.NewManager()}
@@ -1116,8 +1117,8 @@ func TestDispatchTimesOutOnFullProductionReplyQueue(t *testing.T) {
 		t.Errorf("NewData(ProduceMessage, events) during setup error = %v, want nil", err)
 		return
 	}
-	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, response.ErrReply) {
-		t.Errorf("dispatch(ProduceMessage, events) with a full client queue = %d, %v, want %d, %v and %v", code, err, exitcode.IPC, context.DeadlineExceeded, response.ErrReply)
+	if code, err := app.dispatch(ctx, lifecycle.GracefulShutdown{}, data); code != exitcode.IPC || !errors.Is(err, os.ErrDeadlineExceeded) || !errors.Is(err, response.ErrReply) {
+		t.Errorf("dispatch(ProduceMessage, events) with a full client queue = %d, %v, want %d, %v and %v", code, err, exitcode.IPC, os.ErrDeadlineExceeded, response.ErrReply)
 	}
 	if err := ctx.Err(); err != nil {
 		t.Errorf("listener context after dispatch(ProduceMessage, events) to a full queue error = %v, want nil", err)
@@ -1139,12 +1140,13 @@ func TestDispatchReturnsHandlerErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := &application{topicManager: topic.NewManager()}
-			data, err := protocol.NewData(tt.opcode, protocol.NewClientMetadata("/invalid/queue"), tt.payload)
+			ipcPath := ipc.ClientQueuePrefix + "invalid/queue"
+			data, err := protocol.NewData(tt.opcode, protocol.NewClientMetadata(ipcPath), tt.payload)
 			if err != nil {
-				t.Fatalf("NewData(%v, /invalid/queue) during setup error = %v, want nil", tt.opcode, err)
+				t.Fatalf("NewData(%v, %q) during setup error = %v, want nil", tt.opcode, ipcPath, err)
 			}
 			if code, err := app.dispatch(t.Context(), lifecycle.GracefulShutdown{}, data); code != exitcode.General || !errors.Is(err, mqueue.ErrInvalidName) {
-				t.Errorf("dispatch(%v, /invalid/queue) = %d, %v, want %d and %v", tt.opcode, code, err, exitcode.General, mqueue.ErrInvalidName)
+				t.Errorf("dispatch(%v, %q) = %d, %v, want %d and %v", tt.opcode, ipcPath, code, err, exitcode.General, mqueue.ErrInvalidName)
 			}
 		})
 	}
@@ -1603,8 +1605,8 @@ func TestListenKeepsExistingTopicState(t *testing.T) {
 	}
 }
 
-// TestListenContinuesAfterReplyTimeout checks that a full client queue cannot stop dispatch.
-func TestListenContinuesAfterReplyTimeout(t *testing.T) {
+// TestListenContinuesAfterDroppedReply checks that a full client queue cannot stop dispatch.
+func TestListenContinuesAfterDroppedReply(t *testing.T) {
 	app := newTestApplication(t)
 	inbound := newServerClientInbox(t)
 	queued := fillServerClientInbox(t, inbound)
@@ -1616,7 +1618,14 @@ func TestListenContinuesAfterReplyTimeout(t *testing.T) {
 	})
 
 	sendCreateRequest(t, app, inbound.IPCPath(), "events")
-	stderr.waitFor(t, context.DeadlineExceeded.Error())
+	stderr.waitFor(t, os.ErrDeadlineExceeded.Error())
+	fast := shutdownClientInbox(t, "fast")
+	sendCreateRequest(t, app, fast.IPCPath(), "other")
+	fastCtx, cancelFast := context.WithTimeout(ctx, time.Second)
+	defer cancelFast()
+	if data, err := fast.Recv(fastCtx); err != nil || data.Opcode() != protocol.CreateTopicReply {
+		t.Fatalf("Recv(fast client) while the first queue remains full = %v, %v, want CreateTopicReply within 1s", data.Opcode(), err)
+	}
 	for i := 0; i < queued; i++ {
 		receiveServerReply(t, inbound, protocol.ServerShutdown)
 	}
@@ -1624,16 +1633,180 @@ func TestListenContinuesAfterReplyTimeout(t *testing.T) {
 	data := receiveServerReply(t, inbound, protocol.ErrorReply)
 	reply, ok := data.Payload().(*protocol.ErrorReplyPayload)
 	if !ok {
-		t.Errorf("CreateTopic(events) after a reply timeout payload = %T, want *protocol.ErrorReplyPayload", data.Payload())
+		t.Errorf("CreateTopic(events) after a dropped reply payload = %T, want *protocol.ErrorReplyPayload", data.Payload())
 	} else if reply.Kind() != protocol.TopicExists {
-		t.Errorf("CreateTopic(events) after a reply timeout rejection = %v, want %v", reply.Kind(), protocol.TopicExists)
+		t.Errorf("CreateTopic(events) after a dropped reply rejection = %v, want %v", reply.Kind(), protocol.TopicExists)
 	}
 	sendCreateRequest(t, app, inbound.IPCPath(), "orders")
 	receiveServerReply(t, inbound, protocol.CreateTopicReply)
 	c.cancel()
 	res := c.wait(t)
 	if res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
-		t.Errorf("listen() after a reply timeout, valid requests and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+		t.Errorf("listen() after a dropped reply, valid requests and cancellation = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+	}
+}
+
+// TestListenIgnoresForeignClientIPC checks routing before processing or replying.
+func TestListenIgnoresForeignClientIPC(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		topicID string
+	}{
+		{name: "server queue", prefix: "/operator.server.", topicID: "events"},
+		{name: "foreign queue", prefix: "/foreign.", topicID: "events"},
+		{name: "similar prefix", prefix: "/operator.client-other.", topicID: "events"},
+		{name: "invalid frame", prefix: "/foreign.", topicID: "bad/topic"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newTestApplication(t)
+			client := newServerClientInbox(t)
+			path := fmt.Sprintf("%s%d.%s", tt.prefix, os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."))
+			foreign, err := ipc.NewInbound(path, protocol.Decode)
+			if err != nil {
+				t.Fatalf("NewInbound(%q) error = %v, want nil", path, err)
+			}
+			t.Cleanup(func() {
+				if err := foreign.Drop(); err != nil {
+					t.Errorf("Drop(%q) error = %v, want nil", path, err)
+				}
+			})
+			stderr := captureStderr(t)
+			call := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+				return app.listen(ctx, lifecycle.GracefulShutdown{})
+			})
+			frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":{"clientIPC":%q},"payload":{"topic":%q}}`, protocol.CreateTopic, protocol.Client, path, tt.topicID)
+			send(t, app.inbound.IPCPath(), frame)
+			stderr.waitFor(t, path)
+			sendCheckRequest(t, app, client.IPCPath(), "events")
+			data := receiveServerReply(t, client, protocol.ErrorReply)
+			if reply, ok := data.Payload().(*protocol.ErrorReplyPayload); !ok || reply.Kind() != protocol.TopicNotFound {
+				t.Errorf("CheckTopic(events) after foreign request = %#v, want TopicNotFound", data.Payload())
+			}
+			metadata := *protocol.NewClientMetadata(path)
+			if err := response.SendToClient(t.Context(), metadata, protocol.ServerShutdown, protocol.NewServerShutdownPayload()); err != nil {
+				t.Fatalf("SendToClient(marker, %q) error = %v, want nil", path, err)
+			}
+			receiveServerReply(t, foreign, protocol.ServerShutdown)
+			call.cancel()
+			if res := call.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+				t.Errorf("listen() after ignoring %q = %d, %v, want %d and %v", path, res.Code(), res.Err(), exitcode.Success, context.Canceled)
+			}
+		})
+	}
+}
+
+// TestListenDeliversTenThousandMessages checks ordered filtered delivery through IPC.
+func TestListenDeliversTenThousandMessages(t *testing.T) {
+	const messageCount = uint32(10000)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	app := newTestApplication(t)
+	call := startCall(t, ctx, "run()", func(ctx context.Context) (int, error) {
+		return app.run(ctx, lifecycle.GracefulShutdown{})
+	})
+	var readers sync.WaitGroup
+	defer func() {
+		cancel()
+		readers.Wait()
+		if res := call.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+			t.Errorf("run() after 10000 messages = %d, %v, want %d and %v", res.Code(), res.Err(), exitcode.Success, context.Canceled)
+		}
+	}()
+	producer := shutdownClientInbox(t, "producer")
+	request := func(inbound *ipc.Inbound, opcode protocol.Opcode, payload protocol.Payload, reply protocol.Opcode) protocol.Data {
+		sendShutdownRequest(t, app, inbound.IPCPath(), opcode, payload)
+		return receiveServerReply(t, inbound, reply)
+	}
+	request(producer, protocol.CreateTopic, protocol.NewCreateTopicPayload("events"), protocol.CreateTopicReply)
+	key := func(offset uint32) string {
+		if offset%2 == 0 {
+			return fmt.Sprintf("a.%d", offset)
+		}
+		return fmt.Sprintf("b.%d", offset)
+	}
+	produce := func(offset uint32) {
+		message := protocol.NewMessage([]byte(key(offset)), []byte(fmt.Sprint(offset)))
+		request(producer, protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", message), protocol.ProduceMessageReply)
+	}
+	for offset := uint32(0); offset < 1000; offset++ {
+		produce(offset)
+	}
+	consumers := []struct {
+		id      string
+		prefix  string
+		inbound *ipc.Inbound
+		offset  uint32
+	}{
+		{id: "first", prefix: "a", offset: messageCount - 1},
+		{id: "second", prefix: "b", offset: messageCount},
+		{id: "all", offset: messageCount},
+	}
+	results := make(chan error, len(consumers))
+	for i := range consumers {
+		c := &consumers[i]
+		c.inbound = shutdownClientInbox(t, c.id)
+		request(c.inbound, protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload(c.id, "events", c.prefix, nil), protocol.TopicSubscriptionReply)
+		outbound, err := ipc.NewOutbound(app.inbound.IPCPath(), protocol.Encode)
+		if err != nil {
+			t.Fatalf("NewOutbound(ACK, %s) error = %v, want nil", c.id, err)
+		}
+		t.Cleanup(func() {
+			if err := outbound.Close(); err != nil {
+				t.Errorf("Close(ACK, %s) error = %v, want nil", c.id, err)
+			}
+		})
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for offset := uint32(0); offset < messageCount; offset++ {
+				if !strings.HasPrefix(key(offset), c.prefix) {
+					continue
+				}
+				data, err := c.inbound.Recv(ctx)
+				if err != nil {
+					results <- fmt.Errorf("Recv(%s, offset %d): %w", c.id, offset, err)
+					return
+				}
+				payload, ok := data.Payload().(*protocol.MessageDeliveryPayload)
+				if !ok || data.Emitter() != protocol.Server || data.Opcode() != protocol.MessageDelivery {
+					results <- fmt.Errorf("Recv(%s, offset %d) = %v/%v/%T, want server MessageDelivery", c.id, offset, data.Emitter(), data.Opcode(), data.Payload())
+					return
+				}
+				message := payload.Message()
+				if message.Offset() != offset || string(message.Key()) != key(offset) || string(message.Value()) != fmt.Sprint(offset) {
+					results <- fmt.Errorf("Recv(%s) = offset %d, key %q, value %q, want %d, %q, %q", c.id, message.Offset(), message.Key(), message.Value(), offset, key(offset), fmt.Sprint(offset))
+					return
+				}
+				ack, err := protocol.NewData(protocol.Acknowledgement, protocol.NewClientMetadata(c.inbound.IPCPath()), protocol.NewAcknowledgementPayload(c.id, offset+1))
+				if err == nil {
+					err = outbound.Send(ctx, ack)
+				}
+				if err != nil {
+					results <- fmt.Errorf("ACK(%s, %d): %w", c.id, offset+1, err)
+					return
+				}
+			}
+			results <- nil
+		}()
+	}
+	for offset := uint32(1000); offset < messageCount; offset++ {
+		produce(offset)
+	}
+	for range consumers {
+		if err := <-results; err != nil {
+			t.Errorf("delivery of 10000 messages error = %v, want ordered delivery without missing or duplicate offsets", err)
+		}
+	}
+	readers.Wait()
+	if t.Failed() {
+		return
+	}
+	for _, c := range consumers {
+		data := request(c.inbound, protocol.ConsumerInfo, protocol.NewConsumerInfoPayload(c.id), protocol.ConsumerInfoReply)
+		if info, ok := data.Payload().(*protocol.ConsumerInfoReplyPayload); !ok || info.Offset() != c.offset {
+			t.Errorf("ConsumerInfo(%s) after delivery = %#v, want committed offset %d", c.id, data.Payload(), c.offset)
+		}
 	}
 }
 
@@ -1646,7 +1819,7 @@ func TestListenContinuesAfterHandlerError(t *testing.T) {
 		return app.listen(ctx, lifecycle.GracefulShutdown{})
 	})
 
-	sendCreateRequest(t, app, "/invalid/queue", "events")
+	sendCreateRequest(t, app, ipc.ClientQueuePrefix+"invalid/queue", "events")
 	stderr.waitFor(t, mqueue.ErrInvalidName.Error())
 	sendCreateRequest(t, app, inbound.IPCPath(), "orders")
 	receiveServerReply(t, inbound, protocol.CreateTopicReply)
@@ -1660,7 +1833,7 @@ func TestListenContinuesAfterHandlerError(t *testing.T) {
 
 func shutdownClientInbox(t *testing.T, suffix string) *ipc.Inbound {
 	t.Helper()
-	path := fmt.Sprintf("/shutdown.%d.%s.%s", os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."), suffix)
+	path := fmt.Sprintf("%sshutdown.%d.%s.%s", ipc.ClientQueuePrefix, os.Getpid(), strings.ReplaceAll(t.Name(), "/", "."), suffix)
 	inbound, err := ipc.NewInbound(path, protocol.Decode)
 	if err != nil {
 		t.Fatalf("NewInbound(%q) error = %v, want nil", path, err)
