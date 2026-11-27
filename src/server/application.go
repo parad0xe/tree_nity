@@ -35,7 +35,7 @@ type application struct {
 // The returned error matches os.ErrExist when the queue already exists.
 func newApplication() (*application, error) {
 	pid := os.Getpid()
-	ipcPath := fmt.Sprintf("/operator.server.%d", pid)
+	ipcPath := fmt.Sprintf("%s%d", ipc.ServerQueuePrefix, pid)
 
 	app := &application{topicManager: topic.NewManager()}
 

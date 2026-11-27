@@ -48,7 +48,7 @@ type appConfig struct {
 
 // clientIPCPath returns the inbound queue name of the client running as pid.
 func clientIPCPath(pid int) string {
-	return fmt.Sprintf("/operator.client.%d", pid)
+	return fmt.Sprintf("%s%d", ipc.ClientQueuePrefix, pid)
 }
 
 // newApplication connects to the server, then creates the client inbound queue,
