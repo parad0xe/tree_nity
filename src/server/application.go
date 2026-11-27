@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -38,7 +39,7 @@ func newApplication() (*application, error) {
 
 	app := &application{topicManager: topic.NewManager()}
 
-	inbound, err := ipc.NewInbound(ipcPath, protocol.Decode)
+	inbound, err := ipc.NewInbound(ipcPath, decodeFrame)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +97,7 @@ func (app *application) run(ctx context.Context, shutdown lifecycle.GracefulShut
 }
 
 // listen receives requests until the server can stop.
-// Invalid frames and recoverable handler errors are logged and skipped.
+// Invalid frames are logged and, when possible, rejected without waiting.
 // Receive failures return exitcode.IPC; canceled handlers retain their dispatch code.
 func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulShutdown) (int, error) {
 	for {
@@ -120,6 +121,13 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 			}
 			if errors.Is(err, ipc.ErrInvalidFrame) {
 				logError("server:", err)
+				var decodeErr *frameDecodeError
+				if errors.As(err, &decodeErr) {
+					if replyErr := response.TrySendToClient(ctx, decodeErr.metadata, protocol.ErrorReply,
+						protocol.NewErrorReplyPayload(protocol.InvalidRequest, decodeErr.err.Error())); replyErr != nil {
+						logError("server:", replyErr)
+					}
+				}
 				continue
 			}
 
@@ -201,4 +209,37 @@ func (app *application) drop() error {
 	}
 
 	return err
+}
+
+// frameDecodeError preserves reply metadata when Inbound rejects a frame.
+type frameDecodeError struct {
+	metadata protocol.ClientMetadata
+	err      error
+}
+
+func (e *frameDecodeError) Error() string {
+	return e.err.Error()
+}
+
+func (e *frameDecodeError) Unwrap() error {
+	return e.err
+}
+
+func decodeFrame(frame []byte) (protocol.Data, error) {
+	data, err := protocol.Decode(frame)
+	if err == nil {
+		return data, nil
+	}
+	var envelope struct {
+		Metadata *struct {
+			ClientIPC *string `json:"clientIPC"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(frame, &envelope) != nil || envelope.Metadata == nil || envelope.Metadata.ClientIPC == nil || *envelope.Metadata.ClientIPC == "" {
+		return data, err
+	}
+	return data, &frameDecodeError{
+		metadata: *protocol.NewClientMetadata(*envelope.Metadata.ClientIPC),
+		err:      err,
+	}
 }
