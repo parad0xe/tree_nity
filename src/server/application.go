@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"tree_nity/src/exitcode"
@@ -21,7 +22,7 @@ const (
 	gracePeriod = 5 * time.Second
 	// shutdownPollInterval is how often listen checks for a shutdown request.
 	shutdownPollInterval = 200 * time.Millisecond
-	// replyTimeout is the longest a response waits while the client queue is full.
+	// replyTimeout bounds request handling and cleanup; replies never wait for queue space.
 	replyTimeout = 2 * time.Second
 )
 
@@ -123,6 +124,10 @@ func (app *application) listen(ctx context.Context, shutdown lifecycle.GracefulS
 				logError("server:", err)
 				var decodeErr *frameDecodeError
 				if errors.As(err, &decodeErr) {
+					if !strings.HasPrefix(decodeErr.metadata.ClientIPC(), ipc.ClientQueuePrefix) {
+						logError("server: ignoring non-client IPC", decodeErr.metadata.ClientIPC())
+						continue
+					}
 					if replyErr := response.TrySendToClient(ctx, decodeErr.metadata, protocol.ErrorReply,
 						protocol.NewErrorReplyPayload(protocol.InvalidRequest, decodeErr.err.Error())); replyErr != nil {
 						logError("server:", replyErr)
@@ -148,6 +153,10 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	metadata, ok := data.Metadata().(*protocol.ClientMetadata)
 	if !ok {
 		return exitcode.General, errUnhandledOpcode
+	}
+	if !strings.HasPrefix(metadata.ClientIPC(), ipc.ClientQueuePrefix) {
+		logError("server: ignoring non-client IPC", metadata.ClientIPC())
+		return exitcode.Success, nil
 	}
 
 	sendCtx, sendCancel := context.WithTimeout(ctx, replyTimeout)
@@ -175,7 +184,7 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	case *protocol.ConsumerHeartbeatPayload:
 		err = app.topicManager.ConsumerHeartbeat(sendCtx, *metadata, *payload)
 	default:
-		err = response.SendToClient(
+		err = response.TrySendToClient(
 			sendCtx,
 			*metadata,
 			protocol.ErrorReply,

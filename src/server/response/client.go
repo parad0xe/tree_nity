@@ -3,7 +3,6 @@ package response
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 
 	"tree_nity/src/ipc"
@@ -29,7 +28,7 @@ func SendToClient(ctx context.Context, metadata protocol.ClientMetadata, opcode 
 }
 
 // TrySendToClient attempts one immediate send, dropping the response if the queue is full.
-// Other errors follow SendToClient's contract.
+// A full queue matches os.ErrDeadlineExceeded and ErrReply; other errors follow SendToClient.
 func TrySendToClient(ctx context.Context, metadata protocol.ClientMetadata, opcode protocol.Opcode, payload protocol.Payload) error {
 	return send(opcode, payload, func(data protocol.Data) error {
 		frame, err := protocol.Encode(data)
@@ -40,12 +39,13 @@ func TrySendToClient(ctx context.Context, metadata protocol.ClientMetadata, opco
 		if err != nil {
 			return err
 		}
+		deadline := time.Now()
+		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+			deadline = ctxDeadline
+		}
 		sendErr := ctx.Err()
 		if sendErr == nil {
-			sendErr = sender.TimedSend(frame, time.Now())
-			if errors.Is(sendErr, os.ErrDeadlineExceeded) {
-				sendErr = nil
-			}
+			sendErr = sender.TimedSend(frame, deadline)
 		}
 		closeErr := sender.Close()
 		if err := errors.Join(sendErr, closeErr); err != nil {
