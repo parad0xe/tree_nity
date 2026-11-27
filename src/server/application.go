@@ -14,7 +14,6 @@ import (
 	"tree_nity/src/ipc/protocol"
 	"tree_nity/src/lifecycle"
 	"tree_nity/src/server/response"
-	"tree_nity/src/server/session/consumer"
 	"tree_nity/src/server/session/topic"
 )
 
@@ -156,18 +155,6 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	defer sendCancel()
 
 	var err error
-	// Invalid ACK offsets must not postpone expiration.
-	if payload, ok := data.Payload().(*protocol.AcknowledgementPayload); ok {
-		err = app.topicManager.Acknowledgement(sendCtx, *metadata, *payload)
-	}
-	var deadlineErr error
-	if err == nil {
-		var consumerID id.ID
-		if payload, ok := data.Payload().(interface{ ClientID() string }); ok {
-			consumerID = id.ID(payload.ClientID())
-		}
-		deadlineErr = app.topicManager.RenewConsumerDeadline(ctx, consumerID, metadata.ClientIPC())
-	}
 	// Decoding guarantees that the payload type matches the opcode.
 	switch payload := data.Payload().(type) {
 	case *protocol.ListTopicPayload:
@@ -183,15 +170,17 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 	case *protocol.TopicSubscriptionPayload:
 		err = app.topicManager.NewSubscription(sendCtx, ctx, shutdown, *metadata, *payload)
 	case *protocol.AcknowledgementPayload:
-		// Already committed before the shared deadline refresh.
+		err = app.topicManager.Acknowledgement(sendCtx, *metadata, *payload)
+		if err == nil {
+			err = app.topicManager.RenewConsumerDeadline(ctx, id.ID(payload.ClientID()), metadata.ClientIPC())
+		}
 	case *protocol.ConsumerDisconnectPayload:
 		err = app.topicManager.ConsumerDisconnect(sendCtx, *metadata, *payload)
 	case *protocol.ConsumerHeartbeatPayload:
-		err = deadlineErr
+		err = app.topicManager.RenewConsumerDeadline(ctx, id.ID(payload.ClientID()), metadata.ClientIPC())
 		if err == nil {
 			err = app.topicManager.ConsumerHeartbeat(sendCtx, *metadata)
 		}
-		deadlineErr = nil
 	default:
 		err = response.SendToClient(
 			sendCtx,
@@ -203,10 +192,6 @@ func (app *application) dispatch(ctx context.Context, shutdown lifecycle.Gracefu
 			err = errors.Join(errUnhandledOpcode, err)
 		}
 	}
-	if ctx.Err() == nil && (errors.Is(deadlineErr, consumer.ErrNotFound) || errors.Is(deadlineErr, context.Canceled) || errors.Is(deadlineErr, context.DeadlineExceeded)) {
-		deadlineErr = nil
-	}
-	err = errors.Join(err, deadlineErr)
 	if err != nil {
 		if errors.Is(err, response.ErrReply) && !errors.Is(err, ipc.ErrInvalidData) {
 			return exitcode.IPC, err

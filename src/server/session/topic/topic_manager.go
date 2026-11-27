@@ -70,51 +70,22 @@ func (m *Manager) ReadyToFinish() bool {
 }
 
 // RenewConsumerDeadline finds an active consumer and postpones its expiration.
-// Unknown or ambiguous sessions return consumer.ErrNotFound; expired sessions cannot renew.
+// The ID and IPC path must match; expired sessions cannot renew.
 func (m *Manager) RenewConsumerDeadline(ctx context.Context, consumerID id.ID, ipcPath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	var target *Topic
-	if consumerID != "" {
-		c, err := m.consumerManager.GetConsumer(consumerID)
-		if err != nil {
-			return err
-		}
-		m.mu.RLock()
-		target, _ = m.topicMap.Get(id.ID(c.Info.Topic()))
-		m.mu.RUnlock()
-	} else {
-		m.mu.RLock()
-		topics, err := m.topicMap.Values()
-		m.mu.RUnlock()
-		if err != nil {
-			return err
-		}
-		for _, candidate := range topics {
-			candidate.mu.Lock()
-			consumers, err := candidate.consumerMap.Values()
-			if err != nil {
-				candidate.mu.Unlock()
-				return err
-			}
-			for _, c := range consumers {
-				if c.info.IPCPath() != ipcPath {
-					continue
-				}
-				if _, err := candidate.activeConsumer(c.info.ID(), ipcPath); err != nil {
-					continue
-				}
-				if target != nil {
-					candidate.mu.Unlock()
-					return consumer.ErrNotFound
-				}
-				target, consumerID = candidate, c.info.ID()
-			}
-			candidate.mu.Unlock()
-		}
+	if consumerID == "" {
+		return consumer.ErrNotFound
 	}
-	if target == nil {
+	c, err := m.consumerManager.GetConsumer(consumerID)
+	if err != nil {
+		return err
+	}
+	m.mu.RLock()
+	target, exists := m.topicMap.Get(id.ID(c.Info.Topic()))
+	m.mu.RUnlock()
+	if !exists {
 		return consumer.ErrNotFound
 	}
 	target.mu.Lock()
