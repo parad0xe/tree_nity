@@ -86,8 +86,8 @@ func testServerIPCPath(pid int) string {
 	return fmt.Sprintf("/test.client.server.%d", pid)
 }
 
-// newTestQueue creates the queue ipcPath, and drops it when the test ends.
-func newTestQueue(t *testing.T, ipcPath string) {
+// newTestQueue creates the queue ipcPath, returns its receiver, and drops it when the test ends.
+func newTestQueue(t *testing.T, ipcPath string) *mqueue.Receiver {
 	t.Helper()
 	r, err := mqueue.NewReceiver(ipcPath)
 	if err != nil {
@@ -98,6 +98,7 @@ func newTestQueue(t *testing.T, ipcPath string) {
 			t.Errorf("Drop() error = %v, want nil", err)
 		}
 	})
+	return r
 }
 
 // testConfig returns an appConfig that connects to serverIPCPath.

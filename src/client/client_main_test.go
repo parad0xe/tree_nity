@@ -178,3 +178,17 @@ func TestRunReturnsGeneralCodeForInvalidClientName(t *testing.T) {
 	}
 	stderr.waitFor(t, id.ErrInvalidID.Error())
 }
+
+func TestRunPrefersGeneralCodeOverTopicCode(t *testing.T) {
+	serverIPCPath := testServerIPCPath(os.Getpid())
+	server := newTestQueue(t, serverIPCPath)
+	setArgs(t, "client", serverIPCPath, "subscribe", "missing", "bad subscriber")
+	captureStderr(t)
+
+	if code := run(context.Background()); code != exitcode.General {
+		t.Errorf("run() with topic %q and client name %q code = %d, want %d", "missing", "bad subscriber", code, exitcode.General)
+	}
+	if frame, err := server.TimedRecv(time.Now()); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("TimedRecv() on the server queue after run() = %q, %v, want no frame and %v", frame, err, os.ErrDeadlineExceeded)
+	}
+}

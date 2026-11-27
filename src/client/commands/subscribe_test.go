@@ -694,6 +694,21 @@ func TestSubscribeExecuteReturnsIPCCodeWhenSubscriptionCannotBeSent(t *testing.T
 	}
 }
 
+func TestSubscribeExecutePrefersIPCCodeOverTopicCode(t *testing.T) {
+	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
+	rejection := protocol.NewErrorReplyPayload(protocol.TopicNotFound, "topic not found")
+	env, server, _ := newSubscribeEnv(t, newServerData(t, protocol.ErrorReply, rejection))
+	// The rejection waits in the client queue, but the request cannot be sent.
+	fillTestQueue(t, server.IPCPath())
+	env.SendTimeout = shortSendTimeout
+
+	code, err := executeWithTimeout(t, cmd, env)
+
+	if code != exitcode.IPC || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Execute() with a full server queue and a topic rejection = %d, %v, want %d, %v", code, err, exitcode.IPC, context.DeadlineExceeded)
+	}
+}
+
 func TestSubscribeExecuteReturnsIPCCodeWhenAcknowledgementCannotBeSent(t *testing.T) {
 	cmd := &subscribeCommand{topic: "orders", subscriber: "client0"}
 	env, server, stdout := newSubscribeEnv(t, newSubscriptionReply(t))
