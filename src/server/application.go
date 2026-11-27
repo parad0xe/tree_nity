@@ -231,15 +231,20 @@ func decodeFrame(frame []byte) (protocol.Data, error) {
 		return data, nil
 	}
 	var envelope struct {
-		Metadata *struct {
-			ClientIPC *string `json:"clientIPC"`
-		} `json:"metadata"`
+		Emitter  *protocol.Emitter `json:"emitter"`
+		Metadata json.RawMessage   `json:"metadata"`
 	}
-	if json.Unmarshal(frame, &envelope) != nil || envelope.Metadata == nil || envelope.Metadata.ClientIPC == nil || *envelope.Metadata.ClientIPC == "" {
+	if json.Unmarshal(frame, &envelope) != nil || envelope.Emitter == nil || *envelope.Emitter != protocol.Client {
+		return data, err
+	}
+	var metadata struct {
+		ClientIPC *string `json:"clientIPC"`
+	}
+	if json.Unmarshal(envelope.Metadata, &metadata) != nil || metadata.ClientIPC == nil || *metadata.ClientIPC == "" {
 		return data, err
 	}
 	return data, &frameDecodeError{
-		metadata: *protocol.NewClientMetadata(*envelope.Metadata.ClientIPC),
+		metadata: *protocol.NewClientMetadata(*metadata.ClientIPC),
 		err:      err,
 	}
 }

@@ -415,6 +415,45 @@ func TestListenSkipsUnreadableReplyMetadata(t *testing.T) {
 	}
 }
 
+// TestListenSkipsUnusableReplyRouting checks metadata replacement and client emitters.
+func TestListenSkipsUnusableReplyRouting(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+	}{
+		{name: "metadata replaced by empty object", fields: `"emitter":0,"metadata":{"clientIPC":%q},"metadata":{}`},
+		{name: "metadata replaced by null", fields: `"emitter":0,"metadata":{"clientIPC":%q},"metadata":null`},
+		{name: "metadata replaced by array", fields: `"emitter":0,"metadata":{"clientIPC":%q},"metadata":[]`},
+		{name: "server emitter", fields: `"emitter":1,"metadata":{"clientIPC":%q}`},
+		{name: "unknown emitter", fields: `"emitter":2,"metadata":{"clientIPC":%q}`},
+		{name: "missing emitter", fields: `"metadata":{"clientIPC":%q}`},
+		{name: "null emitter", fields: `"emitter":null,"metadata":{"clientIPC":%q}`},
+		{name: "invalid emitter type", fields: `"emitter":"client","metadata":{"clientIPC":%q}`},
+		{name: "client replaced by server", fields: `"emitter":0,"emitter":1,"metadata":{"clientIPC":%q}`},
+		{name: "client replaced by null", fields: `"emitter":0,"emitter":null,"metadata":{"clientIPC":%q}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newTestApplication(t)
+			inbound := newServerClientInbox(t)
+			stderr := captureStderr(t)
+			c := startCall(t, t.Context(), "listen()", func(ctx context.Context) (int, error) {
+				return app.listen(ctx, lifecycle.GracefulShutdown{})
+			})
+			fields := fmt.Sprintf(tt.fields, inbound.IPCPath())
+			frame := fmt.Sprintf(`{"opcode":%d,%s,"payload":{"topic":"bad/topic"}}`, protocol.CreateTopic, fields)
+			send(t, app.inbound.IPCPath(), frame)
+			stderr.waitFor(t, ipc.ErrInvalidFrame.Error())
+			sendCreateRequest(t, app, inbound.IPCPath(), "events")
+			receiveServerReply(t, inbound, protocol.CreateTopicReply)
+			c.cancel()
+			if res := c.wait(t); res.Code() != exitcode.Success || !errors.Is(res.Err(), context.Canceled) {
+				t.Errorf("listen() after %s and cancellation = %d, %v, want %d and %v", tt.name, res.Code(), res.Err(), exitcode.Success, context.Canceled)
+			}
+		})
+	}
+}
+
 // TestListenInvalidRequestDoesNotBlockOnFullQueue checks one-attempt rejection delivery.
 func TestListenInvalidRequestDoesNotBlockOnFullQueue(t *testing.T) {
 	app := newTestApplication(t)
@@ -1823,6 +1862,119 @@ func TestDecodeFramePreservesReplyMetadata(t *testing.T) {
 				t.Errorf("decodeFrame(%s) data = %#v, want no decoded metadata or payload", tt.name, data)
 			}
 		})
+	}
+}
+
+// TestDecodeFrameUsesLastMetadata checks replacement without merging earlier fields.
+func TestDecodeFrameUsesLastMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata string
+		wantIPC  string
+		wantErr  error
+	}{
+		{name: "empty replacement", metadata: `{"clientIPC":"/old"},"metadata":{}`, wantErr: protocol.ErrMissingClientIPC},
+		{name: "null replacement", metadata: `{"clientIPC":"/old"},"metadata":null`, wantErr: protocol.ErrMissingMetadata},
+		{name: "null IPC replacement", metadata: `{"clientIPC":"/old"},"metadata":{"clientIPC":null}`, wantErr: protocol.ErrMissingClientIPC},
+		{name: "empty IPC replacement", metadata: `{"clientIPC":"/old"},"metadata":{"clientIPC":""}`, wantErr: protocol.ErrInvalidPayload},
+		{name: "new endpoint", metadata: `{"clientIPC":"/old"},"metadata":{"clientIPC":"/new"}`, wantIPC: "/new", wantErr: protocol.ErrInvalidPayload},
+		{name: "empty object replaced", metadata: `{},"metadata":{"clientIPC":"/new"}`, wantIPC: "/new", wantErr: protocol.ErrInvalidPayload},
+		{name: "null replaced", metadata: `null,"metadata":{"clientIPC":"/new"}`, wantIPC: "/new", wantErr: protocol.ErrInvalidPayload},
+		{name: "array replaced", metadata: `[],"metadata":{"clientIPC":"/new"}`, wantIPC: "/new", wantErr: protocol.ErrInvalidPayload},
+		{name: "invalid IPC type replaced", metadata: `{"clientIPC":42},"metadata":{"clientIPC":"/new"}`, wantIPC: "/new", wantErr: protocol.ErrInvalidPayload},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":%s,"payload":{"topic":"bad/topic"}}`, protocol.CreateTopic, protocol.Client, tt.metadata)
+			data, err := decodeFrame([]byte(frame))
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("decodeFrame(%s) error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+			var decodeErr *frameDecodeError
+			hasReply := errors.As(err, &decodeErr)
+			if hasReply != (tt.wantIPC != "") {
+				t.Errorf("decodeFrame(%s) reply metadata present = %v, want %v", tt.name, hasReply, tt.wantIPC != "")
+			}
+			if hasReply && decodeErr.metadata.ClientIPC() != tt.wantIPC {
+				t.Errorf("decodeFrame(%s) reply IPC = %q, want %q", tt.name, decodeErr.metadata.ClientIPC(), tt.wantIPC)
+			}
+			if data.Metadata() != nil || data.Payload() != nil {
+				t.Errorf("decodeFrame(%s) data = %#v, want no decoded metadata or payload", tt.name, data)
+			}
+		})
+	}
+}
+
+// TestDecodeFrameSkipsNonClientEmitters checks that only client frames supply routing.
+func TestDecodeFrameSkipsNonClientEmitters(t *testing.T) {
+	tests := []struct {
+		name    string
+		emitter string
+		wantErr error
+	}{
+		{name: "missing", wantErr: protocol.ErrMissingEmitter},
+		{name: "null", emitter: `"emitter":null,`, wantErr: protocol.ErrMissingEmitter},
+		{name: "server", emitter: `"emitter":1,`, wantErr: protocol.ErrUnknownField},
+		{name: "unknown", emitter: `"emitter":2,`, wantErr: protocol.ErrUnknownEmitter},
+		{name: "negative", emitter: `"emitter":-1,`, wantErr: protocol.ErrUnknownEmitter},
+		{name: "client replaced by server", emitter: `"emitter":0,"emitter":1,`, wantErr: protocol.ErrUnknownField},
+		{name: "client replaced by null", emitter: `"emitter":0,"emitter":null,`, wantErr: protocol.ErrMissingEmitter},
+		{name: "client replaced by unknown", emitter: `"emitter":0,"emitter":2,`, wantErr: protocol.ErrUnknownEmitter},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := fmt.Sprintf(`{"opcode":%d,%s"metadata":{"clientIPC":"/client"},"payload":{"topic":"bad/topic"}}`, protocol.CreateTopic, tt.emitter)
+			_, err := decodeFrame([]byte(frame))
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("decodeFrame(%s emitter) error = %v, want %v", tt.name, err, tt.wantErr)
+			}
+			var decodeErr *frameDecodeError
+			if errors.As(err, &decodeErr) {
+				t.Errorf("decodeFrame(%s emitter) reply metadata = %#v, want no reply endpoint", tt.name, decodeErr.metadata)
+			}
+		})
+	}
+}
+
+// TestDecodeFrameRejectsInvalidEmitterTypes checks that recovery preserves type errors.
+func TestDecodeFrameRejectsInvalidEmitterTypes(t *testing.T) {
+	for _, emitter := range []string{`"client"`, `false`, `[]`, `{}`, `0.5`} {
+		t.Run(emitter, func(t *testing.T) {
+			frame := fmt.Sprintf(`{"opcode":%d,"emitter":%s,"metadata":{"clientIPC":"/client"},"payload":{}}`, protocol.ListTopic, emitter)
+			_, err := decodeFrame([]byte(frame))
+			var typeErr *json.UnmarshalTypeError
+			if !errors.As(err, &typeErr) {
+				t.Errorf("decodeFrame(emitter=%s) error = %v, want *json.UnmarshalTypeError", emitter, err)
+			}
+			var decodeErr *frameDecodeError
+			if errors.As(err, &decodeErr) {
+				t.Errorf("decodeFrame(emitter=%s) reply metadata = %#v, want no reply endpoint", emitter, decodeErr.metadata)
+			}
+		})
+	}
+}
+
+// TestDecodeFramePreservesPayloadError checks wrapping without replacing the decode error.
+func TestDecodeFramePreservesPayloadError(t *testing.T) {
+	frame := fmt.Sprintf(`{"opcode":%d,"emitter":%d,"metadata":{"clientIPC":"/old"},"metadata":{"clientIPC":"/client"},"payload":{"topic":42}}`, protocol.CreateTopic, protocol.Client)
+	_, err := decodeFrame([]byte(frame))
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) {
+		t.Errorf("decodeFrame(topic=42) error = %v, want *json.UnmarshalTypeError", err)
+	}
+	var decodeErr *frameDecodeError
+	if !errors.As(err, &decodeErr) {
+		t.Errorf("decodeFrame(topic=42) error = %T, want *frameDecodeError", err)
+		return
+	}
+	if decodeErr.metadata.ClientIPC() != "/client" {
+		t.Errorf("decodeFrame(topic=42) reply IPC = %q, want /client", decodeErr.metadata.ClientIPC())
+	}
+	if cause := errors.Unwrap(decodeErr); typeErr == nil || cause != typeErr || !errors.Is(err, cause) {
+		t.Errorf("decodeFrame(topic=42) cause = %v, want the original type error %v in the error chain", cause, typeErr)
+	}
+	if decodeErr.Error() != decodeErr.err.Error() {
+		t.Errorf("decodeFrame(topic=42) error text = %q, want %q", decodeErr.Error(), decodeErr.err.Error())
 	}
 }
 
