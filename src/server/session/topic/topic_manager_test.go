@@ -2761,35 +2761,31 @@ func TestHeartbeatChannelRenewsDeadline(t *testing.T) {
 	})
 }
 
-// TestRenewConsumerDeadlineResolvesUniqueIPC checks matching requests with and without an ID.
-func TestRenewConsumerDeadlineResolvesUniqueIPC(t *testing.T) {
-	for _, consumerID := range []id.ID{"first", ""} {
-		t.Run(fmt.Sprintf("id_%q", consumerID), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				manager := NewManager()
-				target, lifetime, _ := subscriptionTarget(t, manager, "events")
-				first := expirationInbox(t, "first")
-				second := expirationInbox(t, "second")
-				subscribeForDelivery(t, manager, lifetime, first, "first", "", nil)
-				subscribeForDelivery(t, manager, lifetime, second, "second", "", nil)
-				synctest.Wait()
-				secondDeadline := subscriptionDeadline(t, target, "second")
-				<-time.After(time.Second)
-				if err := manager.RenewConsumerDeadline(t.Context(), consumerID, first.IPCPath()); err != nil {
-					t.Errorf("RenewConsumerDeadline(%q, first IPC) error = %v, want nil", consumerID, err)
-				}
-				if got, want := subscriptionDeadline(t, target, "first"), time.Now().Add(consumerTimeout); !got.Equal(want) {
-					t.Errorf("first deadline after activity = %v, want %v", got, want)
-				}
-				if got := subscriptionDeadline(t, target, "second"); !got.Equal(secondDeadline) {
-					t.Errorf("second deadline after first activity = %v, want unchanged %v", got, secondDeadline)
-				}
-			})
-		})
-	}
+// TestRenewConsumerDeadlineMatchesIdentity checks renewal by ID and IPC path.
+func TestRenewConsumerDeadlineMatchesIdentity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := NewManager()
+		target, lifetime, _ := subscriptionTarget(t, manager, "events")
+		first := expirationInbox(t, "first")
+		second := expirationInbox(t, "second")
+		subscribeForDelivery(t, manager, lifetime, first, "first", "", nil)
+		subscribeForDelivery(t, manager, lifetime, second, "second", "", nil)
+		synctest.Wait()
+		secondDeadline := subscriptionDeadline(t, target, "second")
+		<-time.After(time.Second)
+		if err := manager.RenewConsumerDeadline(t.Context(), "first", first.IPCPath()); err != nil {
+			t.Errorf("RenewConsumerDeadline(first, first IPC) error = %v, want nil", err)
+		}
+		if got, want := subscriptionDeadline(t, target, "first"), time.Now().Add(consumerTimeout); !got.Equal(want) {
+			t.Errorf("first deadline after activity = %v, want %v", got, want)
+		}
+		if got := subscriptionDeadline(t, target, "second"); !got.Equal(secondDeadline) {
+			t.Errorf("second deadline after first activity = %v, want unchanged %v", got, secondDeadline)
+		}
+	})
 }
 
-// TestRenewConsumerDeadlineRejectsConflictingIdentity checks ambiguous and mismatched sessions.
+// TestRenewConsumerDeadlineRejectsConflictingIdentity checks missing and mismatched identities.
 func TestRenewConsumerDeadlineRejectsConflictingIdentity(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -2800,9 +2796,10 @@ func TestRenewConsumerDeadlineRejectsConflictingIdentity(t *testing.T) {
 	}{
 		{name: "shared IPC", sharedIPC: true},
 		{name: "shared IPC across topics", sharedIPC: true, otherTopic: true},
+		{name: "missing ID"},
 		{name: "unknown ID", consumerID: "unknown"},
 		{name: "mismatched ID", consumerID: "second"},
-		{name: "unknown IPC", unknownIPC: true},
+		{name: "unknown IPC", consumerID: "first", unknownIPC: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2878,6 +2875,16 @@ func TestRenewConsumerDeadlineRejectsExpiredDeadline(t *testing.T) {
 				target.mu.Unlock()
 				if !got.Equal(deadline) {
 					t.Errorf("expired deadline after RenewConsumerDeadline(%q) = %v, want unchanged %v", consumerID, got, deadline)
+				}
+				if consumerID == "" {
+					select {
+					case <-c.connection.Done():
+						t.Errorf("Done(subscriber) after renewal without an ID is closed, want unchanged connection")
+					default:
+					}
+					if err := manager.RenewConsumerDeadline(t.Context(), "subscriber", inbound.IPCPath()); !errors.Is(err, context.DeadlineExceeded) {
+						t.Errorf("RenewConsumerDeadline(subscriber, expired IPC) error = %v, want %v", err, context.DeadlineExceeded)
+					}
 				}
 				synctest.Wait()
 				select {

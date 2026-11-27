@@ -2105,7 +2105,7 @@ func checkLivenessExpired(t *testing.T, app *application, ctx context.Context, i
 	}
 }
 
-// TestDispatchRequestsRenewConsumer checks every continuing request across the original deadline.
+// TestDispatchRequestsRenewConsumer checks heartbeats and valid ACKs across the original deadline.
 func TestDispatchRequestsRenewConsumer(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -2113,12 +2113,6 @@ func TestDispatchRequestsRenewConsumer(t *testing.T) {
 		payload protocol.Payload
 		reply   protocol.Opcode
 	}{
-		{"list", protocol.ListTopic, protocol.NewListTopicPayload(), protocol.ListTopicReply},
-		{"create", protocol.CreateTopic, protocol.NewCreateTopicPayload("other"), protocol.CreateTopicReply},
-		{"check", protocol.CheckTopic, protocol.NewCheckTopicPayload("events"), protocol.CheckTopicReply},
-		{"produce", protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("unmatched"), nil)), protocol.ProduceMessageReply},
-		{"info about another consumer", protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("second"), protocol.ConsumerInfoReply},
-		{"subscription rejection", protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("first", "events", "first/", nil), protocol.ErrorReply},
 		{"heartbeat", protocol.ConsumerHeartbeat, protocol.NewConsumerHeartbeatPayload("first"), protocol.ConsumerHeartbeatReply},
 		{"acknowledgement", protocol.Acknowledgement, protocol.NewAcknowledgementPayload("first", 1), 0},
 	}
@@ -2147,6 +2141,44 @@ func TestDispatchRequestsRenewConsumer(t *testing.T) {
 				<-time.After(19 * time.Second)
 				synctest.Wait()
 				checkLivenessExpired(t, app, ctx, first, "first")
+			})
+		})
+	}
+}
+
+// TestDispatchOtherRequestsPreserveExpiration checks that ordinary requests cannot renew a consumer.
+func TestDispatchOtherRequestsPreserveExpiration(t *testing.T) {
+	tests := []struct {
+		name    string
+		opcode  protocol.Opcode
+		payload protocol.Payload
+		reply   protocol.Opcode
+	}{
+		{"list", protocol.ListTopic, protocol.NewListTopicPayload(), protocol.ListTopicReply},
+		{"create", protocol.CreateTopic, protocol.NewCreateTopicPayload("other"), protocol.CreateTopicReply},
+		{"check", protocol.CheckTopic, protocol.NewCheckTopicPayload("events"), protocol.CheckTopicReply},
+		{"produce", protocol.ProduceMessage, protocol.NewProduceMessagePayload("events", protocol.NewMessage([]byte("unmatched"), nil)), protocol.ProduceMessageReply},
+		{"info about this consumer", protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("first"), protocol.ConsumerInfoReply},
+		{"info about another consumer", protocol.ConsumerInfo, protocol.NewConsumerInfoPayload("second"), protocol.ConsumerInfoReply},
+		{"subscription rejection", protocol.TopicSubscription, protocol.NewTopicSubscriptionPayload("first", "events", "first/", nil), protocol.ErrorReply},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				app := &application{topicManager: topic.NewManager()}
+				first, second := setupLivenessConsumers(t, app, ctx)
+				<-time.After(20 * time.Second)
+				if code, err := dispatchLivenessRequest(t, app, ctx, first, tt.opcode, tt.payload); code != exitcode.Success || err != nil {
+					t.Errorf("dispatch(%v) at 20s = %d, %v, want %d and nil", tt.opcode, code, err, exitcode.Success)
+					return
+				}
+				receiveServerReply(t, first, tt.reply)
+				<-time.After(11 * time.Second)
+				synctest.Wait()
+				checkLivenessExpired(t, app, ctx, first, "first")
+				checkLivenessExpired(t, app, ctx, second, "second")
 			})
 		})
 	}
